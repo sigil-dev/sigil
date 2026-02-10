@@ -1976,6 +1976,12 @@ import (
 // Built-in providers (Anthropic, OpenAI, Google) are compiled into the gateway.
 // Plugin providers implement this via gRPC (defined in api/proto/plugin/v1/provider.proto).
 type Provider interface {
+	// Name returns the provider's name (e.g., "anthropic", "openai").
+	Name() string
+
+	// Available checks if the provider is currently available.
+	Available(ctx context.Context) bool
+
 	// ListModels returns available models from this provider.
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 

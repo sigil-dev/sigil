@@ -457,6 +457,48 @@ func TestRegistry_BudgetEnforcement(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "budget")
 }
+
+// mockProvider implements the Phase 1 Provider interface for testing registry logic.
+type mockProvider struct {
+	name      string
+	available bool
+}
+
+func (m *mockProvider) Name() string {
+	return m.name
+}
+
+func (m *mockProvider) Available(ctx context.Context) bool {
+	return m.available
+}
+
+func (m *mockProvider) ListModels(ctx context.Context) ([]provider.ModelInfo, error) {
+	// Return minimal model list for testing
+	return []provider.ModelInfo{
+		{ID: "test-model", Name: "Test Model", Provider: m.name},
+	}, nil
+}
+
+func (m *mockProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 1)
+	go func() {
+		defer close(ch)
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "mock"}
+		ch <- provider.ChatEvent{Type: provider.EventTypeDone}
+	}()
+	return ch, nil
+}
+
+func (m *mockProvider) Status(ctx context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{
+		Available: m.available,
+		Provider:  m.name,
+	}, nil
+}
+
+func (m *mockProvider) Close() error {
+	return nil
+}
 ```
 
 **Step 2: Run test — expect FAIL**
@@ -487,82 +529,125 @@ git commit -m "feat(provider): add provider registry with routing, failover, and
 
 ---
 
-## Task 5: Provider Interface
+## Task 5: Verify Provider Interface for Multi-Provider Support
+
+**Prerequisites:**
+
+- Phase 1 Task 13 defined `internal/provider/provider.go` with the `Provider` interface including:
+  - `Name() string`
+  - `Available(ctx context.Context) bool`
+  - `ListModels(ctx context.Context) ([]ModelInfo, error)`
+  - `Chat(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error)`
+  - `Status(ctx context.Context) (ProviderStatus, error)`
+  - `Close() error`
 
 **Files:**
 
-- Create: `internal/provider/provider.go`
-- Create: `internal/provider/provider_test.go`
+- Verify: `internal/provider/provider.go` (created in Phase 1 Task 13)
+- Update: `internal/provider/provider_test.go`
 
-**Step 1: Write failing tests**
+**Step 1: Add multi-provider verification tests**
+
+Add to `internal/provider/provider_test.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
-// Copyright 2026 Sigil Contributors
-
-package provider_test
-
-import (
-	"testing"
-
-	"github.com/sigil-dev/sigil/internal/provider"
-	"github.com/stretchr/testify/assert"
-)
-
-func TestProviderInterfaceExists(t *testing.T) {
-	var _ provider.Provider = nil
-}
-
-func TestChatRequestFields(t *testing.T) {
-	req := provider.ChatRequest{
-		Model: "claude-sonnet-4-5",
-		Messages: []provider.Message{
-			{Role: "user", Content: "Hello"},
+// TestProviderInterface_MultiProviderSupport verifies that the Provider interface
+// defined in Phase 1 Task 13 has all methods needed for multi-provider routing.
+func TestProviderInterface_MultiProviderSupport(t *testing.T) {
+	// Verify interface methods exist for registry routing
+	var p provider.Provider = &mockProvider{
+		name:      "test-provider",
+		available: true,
+		models: []provider.ModelInfo{
+			{ID: "test-model-1", Name: "Test Model 1", Provider: "test-provider"},
 		},
-		SystemPrompt: "You are a helpful assistant",
-		MaxTokens:    1024,
-		Stream:       true,
 	}
-	assert.Equal(t, "claude-sonnet-4-5", req.Model)
-	assert.True(t, req.Stream)
+
+	// Registry needs Name() for identification
+	assert.Equal(t, "test-provider", p.Name())
+
+	// Registry needs Available() for failover logic
+	ctx := context.Background()
+	assert.True(t, p.Available(ctx))
+
+	// Registry needs ListModels() for model discovery
+	models, err := p.ListModels(ctx)
+	require.NoError(t, err)
+	assert.NotEmpty(t, models)
+
+	// Registry needs Status() for health checks
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, status.Available)
+
+	// Registry needs Close() for cleanup
+	err = p.Close()
+	assert.NoError(t, err)
 }
 
-func TestChatEventTypes(t *testing.T) {
-	// TextDelta event
-	event := provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Hello"}
-	assert.Equal(t, provider.EventTypeTextDelta, event.Type)
+// mockProvider implements the Phase 1 Provider interface for testing.
+type mockProvider struct {
+	name      string
+	available bool
+	models    []provider.ModelInfo
+}
 
-	// ToolCall event
-	event = provider.ChatEvent{Type: provider.EventTypeToolCall, ToolCall: &provider.ToolCall{Name: "exec"}}
-	assert.Equal(t, "exec", event.ToolCall.Name)
+func (m *mockProvider) Name() string {
+	return m.name
+}
 
-	// Done event
-	event = provider.ChatEvent{Type: provider.EventTypeDone}
-	assert.Equal(t, provider.EventTypeDone, event.Type)
+func (m *mockProvider) Available(ctx context.Context) bool {
+	return m.available
+}
+
+func (m *mockProvider) ListModels(ctx context.Context) ([]provider.ModelInfo, error) {
+	return m.models, nil
+}
+
+func (m *mockProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 1)
+	go func() {
+		defer close(ch)
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "mock response"}
+		ch <- provider.ChatEvent{Type: provider.EventTypeDone}
+	}()
+	return ch, nil
+}
+
+func (m *mockProvider) Status(ctx context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{
+		Available: m.available,
+		Provider:  m.name,
+		Message:   "mock provider status",
+	}, nil
+}
+
+func (m *mockProvider) Close() error {
+	return nil
 }
 ```
 
-**Step 2: Run test — expect FAIL**
+**Step 2: Run test — expect PASS**
 
-**Step 3: Implement**
+The Provider interface from Phase 1 already has all necessary methods for multi-provider routing.
 
-`internal/provider/provider.go`:
+**Step 3: Verify interface sufficiency**
 
-- `Provider` interface:
-  - `Name() string`
-  - `Available(ctx) bool`
-  - `ListModels(ctx) ([]ModelInfo, error)`
-  - `Chat(ctx, ChatRequest) (<-chan ChatEvent, error)` — returns channel for streaming
-- `ChatRequest`, `ChatEvent`, `Message`, `ToolCall`, `ModelInfo` structs
-- Event type enum: `EventTextDelta`, `EventToolCall`, `EventUsage`, `EventDone`, `EventError`
+Confirm the interface supports:
+- Provider identification via `Name()`
+- Availability checks for failover via `Available()`
+- Model discovery via `ListModels()`
+- Health monitoring via `Status()`
+- Resource cleanup via `Close()`
+- Chat streaming via `Chat()`
 
-**Step 4: Run test — expect PASS**
+No changes needed to the interface — Phase 1's definition is complete.
 
-**Step 5: Commit**
+**Step 4: Commit**
 
 ```bash
-git add internal/provider/provider.go internal/provider/provider_test.go
-git commit -m "feat(provider): add provider interface with streaming chat events"
+git add internal/provider/provider_test.go
+git commit -m "test(provider): verify interface supports multi-provider routing"
 ```
 
 ---

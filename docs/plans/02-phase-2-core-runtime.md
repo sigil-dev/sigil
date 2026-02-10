@@ -395,6 +395,8 @@ git commit -m "feat(security): add capability enforcer with ABAC and audit loggi
 
 ## Task 3: Plugin Manifest Parsing and Validation
 
+**Context:** This task defines the **runtime's internal representation** of plugin manifests, which is distinct from the public SDK types in `pkg/plugin/types.go` (Phase 1 Task 14). The internal types use simplified forms optimized for runtime enforcement (e.g., `Capabilities []string` instead of `[]Capability` struct with Pattern/Description fields). A conversion function between the two representations should be added when the plugin loading pipeline is implemented.
+
 **Files:**
 
 - Create: `internal/plugin/manifest.go`
@@ -496,6 +498,10 @@ func TestValidateManifest_ConflictingCapabilities(t *testing.T) {
 	assert.NotEmpty(t, errs)
 }
 
+// NOTE: These are internal runtime types (plugin.TypeChannel, plugin.TierProcess),
+// distinct from the public SDK types in pkg/plugin (plugin.PluginTypeChannel, plugin.ExecutionTierProcess).
+// The internal types use simplified string constants for efficient runtime matching.
+
 func TestPluginTypeValues(t *testing.T) {
 	assert.Equal(t, plugin.PluginType("provider"), plugin.TypeProvider)
 	assert.Equal(t, plugin.PluginType("channel"), plugin.TypeChannel)
@@ -516,9 +522,11 @@ func TestExecutionTierValues(t *testing.T) {
 
 `internal/plugin/manifest.go`:
 
-- `PluginType` enum: `provider`, `channel`, `tool`, `skill`
-- `ExecutionTier` enum: `wasm`, `process`, `container`
+- `PluginType` enum: `provider`, `channel`, `tool`, `skill` (internal runtime constants)
+- `ExecutionTier` enum: `wasm`, `process`, `container` (internal runtime constants)
 - `Manifest` struct matching `plugin.yaml` schema from Section 2
+  - Uses simplified types: `Capabilities []string`, `DenyCapabilities []string` (not the `[]Capability` struct from `pkg/plugin`)
+  - This is the **runtime's parsed representation**, optimized for enforcement checks
 - `ParseManifest(data []byte) (*Manifest, error)` — YAML parsing + validation
 - `Validate() []error` — check required fields, valid type/tier, no conflicting caps
 
@@ -830,6 +838,8 @@ git commit -m "feat(plugin): add go-plugin host with gRPC service stubs"
 
 ## Task 7: Process-Tier Sandbox Configuration
 
+**Context:** This task references sandbox configuration types from the internal manifest representation (`plugin.FilesystemSandbox`, `plugin.NetworkSandbox`). These correspond to the public SDK types `FilesystemConfig` and `NetworkConfig` defined in `pkg/plugin/types.go` (Phase 1 Task 14). The internal types may use slightly different naming for runtime clarity.
+
 **Files:**
 
 - Create: `internal/plugin/sandbox/sandbox.go`
@@ -858,6 +868,9 @@ func TestGenerateSandboxArgs_Linux(t *testing.T) {
 		t.Skip("Linux-only test")
 	}
 
+	// NOTE: Using internal types (plugin.FilesystemSandbox, plugin.NetworkSandbox)
+	// These correspond to pkg/plugin.FilesystemConfig and pkg/plugin.NetworkConfig
+	// from the public SDK, but may have different naming in the runtime representation.
 	manifest := &plugin.Manifest{
 		Name: "test-plugin",
 		Execution: plugin.ExecutionConfig{

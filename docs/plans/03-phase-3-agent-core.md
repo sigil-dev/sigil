@@ -265,6 +265,17 @@ git commit -m "feat(agent): add session lanes for per-session FIFO serialization
 - Create: `internal/agent/loop.go`
 - Create: `internal/agent/loop_test.go`
 
+**Note on Step Mapping:** The design doc (Section 3, lines 56-87) describes 7 integrity steps for security enforcement. This implementation maps them to 6 pipeline stages:
+
+- **RECEIVE** (step 1) — input sanitization, origin tagging
+- **PREPARE** (step 2) — construct prompt with immutable system prompt
+- **CALL_LLM** (step 3) — provider call with budget enforcement
+- **PROCESS** (steps 4-6) — parse tool calls, execute tool, scan result (atomic tool-execution cycle)
+- **RESPOND** (step 7) — format response with output filtering
+- **AUDIT** (cross-cutting) — audit logging across all stages
+
+Steps 4-6 from the design doc are folded into a single PROCESS stage because they form an atomic tool-execution cycle that cannot be separated in the implementation pipeline.
+
 **Step 1: Write failing tests**
 
 ```go

@@ -138,7 +138,7 @@ Each phase has exit criteria that MUST pass before moving to the next phase.
 
 - [ ] Session CRUD works through SessionStore
 - [ ] Session lanes serialize concurrent messages per-session
-- [ ] Agent loop processes a message through all 6 steps (RECEIVE→AUDIT)
+- [ ] Agent loop processes a message through all 6 pipeline stages (mapping to design doc's 7 integrity steps — see Phase 3 Task 3 note for mapping)
 - [ ] Tool dispatch validates capabilities before execution
 - [ ] Tool results are scanned for injection patterns
 - [ ] Memory tools (search, summary, recall, semantic) return correct results
