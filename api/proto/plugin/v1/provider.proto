@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+syntax = "proto3";
+
+package plugin.v1;
+
+option go_package = "github.com/sigil-dev/sigil/internal/gen/proto/plugin/v1;pluginv1";
+
+import "common/v1/types.proto";
+import "google/protobuf/struct.proto";
+
+service Provider {
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  rpc Chat(ChatRequest) returns (stream ChatEvent);
+  rpc Status(StatusRequest) returns (StatusResponse);
+}
+
+message ListModelsRequest {}
+
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+message ModelInfo {
+  string id = 1;
+  string name = 2;
+  string provider = 3;
+  common.v1.ModelCapabilities capabilities = 4;
+}
+
+message ChatRequest {
+  string model = 1;
+  repeated common.v1.Message messages = 2;
+  repeated common.v1.ToolDefinition tools = 3;
+  string system_prompt = 4;
+  ChatOptions options = 5;
+}
+
+message ChatOptions {
+  float temperature = 1;
+  int32 max_tokens = 2;
+  repeated string stop_sequences = 3;
+  bool stream = 4;
+}
+
+message ChatEvent {
+  oneof event {
+    TextDelta text_delta = 1;
+    common.v1.ToolCall tool_call = 2;
+    common.v1.Usage usage = 3;
+    bool done = 4;
+    string error = 5;
+  }
+}
+
+message TextDelta {
+  string text = 1;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  bool available = 1;
+  string provider = 2;
+  string message = 3;
+}

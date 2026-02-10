@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+syntax = "proto3";
+
+package plugin.v1;
+
+option go_package = "github.com/sigil-dev/sigil/internal/gen/proto/plugin/v1;pluginv1";
+
+import "google/protobuf/struct.proto";
+
+// PluginLifecycle is implemented by all plugins.
+service PluginLifecycle {
+  rpc Init(InitRequest) returns (InitResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message InitRequest {
+  google.protobuf.Struct config = 1;
+}
+
+message InitResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  HealthStatus status = 1;
+  string message = 2;
+}
+
+enum HealthStatus {
+  HEALTH_STATUS_UNSPECIFIED = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_DEGRADED = 2;
+  HEALTH_STATUS_UNHEALTHY = 3;
+}
+
+message ShutdownRequest {
+  int32 timeout_seconds = 1;
+}
+
+message ShutdownResponse {
+  bool clean = 1;
+}
