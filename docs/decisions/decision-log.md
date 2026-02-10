@@ -306,3 +306,61 @@ Each decision records: the question, options considered, choice made, and ration
 **Rationale:** Sigil is inspired by OpenClaw's concepts but is an independent Go reimplementation, not a code fork. Apache 2.0 NOTICE file provides proper attribution. Design overview acknowledges OpenClaw's community. We respect OpenClaw's work and want to play nice with their ecosystem — complementary projects, not competitors.
 
 **Pre-release gate:** See [pre-release-checklist.md](pre-release-checklist.md) — ALL items MUST be completed before any public release.
+
+---
+
+## D027: Storage Interface Architecture
+
+**Question:** Should storage be hardcoded to SQLite or abstracted behind interfaces?
+
+**Options considered:**
+
+- SQLite-everything (original design) — simple, one technology, one backup strategy
+- Interface-based with factory pattern — backends swappable via config
+- Registry pattern (like database/sql) — extensible but heavier than needed
+
+**Decision:** Interface-based storage with config-driven factory. Four top-level interfaces grouped by concern:
+
+1. `SessionStore` — sessions and active message windows (per workspace)
+2. `MemoryStore` — tiered memory with composable sub-interfaces (per workspace)
+3. `VectorStore` — embedding storage and similarity search (per workspace)
+4. `GatewayStore` — users, pairings, audit log (global)
+
+Factory reads `storage.*` config, creates the right backend. Callers import only `internal/store`.
+
+**Rationale:** The tiered memory model has natural upgrade paths — LanceDB for vectors (Tier 4), graph databases for knowledge (Tier 3). Defining interfaces now lets initial implementation use SQLite everywhere while keeping the door open for purpose-built backends. The factory pattern is sufficient for a known set of backends; registry pattern can be added later if needed.
+
+**Design doc:** [docs/design/11-storage-interfaces.md](../design/11-storage-interfaces.md)
+
+---
+
+## D028: KnowledgeStore Graph Semantics
+
+**Question:** How should the KnowledgeStore interface support both relational and graph backends?
+
+**Decision:** KnowledgeStore is a composable sub-interface of MemoryStore, independently swappable via `storage.memory.knowledge.backend` config. The interface uses graph-friendly semantics (entities, relationships, facts, traversal) that map to both models:
+
+- **SQLite backend:** RDF triple model (subject-predicate-object) in a single `triples` table with SPO/POS/OSP indexes. Traversal via recursive CTEs.
+- **Graph backend (LadybugDB):** Native property graph with Cypher queries. Direct mapping from interface methods to graph operations.
+
+**Rationale:** RDF triples are the simplest correct way to represent graph data in a relational database. Three covering indexes enable efficient lookups in any direction. The entity/relationship/fact API maps naturally to both property graphs and triple stores without leaking backend-specific semantics.
+
+---
+
+## D029: Future Backend Candidates
+
+**Question:** Which alternative storage backends should the interface architecture support?
+
+**Decision:** Two candidates identified, neither adopted yet:
+
+| Backend | Replaces | Language | Go SDK Status (early 2026) | License |
+|---------|----------|----------|---------------------------|---------|
+| LanceDB | VectorStore (sqlite-vec) | Rust | v0.1.2 (pre-1.0, not production-ready) | Apache 2.0 |
+| LadybugDB | KnowledgeStore (SQLite RDF) | C++ (fork of KuzuDB) | Moderate maturity, active development | MIT |
+
+**Rationale:** Both are embedded (no server), both are Apache 2.0/MIT compatible, both add CGo dependencies (already required). However:
+
+- LanceDB Go SDK hasn't reached 1.0; sqlite-vec is more mature today
+- LadybugDB is a community fork after Kùzu Inc. abandoned KuzuDB (Oct 2025); fork stability uncertain
+
+The interface-first approach means we can adopt either when their Go SDKs stabilize without changing any caller code. Monitor progress and add implementations when ready.

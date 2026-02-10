@@ -1,8 +1,8 @@
 # Section 1: Core Architecture
 
-## Five-Layer Design
+## Six-Layer Design
 
-The system has five layers, from clients at the top to plugins at the bottom:
+The system has six layers, from clients at the top to plugins at the bottom:
 
 ```
 +-------------------------------------------------------------+
@@ -25,7 +25,14 @@ The system has five layers, from clients at the top to plugins at the bottom:
 |  |  +-- Conversation Router (session -> workspace)       |   |
 |  |  +-- Agent Loop (prompt, call LLM, dispatch tool)     |   |
 |  |  +-- Security Enforcer (capability ABAC)              |   |
-|  |  +-- Session Store (state, history, compaction)       |   |
+|  +----------------------------+--------------------------+   |
+|                               |                              |
+|  +----------------------------v--------------------------+   |
+|  |  Store Layer (interface-based, backend-swappable)     |   |
+|  |  +-- SessionStore    (sessions, active messages)      |   |
+|  |  +-- MemoryStore     (messages, summaries, knowledge) |   |
+|  |  +-- VectorStore     (embeddings, similarity search)  |   |
+|  |  +-- GatewayStore    (users, pairings, audit)         |   |
 |  +----------------------------+--------------------------+   |
 |                               |                              |
 |  +----------------------------v--------------------------+   |
@@ -44,6 +51,7 @@ The system has five layers, from clients at the top to plugins at the bottom:
 - **Plugins are the extensibility surface.** Channels, tools, providers, and skills are all plugins. The core only does routing, orchestration, and enforcement.
 - **Config drives behavior.** Viper watches config files, triggers hot-reload events. Plugin Manager subscribes to these events to load/unload/reconfigure without restart.
 - **Sessions are first-class.** Each conversation gets isolated state, history, and capability scope. Cross-session data sharing requires explicit grants.
+- **Storage is interface-based.** All data access goes through store interfaces ([Section 11](11-storage-interfaces.md)). Backends are swappable via config. SQLite is the default; future backends (LanceDB, LadybugDB) slot in without changing callers.
 
 ## Protocol Stack
 

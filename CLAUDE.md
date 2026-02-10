@@ -239,7 +239,7 @@ cmd/
   sigil/                 # Main binary entry point
   openapi-gen/           # OpenAPI spec generator
 docs/
-  design/                # Architecture design (11 sections)
+  design/                # Architecture design (12 sections, 00-11)
   decisions/             # Decision log, pre-release checklist
   plans/                 # Implementation plans
 internal/
@@ -247,6 +247,8 @@ internal/
   config/                # Viper configuration
   gen/                   # Generated code (proto)
   identity/              # User identity and auth
+  store/                 # Storage interfaces + factory + backends
+    sqlite/              # SQLite implementations (default)
   memory/                # Tiered memory (FTS5, summaries, sqlite-vec)
   node/                  # Remote node management
   plugin/                # Plugin host
@@ -351,4 +353,5 @@ Three execution tiers:
 | Agent Core | `docs/design/08-agent-core.md` | Agent loop, memory, skills |
 | UI & CLI | `docs/design/09-ui-and-cli.md` | SvelteKit, Tauri, Cobra |
 | Build | `docs/design/10-build-and-distribution.md` | Toolchain, CI/CD |
+| Storage Interfaces | `docs/design/11-storage-interfaces.md` | Store abstractions, backends |
 | Decisions | `docs/decisions/decision-log.md` | All architectural decisions |

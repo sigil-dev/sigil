@@ -21,6 +21,7 @@ This design is split into logical sections for readability:
 | 8 | [08-agent-core.md](08-agent-core.md) | Agent loop, sessions, skills, memory |
 | 9 | [09-ui-and-cli.md](09-ui-and-cli.md) | SvelteKit UI, Tauri desktop, Cobra CLI |
 | 10 | [10-build-and-distribution.md](10-build-and-distribution.md) | Taskfile, GoReleaser, CI/CD, toolchain |
+| 11 | [11-storage-interfaces.md](11-storage-interfaces.md) | Storage interface architecture, backend abstraction |
 
 Supporting documents:
 
@@ -67,7 +68,7 @@ Supporting documents:
 | Mobile native apps (iOS/Android) | Desktop covered by Tauri; mobile is future scope |
 | Building our own LLM | We integrate with providers, not compete with them |
 | Backward compat with OpenClaw TS plugins | Clean break enables better architecture |
-| Pure Go (no CGo) | SQLite3 + sqlite-vec require CGo; accept the trade-off |
+| Pure Go (no CGo) | SQLite3 + sqlite-vec require CGo; future backends (LanceDB, LadybugDB) add Rust/C++ FFI; accept the trade-off |
 
 ## Key Constraints
 
