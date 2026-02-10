@@ -46,6 +46,53 @@ task deps      # Download and tidy dependencies
 
 Sigil requires `CGO_ENABLED=1` for sqlite3 and sqlite-vec. All build commands in Taskfile handle this. Do NOT set `CGO_ENABLED=0`.
 
+### Python: Use uv, Not pip
+
+Any Python operations (docs site, tooling, scripts) MUST use `uv` instead of `pip`:
+
+```bash
+uv sync          # Install from pyproject.toml (preferred)
+uv pip install   # If you must install ad-hoc
+uv run           # Run Python commands in the project venv
+```
+
+**MUST NOT** use `pip install`, `pip3 install`, or `python -m pip`.
+
+### Git: Protected Branch
+
+`main` is a protected branch. Direct pushes to main are not allowed.
+
+| Requirement | Description |
+|---|---|
+| **MUST** create feature branch | All work happens on feature branches |
+| **MUST** submit PR for review | All changes to main require a pull request |
+| **MUST NOT** push directly to main | Create a branch and PR instead |
+| **MUST NOT** use `--no-verify` | Fix the underlying issue, don't skip hooks |
+| **MUST NOT** force push | Use `--force-with-lease` only with user confirmation |
+
+---
+
+## Claude Code Configuration
+
+This repo includes in-repo Claude Code hooks and commands in `.claude/`:
+
+### Hooks (automatic enforcement)
+
+| Hook | Enforces |
+|---|---|
+| `enforce-dev-practices.sh` | `task` over raw go/lint commands, uv over pip, no CGO_ENABLED=0, no --no-verify, no push to main |
+| `protect-generated-files.sh` | No edits to `*.pb.go`, `internal/gen/`, or `go.sum` |
+
+### Commands (slash commands)
+
+| Command | Purpose |
+|---|---|
+| `/sigil-test` | Run tests and analyze failures |
+| `/sigil-lint-fix` | Iterative lint → format → fix → verify cycle |
+| `/sigil-new-plugin` | Scaffold a new plugin (manifest + code + tests) |
+| `/sigil-design-review` | Check implementation against design docs |
+| `/sigil-security-check` | Audit code for security model compliance |
+
 ---
 
 ## Development Principles

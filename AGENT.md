@@ -38,14 +38,19 @@ task proto     # Generate code from protobuf definitions
 - Check capabilities before any plugin-facing operation
 - Validate all plugin inputs (plugins are untrusted)
 - Keep CGO_ENABLED=1 (required for sqlite3, sqlite-vec)
+- Use `uv` for all Python operations (not pip) — e.g., `uv sync`, `uv run`, `uv pip install`
+- Work on feature branches, not main (main is protected)
 
 ### Must Not
 
-- Edit generated files (`*.pb.go`, `internal/gen/`)
+- Edit generated files (`*.pb.go`, `internal/gen/`, `go.sum`)
 - Disable linter rules without explicit approval
 - Pass raw LLM output to shell or system calls
 - Set CGO_ENABLED=0
 - Skip tests or security checks for convenience
+- Use `pip` or `pip3` (use `uv` instead)
+- Push directly to main or use `--no-verify`
+- Force push without explicit user approval
 
 ### Should
 
