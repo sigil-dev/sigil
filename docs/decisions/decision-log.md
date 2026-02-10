@@ -1,0 +1,308 @@
+# Decision Log
+
+Architectural decisions made during the 2026-02-09 brainstorming session.
+
+## Format
+
+Each decision records: the question, options considered, choice made, and rationale.
+
+---
+
+## D001: Core Language
+
+**Question:** What language to rewrite the OpenClaw core in?
+
+**Decision:** Go
+
+**Rationale:** User preference. Go excels at gateway-pattern workloads (concurrent connections, low memory per goroutine). Enables single-binary distribution. Aligns with holomush experience and HashiCorp go-plugin.
+
+---
+
+## D002: Plugin Architecture
+
+**Question:** How to structure the plugin system?
+
+**Decision:** HashiCorp go-plugin with three execution tiers (Wasm, process, container)
+
+**Options considered:**
+- In-process plugins (like OpenClaw's TypeScript modules) -- rejected: no isolation
+- go-plugin only (like holomush) -- too limited for untrusted plugins
+- Container-only -- too heavy for simple tools
+
+**Rationale:** Three tiers provide right-sized isolation. Wasm for lightweight, process for most plugins, container for untrusted/heavy plugins. go-plugin is proven in holomush.
+
+---
+
+## D003: Channel Integration Strategy
+
+**Question:** How to integrate messaging platforms (Telegram, WhatsApp, etc.)?
+
+**Options considered:**
+- Go-native channels (Go libraries for each platform)
+- Channel plugins (channels are plugins via go-plugin)
+- Hybrid (core channels in Go, niche channels as plugins)
+
+**Decision:** Channel plugins -- all channels are plugins
+
+**Rationale:** Dogfoods the plugin system. Lets us use the best library per platform regardless of language (Node.js Baileys for WhatsApp, Go telebot for Telegram). Keeps core minimal.
+
+---
+
+## D004: Agent Runtime Approach
+
+**Question:** Where does the AI agent loop live?
+
+**Options considered:**
+- Agent-as-core (embedded in gateway)
+- Agent-as-plugin (agent runtime is a plugin)
+- Thin agent core + plugin tools
+
+**Decision:** Thin agent core + plugin tools
+
+**Rationale:** The agent loop is where corruption happens. Owning it in compiled Go with strict capability checks is the strongest security posture. Tools are the extensibility point, not the loop itself.
+
+---
+
+## D005: LLM Provider Integration
+
+**Question:** How to invoke LLMs from multiple providers?
+
+**Options considered:**
+- Direct provider SDKs in core
+- Unified proxy (LiteLLM/OpenRouter)
+- Provider-as-plugin interface
+- Delegate to agent SDKs (Claude Agent SDK, etc.)
+
+**Decision:** Provider interface in Go core + built-in first-party providers + plugin providers for exotic cases
+
+**Rationale:** Built-in Anthropic/OpenAI/Google covers 90% of users with zero config. Plugin interface allows extending to anything. Delegating to external agent SDKs would cede control of the security-critical agent loop.
+
+---
+
+## D006: UI Technology
+
+**Question:** What to build the web UI with?
+
+**Decision:** SvelteKit web UI + Tauri v2 desktop wrapper
+
+**Rationale:** SvelteKit for the web interface, Tauri bundles it as a native desktop app with the gateway binary as a sidecar. One UI codebase, two deployment targets.
+
+---
+
+## D007: UI-Gateway Protocol
+
+**Question:** How should the SvelteKit UI communicate with the Go gateway?
+
+**Options considered:**
+- WebSocket (custom protocol)
+- ConnectRPC (typed RPC, proto-based)
+- REST + SSE (standard HTTP)
+- REST + SSE + OpenAPI codegen
+
+**Decision:** REST + SSE with OpenAPI spec generation
+
+**Rationale:** ConnectRPC adds proto/buf complexity to the frontend build. SvelteKit's fetch-based data loading is naturally REST-friendly. OpenAPI spec generated from Go types (via huma) gives typed TypeScript clients without proto toolchain in the UI. gRPC stays internal (go-plugin).
+
+---
+
+## D008: Hot Reconfiguration
+
+**Question:** How to avoid OpenClaw's restart-to-reconfigure problem?
+
+**Decision:** Viper config watching + Plugin Manager hot-reload lifecycle
+
+**Rationale:** Viper supports file watching natively. Plugin Manager drains in-flight requests, stops old instance, starts new, re-validates capabilities, routes traffic. No gateway restart. Active conversations queue during swap window.
+
+---
+
+## D009: Plugin Sandboxing (Process Tier)
+
+**Question:** How to isolate process-tier plugins (go-plugin subprocess)?
+
+**Options considered:**
+- No isolation (like OpenClaw)
+- Docker containers for everything
+- OS-level sandboxing (bubblewrap/sandbox-exec)
+
+**Decision:** OS-level sandboxing inspired by Anthropic's `sandbox-runtime` (srt)
+
+**Rationale:** Lightweight, no container runtime dependency. macOS uses built-in sandbox-exec, Linux uses bubblewrap. Closes the network isolation gap in the process tier. Most users never need Docker installed.
+
+---
+
+## D010: Conversation Memory
+
+**Question:** How to handle long conversation history efficiently?
+
+**Decision:** Tiered memory model with agent-controlled retrieval
+
+**Tiers:**
+1. Active window (last N messages in LLM context)
+2. Recent messages (SQLite FTS5, searchable)
+3. Auto-generated summaries
+4. Extracted knowledge/facts
+5. Semantic search (sqlite-vec embeddings)
+
+**Rationale:** Agent decides when to look up old context via memory tools rather than automatic RAG injection. Keeps context lean for simple exchanges, gives unlimited history access when needed. All embedded in SQLite -- no external databases.
+
+---
+
+## D011: Workspace Scoping
+
+**Question:** How to scope conversations by topic/group?
+
+**Decision:** Workspaces -- scoped contexts with own sessions, tools, skills, members, and channel bindings
+
+**Rationale:** User has multiple use cases (homelab, holomush dev, family) that need different tools, skills, and access control. Workspaces provide blast radius containment -- corruption in one workspace cannot reach another's tools.
+
+---
+
+## D012: Node Networking
+
+**Question:** How should remote nodes connect to the gateway?
+
+**Decision:** Standard TCP/TLS (default) with optional Tailscale integration via tsnet
+
+**Rationale:** Tailscale provides NAT traversal, auto TLS, MagicDNS, and ACL-governed connectivity. Tag-based auto-auth (`tag:agent-node`) eliminates manual token management. Opt-in keeps the project accessible to users without Tailscale.
+
+---
+
+## D013: Tailscale Tag-Based Auth
+
+**Question:** Should nodes auto-authenticate via Tailscale?
+
+**Decision:** Yes, with a required tag (`tag:agent-node`)
+
+**Three-layer auth:**
+1. Tailscale ACL -- can this device reach the gateway?
+2. Tag check -- does it have `tag:agent-node`?
+3. Workspace binding -- which workspaces can it access?
+
+---
+
+## D014: Skills Spec
+
+**Question:** What format for agent skills?
+
+**Decision:** agentskills.io open format with gateway-specific extensions in `metadata.*`
+
+**Rationale:** agentskills.io is the emerging standard adopted by Claude Code, Cursor, Gemini CLI, and others. Our skills work everywhere; community skills work in our gateway. Extensions live in metadata to avoid spec conflicts.
+
+---
+
+## D015: CGo
+
+**Question:** Pure Go or CGo?
+
+**Decision:** CGo required
+
+**Rationale:** SQLite3 and sqlite-vec require CGo. Accepted trade-off: complicates cross-compilation (use goreleaser-cross in CI) but enables embedded database without external dependencies.
+
+---
+
+## D016: Build System
+
+**Decision:** Taskfile.dev
+
+**Rationale:** User preference. Proven in holomush. YAML-based, simple, cross-platform.
+
+---
+
+## D017: Release Pipeline
+
+**Decision:** GoReleaser + release-please + Cosign + Syft
+
+**Rationale:** Proven in holomush. GoReleaser handles cross-compilation and Docker. Release-please handles versioning and changelog. Cosign provides keyless signing via GitHub OIDC. Syft generates dual-format SBOMs.
+
+---
+
+## D018: Conventional Commits
+
+**Decision:** Cocogitto for commit message validation only
+
+**Rationale:** Proven in holomush. Cocogitto validates conventional commit format. Release-please handles the actual versioning based on commit types. Clean separation of concerns.
+
+---
+
+## D019: Git Hooks
+
+**Decision:** Lefthook
+
+**Rationale:** Proven in holomush. Parallel pre-commit hooks, commit-msg validation via cog. Stage-fixed mode auto-adds formatting changes.
+
+---
+
+## D020: Markdown Linting
+
+**Question:** Which markdown linter?
+
+**Options considered:**
+- markdownlint-cli2 (Node.js)
+- dprint markdown plugin
+- rumdl (Rust)
+
+**Decision:** rumdl
+
+**Rationale:** Rust binary, no Node.js dependency. Aligns with lightweight goal -- keeps Node.js scoped to SvelteKit UI development only.
+
+---
+
+## D021: Documentation Site
+
+**Decision:** Zensical (Python, uv-managed)
+
+**Rationale:** Proven in holomush. Simple TOML config, audience-based doc organization, auto-navigation from directory structure.
+
+---
+
+## D022: Database
+
+**Decision:** SQLite (mattn/go-sqlite3) per workspace
+
+**Rationale:** Embedded, zero-config, self-contained per workspace. FTS5 for text search, sqlite-vec for embeddings. No PostgreSQL/Redis required for core functionality. mattn/go-sqlite3 since CGo is already required.
+
+---
+
+## D024: License
+
+**Decision:** Apache License 2.0
+
+**Rationale:** Same license as holomush. Permissive, patent grant, compatible with most other open-source licenses. Standard for infrastructure Go projects (Kubernetes, Terraform, etc.).
+
+---
+
+## D025: Project Name
+
+**Question:** What to name the project?
+
+**Options considered:**
+- Talon -- spiritual successor to "claw". Rejected: Talon Voice (voice coding tool) dominates the namespace. Multiple other conflicts (mailgun/talon, optiv/Talon).
+- Loom -- weaves things together. Rejected: Atlassian's Loom video product is a household name in dev tools.
+- Sigil -- protective mark, seal of authority.
+
+**Decision:** Sigil
+
+**GitHub org:** `sigil-dev`
+**Repo:** `sigil-dev/sigil`
+**CLI binary:** `sigil`
+**Go module:** `github.com/sigil-dev/sigil`
+
+**Rationale:** Cleanest namespace. Only notable conflict is Sigil-Ebook (EPUB editor, completely different domain). Strong security connotation aligns with the project's primary differentiator. Short, memorable, good CLI ergonomics.
+
+---
+
+## D023: HTTP Framework
+
+**Decision:** huma (on chi router)
+
+**Rationale:** Generates OpenAPI 3.1 spec from Go struct types. Request validation against spec at runtime. Works with any Go router. One source of truth for API types.
+
+---
+
+## D026: OpenClaw Attribution
+
+**Decision:** Acknowledge OpenClaw as inspiration with NOTICE file and design doc references
+
+**Rationale:** Sigil is inspired by OpenClaw's concepts but is an independent Go reimplementation, not a code fork. Apache 2.0 NOTICE file provides proper attribution. Design overview acknowledges OpenClaw's community. We respect OpenClaw's work and want to play nice with their ecosystem — complementary projects, not competitors.
+
+**Pre-release gate:** See [pre-release-checklist.md](pre-release-checklist.md) — ALL items MUST be completed before any public release.

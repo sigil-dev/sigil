@@ -1,0 +1,44 @@
+# Lefthook configuration
+# https://github.com/evilmartians/lefthook
+
+no_auto_install: true
+
+pre-commit:
+  parallel: true
+  commands:
+    license-headers:
+      glob: "*.{go,sh,py,proto}"
+      exclude: "*.pb.go"
+      run: |
+        set -euo pipefail
+        if [[ ! -f LICENSE_HEADER ]]; then
+          echo "ERROR: LICENSE_HEADER not found"; exit 1
+        fi
+        command -v addlicense >/dev/null 2>&1 || go install github.com/google/addlicense@latest
+        addlicense -f LICENSE_HEADER {staged_files}
+      stage_fixed: true
+
+    lint-go:
+      glob: "*.go"
+      run: golangci-lint run --new-from-rev=HEAD~1
+      stage_fixed: true
+
+    lint-markdown:
+      glob: "*.md"
+      run: rumdl {staged_files}
+
+    lint-yaml:
+      glob: "*.{yaml,yml}"
+      run: yamlfmt -lint {staged_files}
+
+    lint-actions:
+      glob: ".github/workflows/*.{yaml,yml}"
+      run: actionlint {staged_files}
+
+    format-check:
+      run: dprint check
+
+commit-msg:
+  commands:
+    conventional-commit:
+      run: cog verify --file {1}

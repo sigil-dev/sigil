@@ -1,0 +1,48 @@
+# Sigil configuration
+# https://github.com/sigil-dev/sigil
+
+# Networking
+networking:
+  mode: local                       # local | tailscale
+  listen: "127.0.0.1:18789"
+  # tailscale:
+  #   hostname: "my-agent"
+  #   auth_key: "${TS_AUTHKEY}"
+  #   node_auth:
+  #     required_tag: "tag:agent-node"
+
+# LLM Providers
+providers:
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+  # openai:
+  #   api_key: "${OPENAI_API_KEY}"
+  # ollama:
+  #   endpoint: "http://localhost:11434"
+
+# Model configuration
+models:
+  default: "anthropic/claude-sonnet-4-5"
+  failover:
+    - "anthropic/claude-sonnet-4-5"
+  budgets:
+    per_session_tokens: 100000
+    per_day_usd: 50.00
+
+# Sessions
+sessions:
+  memory:
+    active_window: 20
+    compaction:
+      strategy: summarize
+      summary_model: "anthropic/claude-haiku-4-5"
+      batch_size: 50
+
+# Workspaces
+workspaces:
+  personal:
+    description: "Default personal workspace"
+    members: []
+    tools:
+      allow: ["*"]
+    skills: []

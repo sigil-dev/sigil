@@ -1,0 +1,17 @@
+Sigil
+Copyright 2026 The Sigil Authors
+
+This project was inspired by OpenClaw (https://github.com/openclaw/openclaw),
+an open-source personal AI assistant gateway. Sigil began as a conceptual fork
+of OpenClaw, reimagined as a Go-native implementation with a security-first
+plugin architecture.
+
+We gratefully acknowledge the OpenClaw project and its contributors for
+pioneering the personal AI gateway concept and demonstrating the value of
+multi-channel AI assistants.
+
+The plugin architecture draws on patterns from HoloMUSH
+(https://github.com/holomush/holomush) and HashiCorp's go-plugin library.
+
+The process-tier sandboxing approach is inspired by Anthropic's sandbox-runtime
+(https://github.com/anthropic-experimental/sandbox-runtime).
