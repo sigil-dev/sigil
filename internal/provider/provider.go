@@ -8,19 +8,39 @@ import (
 )
 
 // Provider is the core interface for LLM providers.
+// Built-in providers (Anthropic, OpenAI, Google) are compiled into the gateway.
+// Plugin providers implement this via gRPC (defined in api/proto/plugin/v1/provider.proto).
 type Provider interface {
+	// Name returns the provider's name (e.g., "anthropic", "openai").
 	Name() string
+
+	// Available checks if the provider is currently available.
 	Available(ctx context.Context) bool
+
+	// ListModels returns available models from this provider.
 	ListModels(ctx context.Context) ([]ModelInfo, error)
+
+	// Chat sends a chat request and streams responses.
 	Chat(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error)
+
+	// Status checks if the provider is available.
 	Status(ctx context.Context) (ProviderStatus, error)
+
+	// Close cleans up provider resources.
 	Close() error
 }
 
 // Router routes chat requests to the appropriate provider based on model name.
+// Implements failover logic, budget checks, and workspace overrides.
 type Router interface {
+	// Route selects a provider for the given model name.
+	// Returns the provider and resolved model ID.
 	Route(ctx context.Context, workspaceID, modelName string) (Provider, string, error)
+
+	// RegisterProvider adds a provider to the router.
 	RegisterProvider(name string, provider Provider) error
+
+	// Close shuts down all registered providers.
 	Close() error
 }
 
