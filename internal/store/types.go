@@ -155,7 +155,7 @@ type Graph struct {
 // VectorResult represents a single result from a vector similarity search.
 type VectorResult struct {
 	ID       string
-	Score    float64
+	Score    float64 // Distance metric: lower = more similar; 0.0 = exact match.
 	Metadata map[string]any
 }
 
