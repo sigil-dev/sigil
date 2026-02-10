@@ -1,0 +1,307 @@
+# Sigil Development Guide
+
+Instructions for Claude Code working on the Sigil codebase.
+
+## Project Overview
+
+Sigil is a secure, lightweight Go gateway connecting messaging platforms to AI agents via a HashiCorp-style plugin architecture. Inspired by [OpenClaw](https://github.com/openclaw/openclaw).
+
+- Go core with security-first agent loop
+- HashiCorp go-plugin (gRPC) for plugin isolation
+- Three execution tiers: Wasm (Wazero) → Process (go-plugin + sandbox) → Container (OCI)
+- Capability-gated ABAC for all plugin operations
+- SQLite per workspace (mattn/go-sqlite3 + sqlite-vec)
+- REST+SSE API with OpenAPI 3.1 (huma on chi)
+- SvelteKit web UI + Tauri desktop app
+- Optional Tailscale integration (tsnet)
+
+**Architecture Reference**: [docs/design/00-overview.md](docs/design/00-overview.md)
+
+---
+
+## Commands
+
+### Task Commands (Required)
+
+**MUST use `task` for all build, test, lint, and format operations.** Do NOT run `go build`, `go test`, `golangci-lint`, etc. directly.
+
+```bash
+task dev       # Run in development mode
+task build     # Build binary (CGO_ENABLED=1)
+task test      # Run all tests
+task lint      # Run all linters
+task fmt       # Format all files
+task proto     # Generate Go code from protobuf
+task deps      # Download and tidy dependencies
+```
+
+| Requirement | Description |
+|---|---|
+| **MUST** use `task` | Never run Go/lint/fmt commands directly |
+| **MUST** run `task test` | Before claiming any implementation is complete |
+| **MUST** run `task lint` | Before committing changes |
+| **MUST NOT** disable lint/format rules | Without explicit user confirmation |
+
+### CGo Requirement
+
+Sigil requires `CGO_ENABLED=1` for sqlite3 and sqlite-vec. All build commands in Taskfile handle this. Do NOT set `CGO_ENABLED=0`.
+
+---
+
+## Development Principles
+
+### Test-Driven Development
+
+- Tests MUST be written before implementation
+- Tests MUST pass before any task is complete
+- Use table-driven tests for comprehensive coverage
+- Mock external dependencies (database, network, plugins)
+
+### Spec-Driven Development
+
+- Work MUST NOT start without a spec/design/plan
+- Design docs live in `docs/design/`
+- Implementation plans live in `docs/plans/`
+- Decisions live in `docs/decisions/`
+
+### RFC2119 Keywords
+
+| Keyword | Meaning |
+|---|---|
+| **MUST** | Absolute requirement |
+| **MUST NOT** | Absolute prohibition |
+| **SHOULD** | Recommended, may ignore with justification |
+| **MAY** | Optional |
+
+---
+
+## Code Conventions
+
+### Go Idioms
+
+- Accept interfaces, return structs
+- Errors are values — handle them explicitly
+- Use context for cancellation and timeouts
+- Prefer composition over inheritance
+
+### Error Handling
+
+Use structured errors with context (package TBD — likely oops or similar):
+
+```go
+// Wrap with context
+return fmt.Errorf("loading plugin %s: %w", name, err)
+
+// At API boundaries, include error codes for client consumption
+```
+
+### Logging
+
+- Use structured logging (slog)
+- Log at appropriate levels (debug, info, warn, error)
+- Include relevant context: plugin name, workspace ID, session ID
+
+### Naming
+
+- Use clear, descriptive names
+- Avoid abbreviations except well-known ones (ID, URL, HTTP)
+- Package names are lowercase, single words when possible
+
+### License Headers
+
+All source files MUST include SPDX license headers. Lefthook pre-commit hook adds them automatically.
+
+**Go files:**
+
+```go
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+```
+
+**Shell/Proto/YAML:** Same pattern with appropriate comment syntax.
+
+| Requirement | Description |
+|---|---|
+| **MUST** include SPDX header | All `.go`, `.sh`, `.proto` files |
+| **MUST NOT** add to generated files | Skip `*.pb.go` files |
+| **Auto-added on commit** | Lefthook pre-commit hook handles this |
+
+**Directories checked:** `api/`, `cmd/`, `internal/`, `pkg/`, `plugins/`, `scripts/`
+
+```bash
+task license:check   # Verify all files have headers
+task license:add     # Add missing headers
+```
+
+---
+
+## Testing
+
+### Test Files
+
+- Tests live next to implementation: `foo.go` → `foo_test.go`
+- Integration tests in `*_integration_test.go` with `//go:build integration`
+- Use table-driven tests
+
+### Table-Driven Tests
+
+```go
+func TestCapabilityMatch(t *testing.T) {
+    tests := []struct {
+        name    string
+        pattern string
+        cap     string
+        want    bool
+    }{
+        {"exact match", "channel:send", "channel:send", true},
+        {"glob match", "channel:*", "channel:send", true},
+        {"no match", "channel:send", "tool:exec", false},
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            got := matchCapability(tt.pattern, tt.cap)
+            assert.Equal(t, tt.want, got)
+        })
+    }
+}
+```
+
+### Assertions
+
+Use testify:
+
+```go
+assert.Equal(t, expected, got)
+require.NoError(t, err)
+assert.Contains(t, slice, element)
+```
+
+---
+
+## Directory Structure
+
+```text
+api/                     # Protocol definitions
+  proto/                 # Protobuf service definitions
+    common/v1/           # Shared types
+    plugin/v1/           # Plugin gRPC contracts
+    sigil/v1/            # Gateway API types
+  openapi/               # Generated OpenAPI specs
+cmd/
+  sigil/                 # Main binary entry point
+  openapi-gen/           # OpenAPI spec generator
+docs/
+  design/                # Architecture design (11 sections)
+  decisions/             # Decision log, pre-release checklist
+  plans/                 # Implementation plans
+internal/
+  agent/                 # Agent loop, session management
+  config/                # Viper configuration
+  gen/                   # Generated code (proto)
+  identity/              # User identity and auth
+  memory/                # Tiered memory (FTS5, summaries, sqlite-vec)
+  node/                  # Remote node management
+  plugin/                # Plugin host
+    goplugin/            # HashiCorp go-plugin integration
+    sandbox/             # OS-level sandboxing (bwrap, sandbox-exec)
+    wasm/                # Wazero Wasm runtime
+  provider/              # LLM provider implementations
+    anthropic/           # Built-in Anthropic provider
+    google/              # Built-in Google provider
+    openai/              # Built-in OpenAI provider
+  security/              # Capability enforcement, ABAC
+  server/                # HTTP server (huma + chi)
+  workspace/             # Workspace scoping
+pkg/
+  plugin/                # Public plugin SDK types
+plugins/                 # First-party plugins
+skills/                  # Built-in skills
+scripts/                 # Build and utility scripts
+site/                    # Documentation site (zensical)
+ui/                      # SvelteKit web UI
+```
+
+---
+
+## Security Principles
+
+Security is Sigil's primary differentiator. All code MUST follow these principles:
+
+| Principle | Description |
+|---|---|
+| Default deny | Plugins have zero capabilities unless explicitly granted in manifest |
+| Capability enforcement | Every plugin operation checked against manifest capabilities |
+| Agent loop integrity | LLM outputs are validated before tool dispatch (7-step checks) |
+| Plugin isolation | Execution tier determines sandbox boundary |
+| No trust escalation | A plugin cannot grant capabilities it doesn't have |
+
+When implementing any plugin-facing API:
+
+1. **MUST** check capabilities before executing
+2. **MUST** validate all inputs from plugins (they are untrusted)
+3. **MUST** audit security-relevant operations
+4. **MUST NOT** pass raw LLM output to shell or system calls
+
+---
+
+## Plugin System
+
+Four plugin types, all via gRPC (go-plugin):
+
+| Type | Purpose | Example |
+|---|---|---|
+| Provider | LLM integration | Anthropic, OpenAI, Ollama |
+| Channel | Messaging platform | Telegram, WhatsApp, Discord |
+| Tool | Agent capabilities | File access, web search, code exec |
+| Skill | Structured workflows | Summarize, translate, analyze |
+
+Three execution tiers:
+
+| Tier | Isolation | Use Case |
+|---|---|---|
+| Wasm (Wazero) | Memory-safe, no syscalls | Lightweight pure-compute tools |
+| Process (go-plugin) | OS-level sandbox (bwrap/sandbox-exec) | Most plugins |
+| Container (OCI) | Full container isolation | Untrusted or network-heavy plugins |
+
+---
+
+## Conventions Specific to Sigil
+
+### Config
+
+- Viper for configuration with YAML format
+- Environment variable override: `SIGIL_<SECTION>_<KEY>`
+- Example config: `sigil.yaml.example`
+
+### Protobuf
+
+- Definitions in `api/proto/`
+- Generated Go code in `internal/gen/proto/`
+- Use `buf` for generation: `task proto`
+- **MUST NOT** edit generated `*.pb.go` files
+
+### Commits
+
+- Conventional commits enforced by Cocogitto (lefthook commit-msg hook)
+- Format: `type(scope): description`
+- Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+
+---
+
+## Key Design Docs
+
+| Doc | Path | Covers |
+|---|---|---|
+| Overview | `docs/design/00-overview.md` | Goals, non-goals, prior art |
+| Core Architecture | `docs/design/01-core-architecture.md` | Layers, trust boundaries |
+| Plugin System | `docs/design/02-plugin-system.md` | Manifests, tiers, lifecycle |
+| Security Model | `docs/design/03-security-model.md` | ABAC, agent integrity |
+| Channel System | `docs/design/04-channel-system.md` | Channel plugins, pairing |
+| Workspaces | `docs/design/05-workspace-system.md` | Scoped contexts |
+| Nodes | `docs/design/06-node-system.md` | Remote devices, Tailscale |
+| Providers | `docs/design/07-provider-system.md` | LLM routing, budgets |
+| Agent Core | `docs/design/08-agent-core.md` | Agent loop, memory, skills |
+| UI & CLI | `docs/design/09-ui-and-cli.md` | SvelteKit, Tauri, Cobra |
+| Build | `docs/design/10-build-and-distribution.md` | Toolchain, CI/CD |
+| Decisions | `docs/decisions/decision-log.md` | All architectural decisions |
