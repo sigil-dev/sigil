@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 	last_compaction TEXT NOT NULL DEFAULT '',
 	model_override TEXT NOT NULL DEFAULT '',
 	status         TEXT NOT NULL DEFAULT 'active',
+	tool_budget_max_calls_per_turn INTEGER NOT NULL DEFAULT 0,
+	tool_budget_max_calls_per_session INTEGER NOT NULL DEFAULT 0,
+	tool_budget_used INTEGER NOT NULL DEFAULT 0,
+	token_budget_per_session_limit INTEGER NOT NULL DEFAULT 0,
+	token_budget_per_hour_limit INTEGER NOT NULL DEFAULT 0,
+	token_budget_per_day_limit INTEGER NOT NULL DEFAULT 0,
+	token_budget_used_session INTEGER NOT NULL DEFAULT 0,
+	token_budget_used_hour INTEGER NOT NULL DEFAULT 0,
+	token_budget_used_day INTEGER NOT NULL DEFAULT 0,
 	created_at     TEXT NOT NULL,
 	updated_at     TEXT NOT NULL
 );
@@ -84,8 +93,12 @@ func (s *SessionStore) Close() error {
 }
 
 func (s *SessionStore) CreateSession(ctx context.Context, session *store.Session) error {
-	const q = `INSERT INTO sessions (id, workspace_id, user_id, summary, last_compaction, model_override, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	const q = `INSERT INTO sessions (id, workspace_id, user_id, summary, last_compaction, model_override, status,
+	tool_budget_max_calls_per_turn, tool_budget_max_calls_per_session, tool_budget_used,
+	token_budget_per_session_limit, token_budget_per_hour_limit, token_budget_per_day_limit,
+	token_budget_used_session, token_budget_used_hour, token_budget_used_day,
+	created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.ExecContext(ctx, q,
 		session.ID,
@@ -95,6 +108,15 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		formatTime(session.LastCompaction),
 		session.ModelOverride,
 		string(session.Status),
+		session.ToolBudget.MaxCallsPerTurn,
+		session.ToolBudget.MaxCallsPerSession,
+		session.ToolBudget.Used,
+		session.TokenBudget.MaxPerSession,
+		session.TokenBudget.MaxPerHour,
+		session.TokenBudget.MaxPerDay,
+		session.TokenBudget.UsedSession,
+		session.TokenBudget.UsedHour,
+		session.TokenBudget.UsedDay,
 		formatTime(session.CreatedAt),
 		formatTime(session.UpdatedAt),
 	)
@@ -105,7 +127,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 }
 
 func (s *SessionStore) GetSession(ctx context.Context, id string) (*store.Session, error) {
-	const q = `SELECT id, workspace_id, user_id, summary, last_compaction, model_override, status, created_at, updated_at
+	const q = `SELECT id, workspace_id, user_id, summary, last_compaction, model_override, status,
+	tool_budget_max_calls_per_turn, tool_budget_max_calls_per_session, tool_budget_used,
+	token_budget_per_session_limit, token_budget_per_hour_limit, token_budget_per_day_limit,
+	token_budget_used_session, token_budget_used_hour, token_budget_used_day,
+	created_at, updated_at
 FROM sessions WHERE id = ?`
 
 	var sess store.Session
@@ -119,26 +145,48 @@ FROM sessions WHERE id = ?`
 		&lastComp,
 		&sess.ModelOverride,
 		&sess.Status,
+		&sess.ToolBudget.MaxCallsPerTurn,
+		&sess.ToolBudget.MaxCallsPerSession,
+		&sess.ToolBudget.Used,
+		&sess.TokenBudget.MaxPerSession,
+		&sess.TokenBudget.MaxPerHour,
+		&sess.TokenBudget.MaxPerDay,
+		&sess.TokenBudget.UsedSession,
+		&sess.TokenBudget.UsedHour,
+		&sess.TokenBudget.UsedDay,
 		&createdAt,
 		&updatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("session %s not found", id)
+		return nil, fmt.Errorf("session %s: %w", id, store.ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting session %s: %w", id, err)
 	}
 
-	sess.LastCompaction = parseTime(lastComp)
-	sess.CreatedAt = parseTime(createdAt)
-	sess.UpdatedAt = parseTime(updatedAt)
+	sess.LastCompaction, err = ParseTime(lastComp)
+	if err != nil {
+		return nil, fmt.Errorf("parsing session %s last_compaction: %w", id, err)
+	}
+	sess.CreatedAt, err = ParseTime(createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parsing session %s created_at: %w", id, err)
+	}
+	sess.UpdatedAt, err = ParseTime(updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parsing session %s updated_at: %w", id, err)
+	}
 
 	return &sess, nil
 }
 
 func (s *SessionStore) UpdateSession(ctx context.Context, session *store.Session) error {
 	const q = `UPDATE sessions SET workspace_id = ?, user_id = ?, summary = ?, last_compaction = ?,
-model_override = ?, status = ?, updated_at = ? WHERE id = ?`
+model_override = ?, status = ?,
+tool_budget_max_calls_per_turn = ?, tool_budget_max_calls_per_session = ?, tool_budget_used = ?,
+token_budget_per_session_limit = ?, token_budget_per_hour_limit = ?, token_budget_per_day_limit = ?,
+token_budget_used_session = ?, token_budget_used_hour = ?, token_budget_used_day = ?,
+updated_at = ? WHERE id = ?`
 
 	result, err := s.db.ExecContext(ctx, q,
 		session.WorkspaceID,
@@ -147,6 +195,15 @@ model_override = ?, status = ?, updated_at = ? WHERE id = ?`
 		formatTime(session.LastCompaction),
 		session.ModelOverride,
 		string(session.Status),
+		session.ToolBudget.MaxCallsPerTurn,
+		session.ToolBudget.MaxCallsPerSession,
+		session.ToolBudget.Used,
+		session.TokenBudget.MaxPerSession,
+		session.TokenBudget.MaxPerHour,
+		session.TokenBudget.MaxPerDay,
+		session.TokenBudget.UsedSession,
+		session.TokenBudget.UsedHour,
+		session.TokenBudget.UsedDay,
 		formatTime(time.Now()),
 		session.ID,
 	)
@@ -159,7 +216,7 @@ model_override = ?, status = ?, updated_at = ? WHERE id = ?`
 		return fmt.Errorf("checking rows affected for session %s: %w", session.ID, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("session %s not found", session.ID)
+		return fmt.Errorf("session %s: %w", session.ID, store.ErrNotFound)
 	}
 	return nil
 }
@@ -170,7 +227,11 @@ func (s *SessionStore) ListSessions(ctx context.Context, workspaceID string, opt
 		limit = 100
 	}
 
-	const q = `SELECT id, workspace_id, user_id, summary, last_compaction, model_override, status, created_at, updated_at
+	const q = `SELECT id, workspace_id, user_id, summary, last_compaction, model_override, status,
+	tool_budget_max_calls_per_turn, tool_budget_max_calls_per_session, tool_budget_used,
+	token_budget_per_session_limit, token_budget_per_hour_limit, token_budget_per_day_limit,
+	token_budget_used_session, token_budget_used_hour, token_budget_used_day,
+	created_at, updated_at
 FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 
 	rows, err := s.db.QueryContext(ctx, q, workspaceID, limit, opts.Offset)
@@ -191,14 +252,32 @@ FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 			&lastComp,
 			&sess.ModelOverride,
 			&sess.Status,
+			&sess.ToolBudget.MaxCallsPerTurn,
+			&sess.ToolBudget.MaxCallsPerSession,
+			&sess.ToolBudget.Used,
+			&sess.TokenBudget.MaxPerSession,
+			&sess.TokenBudget.MaxPerHour,
+			&sess.TokenBudget.MaxPerDay,
+			&sess.TokenBudget.UsedSession,
+			&sess.TokenBudget.UsedHour,
+			&sess.TokenBudget.UsedDay,
 			&createdAt,
 			&updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning session row: %w", err)
 		}
-		sess.LastCompaction = parseTime(lastComp)
-		sess.CreatedAt = parseTime(createdAt)
-		sess.UpdatedAt = parseTime(updatedAt)
+		sess.LastCompaction, err = ParseTime(lastComp)
+		if err != nil {
+			return nil, fmt.Errorf("parsing session %s last_compaction: %w", sess.ID, err)
+		}
+		sess.CreatedAt, err = ParseTime(createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing session %s created_at: %w", sess.ID, err)
+		}
+		sess.UpdatedAt, err = ParseTime(updatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing session %s updated_at: %w", sess.ID, err)
+		}
 		sessions = append(sessions, &sess)
 	}
 
@@ -216,7 +295,7 @@ func (s *SessionStore) DeleteSession(ctx context.Context, id string) error {
 		return fmt.Errorf("checking rows affected for session %s: %w", id, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("session %s not found", id)
+		return fmt.Errorf("session %s: %w", id, store.ErrNotFound)
 	}
 	return nil
 }
@@ -277,7 +356,10 @@ FROM (
 		); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
-		msg.CreatedAt = parseTime(createdAt)
+		msg.CreatedAt, err = ParseTime(createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing message %s created_at: %w", msg.ID, err)
+		}
 		if metaJSON != "" && metaJSON != "{}" {
 			if err := json.Unmarshal([]byte(metaJSON), &msg.Metadata); err != nil {
 				return nil, fmt.Errorf("unmarshalling message metadata: %w", err)
@@ -297,11 +379,14 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-// parseTime deserialises a time string stored in the database.
-func parseTime(s string) time.Time {
+// ParseTime deserialises a time string stored in the database.
+func ParseTime(s string) (time.Time, error) {
 	if s == "" {
-		return time.Time{}
+		return time.Time{}, nil
 	}
-	t, _ := time.Parse(time.RFC3339Nano, s)
-	return t
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parsing timestamp %q: %w", s, err)
+	}
+	return t, nil
 }

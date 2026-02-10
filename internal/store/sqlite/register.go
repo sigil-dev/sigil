@@ -4,6 +4,7 @@
 package sqlite
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
 
@@ -29,14 +30,24 @@ func newWorkspaceStores(workspacePath string, vectorDims int) (store.SessionStor
 	}
 	closers = append(closers, ss)
 
-	msgStore, err := NewMessageStore(filepath.Join(workspacePath, "memory.db"))
+	// Open memory.db once and share between MessageStore and SummaryStore
+	// to avoid connection waste and WAL contention.
+	memoryDB, err := sql.Open("sqlite3", filepath.Join(workspacePath, "memory.db")+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
+		cleanup()
+		return nil, nil, nil, fmt.Errorf("opening memory db: %w", err)
+	}
+	// Note: memoryDB is not added to closers here; it's closed via msgStore/sumStore Close()
+
+	msgStore, err := NewMessageStoreWithDB(memoryDB)
+	if err != nil {
+		_ = memoryDB.Close()
 		cleanup()
 		return nil, nil, nil, fmt.Errorf("creating message store: %w", err)
 	}
 	closers = append(closers, msgStore)
 
-	sumStore, err := NewSummaryStore(filepath.Join(workspacePath, "memory.db"))
+	sumStore, err := NewSummaryStoreWithDB(memoryDB)
 	if err != nil {
 		cleanup()
 		return nil, nil, nil, fmt.Errorf("creating summary store: %w", err)

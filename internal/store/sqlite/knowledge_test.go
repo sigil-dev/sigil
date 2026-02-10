@@ -126,3 +126,18 @@ func TestKnowledgeStore_Traverse(t *testing.T) {
 	assert.Len(t, graph.Entities, 3) // alice, bob, charlie
 	assert.Len(t, graph.Relationships, 2)
 }
+
+// TestKnowledgeStore_Traverse_StartNotFound tests that Traverse returns ErrNotFound
+// when the starting entity doesn't exist.
+func TestKnowledgeStore_Traverse_StartNotFound(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "knowledge-traverse-start-missing")
+	ks, err := sqlite.NewKnowledgeStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ks.Close() }()
+
+	// Try to traverse from a non-existent entity
+	_, err = ks.Traverse(ctx, "nonexistent", 2, store.TraversalFilter{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrNotFound, "Should return ErrNotFound when start entity doesn't exist")
+}

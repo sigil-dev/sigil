@@ -3,7 +3,10 @@
 
 package store
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // defaultVectorDimensions is the default embedding dimension (matches OpenAI text-embedding-ada-002).
 const defaultVectorDimensions = 1536
@@ -18,11 +21,14 @@ type GatewayStoreFactory func(dataPath string) (GatewayStore, error)
 var (
 	workspaceFactories = map[string]WorkspaceStoreFactory{}
 	gatewayFactories   = map[string]GatewayStoreFactory{}
+	factoriesMu        sync.RWMutex
 )
 
 // RegisterBackend registers factory functions for a named storage backend.
-// Backend packages call this from init().
+// Backend packages call this from init(). This function is goroutine-safe.
 func RegisterBackend(name string, ws WorkspaceStoreFactory, gw GatewayStoreFactory) {
+	factoriesMu.Lock()
+	defer factoriesMu.Unlock()
 	workspaceFactories[name] = ws
 	gatewayFactories[name] = gw
 }
@@ -40,7 +46,9 @@ func resolveBackend(cfg *StorageConfig) string {
 func NewWorkspaceStores(cfg *StorageConfig, workspacePath string) (SessionStore, MemoryStore, VectorStore, error) {
 	backend := resolveBackend(cfg)
 
+	factoriesMu.RLock()
 	factory, ok := workspaceFactories[backend]
+	factoriesMu.RUnlock()
 	if !ok {
 		return nil, nil, nil, fmt.Errorf("unsupported storage backend: %q", backend)
 	}
@@ -57,7 +65,9 @@ func NewWorkspaceStores(cfg *StorageConfig, workspacePath string) (SessionStore,
 func NewGatewayStore(cfg *StorageConfig, dataPath string) (GatewayStore, error) {
 	backend := resolveBackend(cfg)
 
+	factoriesMu.RLock()
 	factory, ok := gatewayFactories[backend]
+	factoriesMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unsupported storage backend: %q", backend)
 	}
@@ -82,7 +92,7 @@ func NewCompositeMemoryStore(msgs MessageStore, sums SummaryStore, know Knowledg
 	}
 }
 
-func (c *compositeMemoryStore) Messages() MessageStore   { return c.messages }
+func (c *compositeMemoryStore) Messages() MessageStore    { return c.messages }
 func (c *compositeMemoryStore) Summaries() SummaryStore   { return c.summaries }
 func (c *compositeMemoryStore) Knowledge() KnowledgeStore { return c.knowledge }
 

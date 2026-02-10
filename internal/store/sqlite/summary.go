@@ -44,6 +44,16 @@ func NewSummaryStore(dbPath string) (*SummaryStore, error) {
 	return &SummaryStore{db: db}, nil
 }
 
+// NewSummaryStoreWithDB creates a SummaryStore using an existing database connection.
+// This is useful for sharing a single database connection between multiple stores.
+func NewSummaryStoreWithDB(db *sql.DB) (*SummaryStore, error) {
+	if err := migrateSummaries(db); err != nil {
+		return nil, fmt.Errorf("migrating summary tables: %w", err)
+	}
+
+	return &SummaryStore{db: db}, nil
+}
+
 func migrateSummaries(db *sql.DB) error {
 	const ddl = `
 CREATE TABLE IF NOT EXISTS summaries (
@@ -147,9 +157,19 @@ func scanSummaries(rows *sql.Rows) ([]*store.Summary, error) {
 			return nil, fmt.Errorf("scanning summary row: %w", err)
 		}
 
-		sm.FromTime = parseTime(fromTime)
-		sm.ToTime = parseTime(toTime)
-		sm.CreatedAt = parseTime(createdAt)
+		var err error
+		sm.FromTime, err = ParseTime(fromTime)
+		if err != nil {
+			return nil, fmt.Errorf("parsing summary %s from_time: %w", sm.ID, err)
+		}
+		sm.ToTime, err = ParseTime(toTime)
+		if err != nil {
+			return nil, fmt.Errorf("parsing summary %s to_time: %w", sm.ID, err)
+		}
+		sm.CreatedAt, err = ParseTime(createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing summary %s created_at: %w", sm.ID, err)
+		}
 
 		if msgIDsJSON != "" && msgIDsJSON != "[]" {
 			if err := json.Unmarshal([]byte(msgIDsJSON), &sm.MessageIDs); err != nil {

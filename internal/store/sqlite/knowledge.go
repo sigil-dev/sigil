@@ -7,7 +7,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -174,9 +176,22 @@ WHERE workspace = ? AND subject = ? AND (predicate = 'type' OR predicate = 'name
 			ent.Type = object
 			if metadataStr.Valid && metadataStr.String != "" {
 				var em entityMetadata
-				if err := json.Unmarshal([]byte(metadataStr.String), &em); err == nil {
-					ent.CreatedAt = parseTime(em.CreatedAt)
-					ent.UpdatedAt = parseTime(em.UpdatedAt)
+				if err := json.Unmarshal([]byte(metadataStr.String), &em); err != nil {
+					slog.Warn("failed to unmarshal entity metadata",
+						slog.String("entity_id", id),
+						slog.String("workspace", workspaceID),
+						slog.String("error", err.Error()),
+					)
+				} else {
+					var parseErr error
+					ent.CreatedAt, parseErr = ParseTime(em.CreatedAt)
+					if parseErr != nil {
+						return nil, fmt.Errorf("parsing entity %s created_at: %w", id, parseErr)
+					}
+					ent.UpdatedAt, parseErr = ParseTime(em.UpdatedAt)
+					if parseErr != nil {
+						return nil, fmt.Errorf("parsing entity %s updated_at: %w", id, parseErr)
+					}
 				}
 			}
 		case predicate == "name":
@@ -195,7 +210,7 @@ WHERE workspace = ? AND subject = ? AND (predicate = 'type' OR predicate = 'name
 	}
 
 	if !found {
-		return nil, fmt.Errorf("entity %s not found in workspace %s", id, workspaceID)
+		return nil, fmt.Errorf("entity %s in workspace %s: %w", id, workspaceID, store.ErrNotFound)
 	}
 
 	if len(ent.Properties) == 0 {
@@ -318,7 +333,7 @@ func (k *KnowledgeStore) lookupWorkspace(ctx context.Context, entityID string) (
 	var ws string
 	err := k.db.QueryRowContext(ctx, q, entityID).Scan(&ws)
 	if err != nil {
-		return "", fmt.Errorf("entity %s not found: %w", entityID, err)
+		return "", fmt.Errorf("entity %s: %w", entityID, store.ErrNotFound)
 	}
 	return ws, nil
 }
@@ -390,7 +405,13 @@ func (k *KnowledgeStore) GetRelationships(ctx context.Context, entityID string, 
 
 		if metaStr.Valid && metaStr.String != "" {
 			var rm relTripleMetadata
-			if err := json.Unmarshal([]byte(metaStr.String), &rm); err == nil {
+			if err := json.Unmarshal([]byte(metaStr.String), &rm); err != nil {
+				slog.Warn("failed to unmarshal relationship metadata",
+					slog.String("from_id", subject),
+					slog.String("to_id", object),
+					slog.String("error", err.Error()),
+				)
+			} else {
 				rel.ID = rm.RelID
 				rel.Metadata = rm.Metadata
 			}
@@ -493,17 +514,28 @@ func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, quer
 			return nil, fmt.Errorf("scanning fact triple: %w", err)
 		}
 
+		createdAt, err := ParseTime(created)
+		if err != nil {
+			return nil, fmt.Errorf("parsing fact created_at: %w", err)
+		}
+
 		f := &store.Fact{
 			WorkspaceID: workspace,
 			EntityID:    subject,
 			Predicate:   predicate,
 			Value:       object,
-			CreatedAt:   parseTime(created),
+			CreatedAt:   createdAt,
 		}
 
 		if metaStr.Valid && metaStr.String != "" {
 			var fm factTripleMetadata
-			if err := json.Unmarshal([]byte(metaStr.String), &fm); err == nil {
+			if err := json.Unmarshal([]byte(metaStr.String), &fm); err != nil {
+				slog.Warn("failed to unmarshal fact metadata",
+					slog.String("fact_id", f.ID),
+					slog.String("entity_id", subject),
+					slog.String("error", err.Error()),
+				)
+			} else {
 				f.ID = fm.FactID
 				f.Confidence = fm.Confidence
 				f.Source = fm.Source
@@ -589,7 +621,11 @@ SELECT DISTINCT node FROM reachable`)
 	for id := range nodeSet {
 		ent, err := k.GetEntity(ctx, workspace, id)
 		if err != nil {
-			continue // Node might not be a full entity.
+			// Only skip if entity not found; propagate DB errors
+			if errors.Is(err, store.ErrNotFound) {
+				continue // Node might not be a full entity
+			}
+			return nil, fmt.Errorf("getting entity %s during traversal: %w", id, err)
 		}
 		entities = append(entities, ent)
 	}
@@ -658,7 +694,13 @@ WHERE workspace = ?
 
 		if metaStr.Valid && metaStr.String != "" {
 			var rm relTripleMetadata
-			if err := json.Unmarshal([]byte(metaStr.String), &rm); err == nil {
+			if err := json.Unmarshal([]byte(metaStr.String), &rm); err != nil {
+				slog.Warn("failed to unmarshal relationship metadata",
+					slog.String("from_id", subject),
+					slog.String("to_id", object),
+					slog.String("error", err.Error()),
+				)
+			} else {
 				rel.ID = rm.RelID
 				rel.Metadata = rm.Metadata
 			}

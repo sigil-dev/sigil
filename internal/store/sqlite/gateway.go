@@ -162,13 +162,19 @@ func (s *userStore) Get(ctx context.Context, id string) (*store.User, error) {
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(ctx, q, id).Scan(&u.ID, &u.Name, &u.Role, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("user %s not found", id)
+		return nil, fmt.Errorf("user %s: %w", id, store.ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting user %s: %w", id, err)
 	}
-	u.CreatedAt = parseTime(createdAt)
-	u.UpdatedAt = parseTime(updatedAt)
+	u.CreatedAt, err = ParseTime(createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parsing user %s created_at: %w", id, err)
+	}
+	u.UpdatedAt, err = ParseTime(updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parsing user %s updated_at: %w", id, err)
+	}
 
 	ids, err := loadIdentities(ctx, s.db, id)
 	if err != nil {
@@ -191,13 +197,19 @@ WHERE ui.channel = ? AND ui.platform_id = ?`
 		&u.ID, &u.Name, &u.Role, &createdAt, &updatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("user with external id %s/%s not found", provider, externalID)
+		return nil, fmt.Errorf("user with external id %s/%s: %w", provider, externalID, store.ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting user by external id %s/%s: %w", provider, externalID, err)
 	}
-	u.CreatedAt = parseTime(createdAt)
-	u.UpdatedAt = parseTime(updatedAt)
+	u.CreatedAt, err = ParseTime(createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parsing user %s created_at: %w", u.ID, err)
+	}
+	u.UpdatedAt, err = ParseTime(updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parsing user %s updated_at: %w", u.ID, err)
+	}
 
 	ids, err := loadIdentities(ctx, s.db, u.ID)
 	if err != nil {
@@ -225,7 +237,7 @@ func (s *userStore) Update(ctx context.Context, user *store.User) error {
 		return fmt.Errorf("checking rows for user %s: %w", user.ID, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("user %s not found", user.ID)
+		return fmt.Errorf("user %s: %w", user.ID, store.ErrNotFound)
 	}
 
 	// Replace identities: delete old, insert new.
@@ -259,8 +271,15 @@ func (s *userStore) List(ctx context.Context, opts store.ListOpts) ([]*store.Use
 		if err := rows.Scan(&u.ID, &u.Name, &u.Role, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scanning user row: %w", err)
 		}
-		u.CreatedAt = parseTime(createdAt)
-		u.UpdatedAt = parseTime(updatedAt)
+		var err error
+		u.CreatedAt, err = ParseTime(createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing user %s created_at: %w", u.ID, err)
+		}
+		u.UpdatedAt, err = ParseTime(updatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing user %s updated_at: %w", u.ID, err)
+		}
 		users = append(users, &u)
 	}
 	if err := rows.Err(); err != nil {
@@ -289,7 +308,7 @@ func (s *userStore) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("checking rows for user %s: %w", id, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("user %s not found", id)
+		return fmt.Errorf("user %s: %w", id, store.ErrNotFound)
 	}
 	return nil
 }
@@ -361,12 +380,15 @@ FROM pairings WHERE channel_type = ? AND channel_id = ?`
 		&p.WorkspaceID, &p.Status, &createdAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("pairing for channel %s/%s not found", channelType, channelID)
+		return nil, fmt.Errorf("pairing for channel %s/%s: %w", channelType, channelID, store.ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting pairing for channel %s/%s: %w", channelType, channelID, err)
 	}
-	p.CreatedAt = parseTime(createdAt)
+	p.CreatedAt, err = ParseTime(createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parsing pairing %s created_at: %w", p.ID, err)
+	}
 	return &p, nil
 }
 
@@ -390,7 +412,11 @@ FROM pairings WHERE user_id = ? ORDER BY created_at ASC`
 		); err != nil {
 			return nil, fmt.Errorf("scanning pairing row: %w", err)
 		}
-		p.CreatedAt = parseTime(createdAt)
+		var err error
+		p.CreatedAt, err = ParseTime(createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing pairing %s created_at: %w", p.ID, err)
+		}
 		pairings = append(pairings, &p)
 	}
 	return pairings, rows.Err()
@@ -406,7 +432,7 @@ func (s *pairingStore) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("checking rows for pairing %s: %w", id, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("pairing %s not found", id)
+		return fmt.Errorf("pairing %s: %w", id, store.ErrNotFound)
 	}
 	return nil
 }
@@ -502,7 +528,11 @@ func (s *auditStore) Query(ctx context.Context, filter store.AuditFilter) ([]*st
 		); err != nil {
 			return nil, fmt.Errorf("scanning audit row: %w", err)
 		}
-		e.Timestamp = parseTime(ts)
+		var err error
+		e.Timestamp, err = ParseTime(ts)
+		if err != nil {
+			return nil, fmt.Errorf("parsing audit entry %s timestamp: %w", e.ID, err)
+		}
 		if detailsJSON != "" && detailsJSON != "{}" {
 			if err := json.Unmarshal([]byte(detailsJSON), &e.Details); err != nil {
 				return nil, fmt.Errorf("unmarshalling audit details: %w", err)

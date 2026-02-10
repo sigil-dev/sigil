@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -38,6 +39,16 @@ func NewMessageStore(dbPath string) (*MessageStore, error) {
 
 	if err := migrateMessages(db); err != nil {
 		_ = db.Close()
+		return nil, fmt.Errorf("migrating message tables: %w", err)
+	}
+
+	return &MessageStore{db: db}, nil
+}
+
+// NewMessageStoreWithDB creates a MessageStore using an existing database connection.
+// This is useful for sharing a single database connection between multiple stores.
+func NewMessageStoreWithDB(db *sql.DB) (*MessageStore, error) {
+	if err := migrateMessages(db); err != nil {
 		return nil, fmt.Errorf("migrating message tables: %w", err)
 	}
 
@@ -91,6 +102,22 @@ func (m *MessageStore) Close() error {
 	return m.db.Close()
 }
 
+// sanitizeFTS5 escapes FTS5 query metacharacters to prevent injection.
+// It wraps the entire query in double quotes and escapes internal double
+// quotes by doubling them (SQL-style escaping), treating the entire query
+// as a single phrase. This prevents FTS5 from interpreting special operators
+// like OR, NOT, NEAR, column filters, etc.
+func sanitizeFTS5(query string) string {
+	// Escape internal double quotes by doubling them (SQL-style escaping)
+	// Per FTS5 docs: "Within a string, any embedded double quote characters
+	// may be escaped SQL-style - by adding a second double-quote character"
+	query = strings.ReplaceAll(query, `"`, `""`)
+
+	// Wrap the entire query in double quotes to treat it as a single phrase
+	// This prevents FTS5 from interpreting operators like OR, NOT, NEAR, etc.
+	return `"` + query + `"`
+}
+
 // Append inserts a message into the store for the given workspace.
 func (m *MessageStore) Append(ctx context.Context, workspaceID string, msg *store.Message) error {
 	metadata, err := json.Marshal(msg.Metadata)
@@ -119,11 +146,15 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 }
 
 // Search performs a full-text search over messages in the workspace.
+// The query parameter is sanitized to prevent FTS5 query injection attacks.
 func (m *MessageStore) Search(ctx context.Context, workspaceID, query string, opts store.SearchOpts) ([]*store.Message, error) {
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 50
 	}
+
+	// Sanitize the query to prevent FTS5 injection
+	safeQuery := sanitizeFTS5(query)
 
 	const q = `SELECT mm.id, mm.workspace_id, mm.session_id, mm.role, mm.content,
 		mm.tool_call_id, mm.tool_name, mm.created_at, mm.metadata
@@ -133,7 +164,7 @@ WHERE fts.content MATCH ? AND mm.workspace_id = ?
 ORDER BY mm.created_at DESC
 LIMIT ? OFFSET ?`
 
-	rows, err := m.db.QueryContext(ctx, q, query, workspaceID, limit, opts.Offset)
+	rows, err := m.db.QueryContext(ctx, q, safeQuery, workspaceID, limit, opts.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("searching messages: %w", err)
 	}
@@ -211,7 +242,11 @@ func scanMessages(rows *sql.Rows) ([]*store.Message, error) {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 
-		msg.CreatedAt = parseTime(createdAt)
+		var err error
+		msg.CreatedAt, err = ParseTime(createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parsing message %s created_at: %w", msg.ID, err)
+		}
 		if metaJSON != "" && metaJSON != "{}" {
 			if err := json.Unmarshal([]byte(metaJSON), &msg.Metadata); err != nil {
 				return nil, fmt.Errorf("unmarshalling message metadata: %w", err)

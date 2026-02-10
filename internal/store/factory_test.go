@@ -4,6 +4,7 @@
 package store_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/store"
@@ -92,4 +93,35 @@ func TestNewGatewayStore_DefaultBackend(t *testing.T) {
 	gs, err := store.NewGatewayStore(cfg, dir)
 	require.NoError(t, err)
 	assert.NotNil(t, gs)
+}
+
+// TestRegisterBackend_Concurrent verifies that RegisterBackend is goroutine-safe
+// and can handle concurrent registrations without race conditions.
+func TestRegisterBackend_Concurrent(t *testing.T) {
+	const numGoroutines = 10
+	const registrationsPerGoroutine = 10
+
+	done := make(chan bool, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(goroutineID int) {
+			defer func() { done <- true }()
+			for j := 0; j < registrationsPerGoroutine; j++ {
+				name := fmt.Sprintf("backend-%d-%d", goroutineID, j)
+				store.RegisterBackend(name,
+					func(_ string, _ int) (store.SessionStore, store.MemoryStore, store.VectorStore, error) {
+						return nil, nil, nil, nil
+					},
+					func(_ string) (store.GatewayStore, error) {
+						return nil, nil
+					},
+				)
+			}
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
 }
