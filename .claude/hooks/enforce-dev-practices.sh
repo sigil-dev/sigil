@@ -55,7 +55,7 @@ if echo "$COMMAND" | grep -qE 'git\s+push\s+(origin\s+)?main(\s|$)'; then
 fi
 
 # --- Rule: Prevent force push ---
-if echo "$COMMAND" | grep -qE 'git\s+push\s+.*(-f|--force)'; then
+if echo "$COMMAND" | grep -qE 'git\s+push\s+.*(\s-f\b|\s--force\b)'; then
   jq -n '{
     "decision": "block",
     "reason": "Force push is not allowed. It can destroy remote history. If you need to update a PR branch, use `git push --force-with-lease` after confirming with the user."
