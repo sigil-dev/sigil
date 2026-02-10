@@ -31,7 +31,7 @@ All test/build/lint operations use `task` commands per CLAUDE.md.
 
 | Phase | Name | Doc | Key Deliverables | Est. Tasks |
 |-------|------|-----|------------------|------------|
-| 1 | Foundation | [01-phase-1-foundation.md](01-phase-1-foundation.md) | Proto defs, storage interfaces, SQLite backends, config, plugin SDK types | 12 |
+| 1 | Foundation | [01-phase-1-foundation.md](01-phase-1-foundation.md) | Proto defs, storage interfaces, SQLite backends, config, provider interfaces, plugin SDK types | 14 |
 | 2 | Core Runtime | [02-phase-2-core-runtime.md](02-phase-2-core-runtime.md) | Security enforcer, plugin host, sandboxing, Wasm tier | 8 |
 | 3 | Agent Core | [03-phase-3-agent-core.md](03-phase-3-agent-core.md) | Agent loop, sessions, tool dispatch, tiered memory, skills | 8 |
 | 4 | Platform Integration | [04-phase-4-platform-integration.md](04-phase-4-platform-integration.md) | Workspaces, channels, providers, built-in LLM providers | 7 |
@@ -50,6 +50,7 @@ Phase 1: Foundation
   ├── SQLite implementations (depends on: interfaces)
   ├── Store factory (depends on: interfaces, SQLite impls)
   ├── Config management (no deps)
+  ├── Provider interfaces (no deps)
   └── Plugin SDK types (depends on: proto)
         │
         v
@@ -65,7 +66,7 @@ Phase 2: Core Runtime
         v
 Phase 3: Agent Core
   ├── Session management (depends on: SessionStore)
-  ├── Agent loop (depends on: sessions, enforcer, providers)
+  ├── Agent loop (depends on: sessions, enforcer, provider interfaces [Phase 1])
   ├── Tool dispatch (depends on: agent loop, enforcer, plugin host)
   ├── Memory tools (depends on: MemoryStore, VectorStore)
   ├── Skills loading (depends on: workspace config)
@@ -76,7 +77,7 @@ Phase 4: Platform Integration
   ├── Workspace manager (depends on: store factory, enforcer)
   ├── Channel system (depends on: plugin host, identity)
   ├── Provider registry (depends on: plugin host)
-  └── Built-in providers (depends on: provider registry)
+  └── Built-in providers: Anthropic, OpenAI, Google, OpenRouter (depends on: provider registry)
         │
         v
 Phase 5: Server & API
@@ -116,6 +117,7 @@ Each phase has exit criteria that MUST pass before moving to the next phase.
 - [ ] SQLite GatewayStore (User, Pairing, Audit) passes all CRUD tests
 - [ ] Store factory creates correct backends from config
 - [ ] Viper config loads, validates, and watches for changes
+- [ ] Provider interfaces defined in `internal/provider/` and compile
 - [ ] Plugin SDK types compile and are importable from `pkg/plugin/`
 - [ ] `task test` passes with zero failures
 - [ ] `task lint` passes with zero errors
@@ -123,7 +125,7 @@ Each phase has exit criteria that MUST pass before moving to the next phase.
 ### Gate 2: Core Runtime Complete
 
 - [ ] Capability glob matching works for all patterns (exact, wildcard, path-scoped)
-- [ ] Enforcer correctly allows/denies based on manifest ∩ workspace ∩ user
+- [ ] Enforcer correctly allows/denies based on three-way intersection: plugin caps ∩ workspace allow ∩ user permissions
 - [ ] All enforcer decisions are audit-logged
 - [ ] Plugin manifests parse and validate (capabilities, schema, version constraints)
 - [ ] Plugin lifecycle state machine works: discover → validate → load → register → drain → stop
@@ -154,7 +156,7 @@ Each phase has exit criteria that MUST pass before moving to the next phase.
 - [ ] Provider registry discovers and routes to providers
 - [ ] Failover chain works when primary provider fails
 - [ ] Budget enforcement denies requests exceeding limits
-- [ ] At least one built-in provider (Anthropic) sends/receives streaming chat
+- [ ] Built-in providers (Anthropic, OpenAI, Google, OpenRouter) send/receive streaming chat
 - [ ] `task test` passes, `task lint` passes
 
 ### Gate 5: Server & API Complete

@@ -165,12 +165,13 @@ func TestEnforcer_AllowMatchingCapability(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Should allow: plugin has sessions.read
+	// Should allow: plugin has sessions.read, workspace allows *, user allows *
 	err := enforcer.Check(ctx, security.CheckRequest{
-		Plugin:      "telegram",
-		Capability:  "sessions.read",
-		WorkspaceID: "ws-1",
-		WorkspaceAllow: security.NewCapabilitySet("*"),
+		Plugin:            "telegram",
+		Capability:        "sessions.read",
+		WorkspaceID:       "ws-1",
+		WorkspaceAllow:    security.NewCapabilitySet("*"),
+		UserPermissions:   security.NewCapabilitySet("*"),
 	})
 	assert.NoError(t, err)
 }
@@ -186,10 +187,11 @@ func TestEnforcer_DenyMissingCapability(t *testing.T) {
 	ctx := context.Background()
 
 	err := enforcer.Check(ctx, security.CheckRequest{
-		Plugin:         "telegram",
-		Capability:     "exec.run",
-		WorkspaceID:    "ws-1",
-		WorkspaceAllow: security.NewCapabilitySet("*"),
+		Plugin:          "telegram",
+		Capability:      "exec.run",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "denied")
@@ -208,10 +210,11 @@ func TestEnforcer_DenyExplicitlyDenied(t *testing.T) {
 	ctx := context.Background()
 
 	err := enforcer.Check(ctx, security.CheckRequest{
-		Plugin:         "malicious",
-		Capability:     "exec.run",
-		WorkspaceID:    "ws-1",
-		WorkspaceAllow: security.NewCapabilitySet("exec.*"),
+		Plugin:          "malicious",
+		Capability:      "exec.run",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("exec.*"),
+		UserPermissions: security.NewCapabilitySet("exec.*"),
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "denied")
@@ -227,12 +230,96 @@ func TestEnforcer_DenyByWorkspaceScope(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Workspace only allows calendar tools
+	// Workspace only allows calendar tools (user allows all)
 	err := enforcer.Check(ctx, security.CheckRequest{
-		Plugin:         "exec-tool",
-		Capability:     "exec.run.sandboxed",
-		WorkspaceID:    "family",
-		WorkspaceAllow: security.NewCapabilitySet("calendar.*", "shopping.*"),
+		Plugin:          "exec-tool",
+		Capability:      "exec.run.sandboxed",
+		WorkspaceID:     "family",
+		WorkspaceAllow:  security.NewCapabilitySet("calendar.*", "shopping.*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	})
+	assert.Error(t, err)
+}
+
+func TestEnforcer_DenyByUserPermissions(t *testing.T) {
+	audit := &mockAuditStore{}
+	enforcer := security.NewEnforcer(audit)
+
+	enforcer.RegisterPlugin("exec-tool", security.NewCapabilitySet(
+		"exec.run.sandboxed",
+	), security.NewCapabilitySet())
+
+	ctx := context.Background()
+
+	// Plugin allows, workspace allows, but user (member role) does not
+	err := enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "exec-tool",
+		Capability:      "exec.run.sandboxed",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("sessions.*", "messages.*"),
+	})
+	assert.Error(t, err)
+}
+
+func TestEnforcer_AllowThreeWayIntersection(t *testing.T) {
+	audit := &mockAuditStore{}
+	enforcer := security.NewEnforcer(audit)
+
+	enforcer.RegisterPlugin("test-plugin", security.NewCapabilitySet(
+		"sessions.read", "sessions.write", "exec.run",
+	), security.NewCapabilitySet())
+
+	ctx := context.Background()
+
+	// User with restricted permissions — only sessions.read passes all three checks
+	err := enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("sessions.*", "messages.*"),
+		UserPermissions: security.NewCapabilitySet("sessions.read", "messages.send.*"),
+	})
+	assert.NoError(t, err)
+
+	// exec.run fails: user doesn't have it
+	err = enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "exec.run",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("sessions.read"),
+	})
+	assert.Error(t, err)
+
+	// sessions.write fails: user doesn't have it
+	err = enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "sessions.write",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("sessions.read"),
+	})
+	assert.Error(t, err)
+}
+
+func TestEnforcer_UserWithNoPermissions(t *testing.T) {
+	audit := &mockAuditStore{}
+	enforcer := security.NewEnforcer(audit)
+
+	enforcer.RegisterPlugin("test-plugin", security.NewCapabilitySet(
+		"sessions.read",
+	), security.NewCapabilitySet())
+
+	ctx := context.Background()
+
+	// User with empty permission set — nothing passes
+	err := enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet(),
 	})
 	assert.Error(t, err)
 }
@@ -248,10 +335,11 @@ func TestEnforcer_AuditLogging(t *testing.T) {
 	ctx := context.Background()
 
 	_ = enforcer.Check(ctx, security.CheckRequest{
-		Plugin:         "test-plugin",
-		Capability:     "sessions.read",
-		WorkspaceID:    "ws-1",
-		WorkspaceAllow: security.NewCapabilitySet("*"),
+		Plugin:          "test-plugin",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
 	})
 
 	require.Len(t, audit.entries, 1)
@@ -267,10 +355,11 @@ func TestEnforcer_UnregisteredPlugin(t *testing.T) {
 	ctx := context.Background()
 
 	err := enforcer.Check(ctx, security.CheckRequest{
-		Plugin:         "unknown",
-		Capability:     "sessions.read",
-		WorkspaceID:    "ws-1",
-		WorkspaceAllow: security.NewCapabilitySet("*"),
+		Plugin:          "unknown",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
 	})
 	assert.Error(t, err)
 }
@@ -289,6 +378,8 @@ func TestEnforcer_UnregisteredPlugin(t *testing.T) {
   1. Plugin allow set must contain the capability
   2. Plugin deny set must NOT contain the capability
   3. Workspace allow set must contain the capability
+  4. User permissions set must contain the capability
+- `CheckRequest` includes `UserPermissions CapabilitySet` field
 - Every check (allow or deny) gets audit-logged
 
 **Step 4: Run test — expect PASS**
@@ -629,10 +720,11 @@ deny_capabilities:
 
 	// Verify enforcer was populated
 	err = enforcer.Check(context.Background(), security.CheckRequest{
-		Plugin:         "test-tool",
-		Capability:     "sessions.read",
-		WorkspaceID:    "ws-1",
-		WorkspaceAllow: security.NewCapabilitySet("*"),
+		Plugin:          "test-tool",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
 	})
 	assert.NoError(t, err)
 }
@@ -947,7 +1039,8 @@ After completing all 8 tasks, verify:
 - [ ] `task test` — all tests pass (including Phase 1 tests)
 - [ ] `task lint` — zero lint errors
 - [ ] Capability matching handles all glob patterns correctly
-- [ ] Enforcer performs three-way intersection (plugin ∩ workspace ∩ !deny)
+- [ ] Enforcer performs three-way intersection (plugin ∩ workspace ∩ user ∩ !deny)
+- [ ] User permissions dimension enforced (including empty permission set)
 - [ ] All enforcer decisions are audit-logged
 - [ ] Plugin manifests parse from YAML and validate
 - [ ] Lifecycle state machine allows only valid transitions

@@ -1044,6 +1044,7 @@ package sqlite_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1154,8 +1155,6 @@ func TestSessionStore_GetNonExistent(t *testing.T) {
 }
 ```
 
-Note: you will need `"fmt"` in the imports for the ActiveWindow test.
-
 **Step 3: Run test to verify it fails**
 
 Run: `task test`
@@ -1202,6 +1201,7 @@ package sqlite_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1892,9 +1892,437 @@ git commit -m "feat(config): add Viper config management with defaults and valid
 
 ---
 
+## Task 13: Provider Interface Definitions
+
+**Files:**
+
+- Create: `internal/provider/provider.go`
+- Create: `internal/provider/provider_test.go`
+
+**Step 1: Write interface compilation tests**
+
+Create `internal/provider/provider_test.go`:
+
+```go
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+package provider_test
+
+import (
+	"testing"
+
+	"github.com/sigil-dev/sigil/internal/provider"
+)
+
+// Compile-time interface satisfaction checks.
+// These ensure the interfaces are well-defined and importable.
+// Actual implementation tests are in the specific provider packages.
+
+func TestProviderInterfaceExists(t *testing.T) {
+	var _ provider.Provider = nil
+}
+
+func TestRouterInterfaceExists(t *testing.T) {
+	var _ provider.Router = nil
+}
+
+func TestChatRequestFields(t *testing.T) {
+	req := provider.ChatRequest{
+		Model:    "claude-sonnet-4-5",
+		Messages: []provider.Message{},
+	}
+	if req.Model == "" {
+		t.Fatal("ChatRequest.Model should be settable")
+	}
+}
+
+func TestChatEventTypes(t *testing.T) {
+	// Verify event types compile
+	_ = provider.ChatEvent{
+		Type: provider.EventTypeTextDelta,
+		Text: "test",
+	}
+	_ = provider.ChatEvent{
+		Type: provider.EventTypeToolCall,
+	}
+	_ = provider.ChatEvent{
+		Type: provider.EventTypeDone,
+	}
+}
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `task test`
+
+Expected: FAIL — `provider` package doesn't exist yet.
+
+**Step 3: Define provider interfaces**
+
+Create `internal/provider/provider.go` with minimal types based on Section 7:
+
+```go
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+package provider
+
+import (
+	"context"
+)
+
+// Provider is the core interface for LLM providers.
+// Built-in providers (Anthropic, OpenAI, Google) are compiled into the gateway.
+// Plugin providers implement this via gRPC (defined in api/proto/plugin/v1/provider.proto).
+type Provider interface {
+	// ListModels returns available models from this provider.
+	ListModels(ctx context.Context) ([]ModelInfo, error)
+
+	// Chat sends a chat request and streams responses.
+	Chat(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error)
+
+	// Status checks if the provider is available.
+	Status(ctx context.Context) (ProviderStatus, error)
+
+	// Close cleans up provider resources.
+	Close() error
+}
+
+// Router routes chat requests to the appropriate provider based on model name.
+// Implements failover logic, budget checks, and workspace overrides.
+type Router interface {
+	// Route selects a provider for the given model name.
+	// Returns the provider and resolved model ID.
+	Route(ctx context.Context, workspaceID, modelName string) (Provider, string, error)
+
+	// RegisterProvider adds a provider to the router.
+	RegisterProvider(name string, provider Provider) error
+
+	// Close shuts down all registered providers.
+	Close() error
+}
+
+// ChatRequest represents a request to the LLM.
+type ChatRequest struct {
+	Model        string
+	Messages     []Message
+	Tools        []ToolDefinition
+	SystemPrompt string
+	Options      ChatOptions
+}
+
+// ChatOptions contains model configuration.
+type ChatOptions struct {
+	Temperature    float32
+	MaxTokens      int
+	StopSequences  []string
+	Stream         bool
+}
+
+// Message represents a conversation message.
+type Message struct {
+	Role       MessageRole
+	Content    string
+	ToolCallID string
+	ToolName   string
+}
+
+// MessageRole defines the role of a message sender.
+type MessageRole string
+
+const (
+	MessageRoleUser      MessageRole = "user"
+	MessageRoleAssistant MessageRole = "assistant"
+	MessageRoleSystem    MessageRole = "system"
+	MessageRoleTool      MessageRole = "tool"
+)
+
+// ToolDefinition describes a tool available to the agent.
+type ToolDefinition struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+}
+
+// ChatEvent is a streaming response event.
+type ChatEvent struct {
+	Type     EventType
+	Text     string
+	ToolCall *ToolCall
+	Usage    *Usage
+	Error    string
+}
+
+// EventType defines the type of chat event.
+type EventType string
+
+const (
+	EventTypeTextDelta EventType = "text_delta"
+	EventTypeToolCall  EventType = "tool_call"
+	EventTypeUsage     EventType = "usage"
+	EventTypeDone      EventType = "done"
+	EventTypeError     EventType = "error"
+)
+
+// ToolCall represents a tool invocation by the LLM.
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string // JSON
+}
+
+// Usage tracks token consumption.
+type Usage struct {
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
+}
+
+// ModelInfo describes a model's capabilities.
+type ModelInfo struct {
+	ID           string
+	Name         string
+	Provider     string
+	Capabilities ModelCapabilities
+}
+
+// ModelCapabilities declares what a model supports.
+type ModelCapabilities struct {
+	SupportsTools     bool
+	SupportsVision    bool
+	SupportsStreaming bool
+	SupportsThinking  bool
+	MaxContextTokens  int
+	MaxOutputTokens   int
+}
+
+// ProviderStatus indicates provider health.
+type ProviderStatus struct {
+	Available bool
+	Provider  string
+	Message   string
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `task test`
+
+Expected: All provider interface compilation tests PASS.
+
+**Step 5: Commit**
+
+```bash
+git add internal/provider/
+git commit -m "feat(provider): add provider interface definitions"
+```
+
+---
+
+## Task 14: Plugin SDK Types
+
+**Files:**
+
+- Create: `pkg/plugin/types.go`
+- Create: `pkg/plugin/types_test.go`
+
+**Step 1: Write importability test**
+
+Create `pkg/plugin/types_test.go`:
+
+```go
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+package plugin_test
+
+import (
+	"testing"
+
+	"github.com/sigil-dev/sigil/pkg/plugin"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestPluginTypeValues(t *testing.T) {
+	assert.Equal(t, plugin.PluginType("provider"), plugin.PluginTypeProvider)
+	assert.Equal(t, plugin.PluginType("channel"), plugin.PluginTypeChannel)
+	assert.Equal(t, plugin.PluginType("tool"), plugin.PluginTypeTool)
+	assert.Equal(t, plugin.PluginType("skill"), plugin.PluginTypeSkill)
+}
+
+func TestExecutionTierValues(t *testing.T) {
+	assert.Equal(t, plugin.ExecutionTier("wasm"), plugin.ExecutionTierWasm)
+	assert.Equal(t, plugin.ExecutionTier("process"), plugin.ExecutionTierProcess)
+	assert.Equal(t, plugin.ExecutionTier("container"), plugin.ExecutionTierContainer)
+}
+
+func TestManifestFields(t *testing.T) {
+	manifest := plugin.Manifest{
+		Name:    "test-plugin",
+		Version: "1.0.0",
+		Type:    plugin.PluginTypeChannel,
+		Execution: plugin.ExecutionConfig{
+			Tier: plugin.ExecutionTierProcess,
+		},
+		Capabilities: []plugin.Capability{
+			{Pattern: "channel:send"},
+		},
+	}
+	assert.Equal(t, "test-plugin", manifest.Name)
+	assert.Equal(t, plugin.PluginTypeChannel, manifest.Type)
+	assert.Len(t, manifest.Capabilities, 1)
+}
+
+func TestCapabilityPattern(t *testing.T) {
+	cap := plugin.Capability{
+		Pattern:     "sessions.read",
+		Description: "Read session data",
+	}
+	assert.Equal(t, "sessions.read", cap.Pattern)
+}
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `task test`
+
+Expected: FAIL — `pkg/plugin` package doesn't exist yet.
+
+**Step 3: Define SDK types**
+
+Create `pkg/plugin/types.go` with public types from Section 2:
+
+```go
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+// Package plugin provides public types for plugin authors.
+// These types define the plugin manifest structure and execution configuration.
+package plugin
+
+// PluginType identifies the category of plugin.
+type PluginType string
+
+const (
+	PluginTypeProvider PluginType = "provider"
+	PluginTypeChannel  PluginType = "channel"
+	PluginTypeTool     PluginType = "tool"
+	PluginTypeSkill    PluginType = "skill"
+)
+
+// ExecutionTier determines the isolation level for a plugin.
+type ExecutionTier string
+
+const (
+	ExecutionTierWasm      ExecutionTier = "wasm"
+	ExecutionTierProcess   ExecutionTier = "process"
+	ExecutionTierContainer ExecutionTier = "container"
+)
+
+// Manifest describes a plugin's metadata, capabilities, and execution requirements.
+// This is loaded from plugin.yaml in the plugin directory.
+type Manifest struct {
+	Name              string                 `yaml:"name"`
+	Version           string                 `yaml:"version"`
+	Type              PluginType             `yaml:"type"`
+	Engine            string                 `yaml:"engine"`
+	License           string                 `yaml:"license,omitempty"`
+	Capabilities      []Capability           `yaml:"capabilities"`
+	DenyCapabilities  []Capability           `yaml:"deny_capabilities,omitempty"`
+	Execution         ExecutionConfig        `yaml:"execution"`
+	ConfigSchema      map[string]interface{} `yaml:"config_schema,omitempty"`
+	Dependencies      map[string]string      `yaml:"dependencies,omitempty"`
+	Lifecycle         LifecycleConfig        `yaml:"lifecycle,omitempty"`
+	Storage           StorageConfig          `yaml:"storage,omitempty"`
+}
+
+// Capability represents a permission pattern.
+type Capability struct {
+	Pattern     string `yaml:"pattern"`
+	Description string `yaml:"description,omitempty"`
+}
+
+// ExecutionConfig defines how the plugin should be executed.
+type ExecutionConfig struct {
+	Tier    ExecutionTier  `yaml:"tier"`
+	Sandbox SandboxConfig  `yaml:"sandbox,omitempty"`
+	Image   string         `yaml:"image,omitempty"`
+	Network string         `yaml:"network,omitempty"`
+	Memory  string         `yaml:"memory_limit,omitempty"`
+}
+
+// SandboxConfig defines sandbox restrictions for process-tier plugins.
+type SandboxConfig struct {
+	Filesystem FilesystemConfig `yaml:"filesystem,omitempty"`
+	Network    NetworkConfig    `yaml:"network,omitempty"`
+}
+
+// FilesystemConfig defines filesystem access rules.
+type FilesystemConfig struct {
+	WriteAllow []string `yaml:"write_allow,omitempty"`
+	ReadDeny   []string `yaml:"read_deny,omitempty"`
+}
+
+// NetworkConfig defines network access rules.
+type NetworkConfig struct {
+	Allow []string `yaml:"allow,omitempty"`
+	Proxy bool     `yaml:"proxy,omitempty"`
+}
+
+// LifecycleConfig defines plugin lifecycle behavior.
+type LifecycleConfig struct {
+	HotReload              bool   `yaml:"hot_reload,omitempty"`
+	GracefulShutdownTimeout string `yaml:"graceful_shutdown_timeout,omitempty"`
+}
+
+// StorageConfig defines plugin storage requirements.
+type StorageConfig struct {
+	KV      bool              `yaml:"kv,omitempty"`
+	Volumes []VolumeConfig    `yaml:"volumes,omitempty"`
+	Memory  MemoryConfig      `yaml:"memory,omitempty"`
+}
+
+// VolumeConfig defines a persistent volume for a plugin.
+type VolumeConfig struct {
+	Name      string `yaml:"name"`
+	Mount     string `yaml:"mount"`
+	SizeLimit string `yaml:"size_limit,omitempty"`
+	Persist   bool   `yaml:"persist,omitempty"`
+}
+
+// MemoryConfig defines memory storage collections.
+type MemoryConfig struct {
+	Collections []CollectionConfig `yaml:"collections,omitempty"`
+}
+
+// CollectionConfig defines a memory collection.
+type CollectionConfig struct {
+	Name           string `yaml:"name"`
+	EmbeddingModel string `yaml:"embedding_model,omitempty"`
+	MaxEntries     int    `yaml:"max_entries,omitempty"`
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `task test`
+
+Expected: All plugin SDK type tests PASS.
+
+**Step 5: Commit**
+
+```bash
+git add pkg/plugin/
+git commit -m "feat(plugin): add public SDK types for plugin authors"
+```
+
+---
+
 ## Gate 1 Checklist
 
-After completing all 12 tasks, verify:
+After completing all 14 tasks, verify:
 
 - [ ] `task proto` — generates all proto code without errors
 - [ ] `task test` — all tests pass
@@ -1903,5 +2331,7 @@ After completing all 12 tasks, verify:
 - [ ] All SQLite implementations in `internal/store/sqlite/` satisfy interfaces
 - [ ] Factory creates correct backends
 - [ ] Config loads from file, env vars, and defaults
+- [ ] Provider interfaces compile and are importable from `internal/provider/`
+- [ ] Plugin SDK types compile and are importable from `pkg/plugin/`
 
 Only proceed to Phase 2 after all checks pass.

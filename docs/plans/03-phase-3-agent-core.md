@@ -15,6 +15,8 @@
 
 **Depends on:** Phase 1 (storage interfaces), Phase 2 (security enforcer, plugin host)
 
+**Note on Test Mocks:** Tasks 1-7 reference mock helper functions (e.g., `newMockSessionStore()`, `newMockEnforcer()`) that are consolidated in Task 8. When implementing, either create Task 8 mocks first, or define minimal inline mocks in each task and refactor them into shared helpers in Task 8.
+
 ---
 
 ## Task 1: Session Management
@@ -37,6 +39,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/agent"
+	"github.com/sigil-dev/sigil/internal/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -255,6 +258,8 @@ git commit -m "feat(agent): add session lanes for per-session FIFO serialization
 
 ## Task 3: Agent Loop Skeleton
 
+**Uses provider interfaces defined in Phase 1** (`internal/provider/provider.go`): `provider.Router` interface for routing to providers, and `provider.ChatRequest`, `provider.ChatEvent`, `provider.ChatResponse` types.
+
 **Files:**
 
 - Create: `internal/agent/loop.go`
@@ -280,10 +285,10 @@ import (
 func TestAgentLoop_ProcessMessage(t *testing.T) {
 	// Use mocks for all dependencies
 	loop := agent.NewLoop(agent.LoopConfig{
-		SessionManager: newMockSessionManager(),
-		Enforcer:       newMockEnforcer(),
-		ProviderRouter: newMockProviderRouter(),
-		AuditStore:     newMockAuditStore(),
+		SessionManager:  newMockSessionManager(),
+		Enforcer:        newMockEnforcer(),
+		ProviderRouter:  newMockProviderRouter(), // implements provider.Router from Phase 1
+		AuditStore:      newMockAuditStore(),
 	})
 
 	ctx := context.Background()
@@ -311,11 +316,11 @@ func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
 	}
 
 	loop := agent.NewLoop(agent.LoopConfig{
-		SessionManager: newMockSessionManager(),
-		Enforcer:       newMockEnforcer(),
-		ProviderRouter: newMockProviderRouter(),
-		AuditStore:     newMockAuditStore(),
-		Hooks:          hooks,
+		SessionManager:  newMockSessionManager(),
+		Enforcer:        newMockEnforcer(),
+		ProviderRouter:  newMockProviderRouter(), // implements provider.Router from Phase 1
+		AuditStore:      newMockAuditStore(),
+		Hooks:           hooks,
 	})
 
 	ctx := context.Background()
@@ -332,10 +337,10 @@ func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
 
 func TestAgentLoop_BudgetEnforcement(t *testing.T) {
 	loop := agent.NewLoop(agent.LoopConfig{
-		SessionManager: newMockSessionManager(),
-		Enforcer:       newMockEnforcer(),
-		ProviderRouter: newMockProviderRouterWithBudgetExceeded(),
-		AuditStore:     newMockAuditStore(),
+		SessionManager:  newMockSessionManager(),
+		Enforcer:        newMockEnforcer(),
+		ProviderRouter:  newMockProviderRouterWithBudgetExceeded(), // implements provider.Router from Phase 1
+		AuditStore:      newMockAuditStore(),
 	})
 
 	ctx := context.Background()
@@ -367,7 +372,7 @@ func TestAgentLoop_BudgetEnforcement(t *testing.T) {
 - `InboundMessage` and `OutboundMessage` structs
 - `LoopHooks` for testability (optional callbacks at each step)
 
-For now, the LLM call uses the `ProviderRouter` interface (mock in tests). Real providers come in Phase 4.
+For now, the LLM call uses the `provider.Router` interface from Phase 1 (mock in tests). Real provider implementations come in Phase 4.
 
 **Step 4: Run test — expect PASS**
 
@@ -398,6 +403,7 @@ package agent_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/stretchr/testify/assert"
@@ -925,8 +931,8 @@ Create a single test helper file that provides all the mock implementations used
 - `newMockSessionManager()` — wraps mock session store
 - `newMockEnforcer()` — allows everything
 - `newMockEnforcerDenyAll()` — denies everything
-- `newMockProviderRouter()` — returns static "Hello" response
-- `newMockProviderRouterWithBudgetExceeded()` — returns budget error
+- `newMockProviderRouter()` — returns static "Hello" response (implements `provider.Router` from Phase 1)
+- `newMockProviderRouterWithBudgetExceeded()` — returns budget error (implements `provider.Router` from Phase 1)
 - `newMockPluginManager()` — returns mock tool results
 - `newMockPluginManagerWithResult(result string)` — returns specific result
 - `newMockPluginManagerSlow(d time.Duration)` — sleeps before returning

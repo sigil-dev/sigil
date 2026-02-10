@@ -6,7 +6,7 @@
 
 **Architecture:** Workspace manager owns routing (message → identity → workspace → session). Channel system manages streaming connections to platform plugins. Provider system abstracts LLM access with failover and budgets. Built-in providers compile into the binary for zero-config common cases.
 
-**Tech Stack:** Go interfaces, gRPC streaming, anthropic-sdk-go, openai-go, Google genai SDK, testify
+**Tech Stack:** Go interfaces, gRPC streaming, anthropic-sdk-go, openai-go, Google genai SDK, testify, OpenRouter (OpenAI-compatible)
 
 **Design Docs:**
 
@@ -529,16 +529,16 @@ func TestChatRequestFields(t *testing.T) {
 
 func TestChatEventTypes(t *testing.T) {
 	// TextDelta event
-	event := provider.ChatEvent{Type: provider.EventTextDelta, Text: "Hello"}
-	assert.Equal(t, provider.EventTextDelta, event.Type)
+	event := provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Hello"}
+	assert.Equal(t, provider.EventTypeTextDelta, event.Type)
 
 	// ToolCall event
-	event = provider.ChatEvent{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{Name: "exec"}}
+	event = provider.ChatEvent{Type: provider.EventTypeToolCall, ToolCall: &provider.ToolCall{Name: "exec"}}
 	assert.Equal(t, "exec", event.ToolCall.Name)
 
 	// Done event
-	event = provider.ChatEvent{Type: provider.EventDone}
-	assert.Equal(t, provider.EventDone, event.Type)
+	event = provider.ChatEvent{Type: provider.EventTypeDone}
+	assert.Equal(t, provider.EventTypeDone, event.Type)
 }
 ```
 
@@ -652,7 +652,7 @@ func TestAnthropicProvider_Chat_Integration(t *testing.T) {
 
 	var text string
 	for event := range events {
-		if event.Type == provider.EventTextDelta {
+		if event.Type == provider.EventTypeTextDelta {
 			text += event.Text
 		}
 	}
@@ -684,7 +684,7 @@ git commit -m "feat(provider): add built-in Anthropic provider"
 
 ---
 
-## Task 7: Built-in OpenAI and Google Providers
+## Task 7: Built-in OpenAI, Google, and OpenRouter Providers
 
 **Files:**
 
@@ -692,12 +692,14 @@ git commit -m "feat(provider): add built-in Anthropic provider"
 - Create: `internal/provider/openai/openai_test.go`
 - Create: `internal/provider/google/google.go`
 - Create: `internal/provider/google/google_test.go`
+- Create: `internal/provider/openrouter/openrouter.go`
+- Create: `internal/provider/openrouter/openrouter_test.go`
 
 Follow the same pattern as the Anthropic provider:
 
 1. Write unit tests (interface satisfaction, Name(), ListModels(), missing API key)
 2. Write integration test (skip unless API key set)
-3. Implement using respective SDK (openai-go, Google genai SDK)
+3. Implement using respective SDK (openai-go, Google genai SDK, OpenRouter OpenAI-compatible API)
 4. Verify unit tests pass
 5. Commit each separately
 
@@ -713,6 +715,242 @@ git commit -m "feat(provider): add built-in OpenAI provider"
 ```bash
 git add internal/provider/google/
 git commit -m "feat(provider): add built-in Google provider"
+```
+
+**OpenRouter implementation notes:**
+
+OpenRouter provides an OpenAI-compatible API, so the implementation reuses the OpenAI SDK client with a different base URL (`https://openrouter.io/api/v1`).
+
+`internal/provider/openrouter/openrouter.go`:
+
+```go
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+package openrouter
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/sigil-dev/sigil/internal/provider"
+)
+
+// Config holds OpenRouter provider configuration
+type Config struct {
+	APIKey string
+}
+
+// Provider implements the provider.Provider interface for OpenRouter
+type Provider struct {
+	client *openai.Client
+}
+
+// New creates a new OpenRouter provider instance
+func New(cfg Config) (*Provider, error) {
+	if cfg.APIKey == "" {
+		return nil, fmt.Errorf("openrouter: missing api_key in config")
+	}
+
+	client := openai.NewClient(
+		option.WithAPIKey(cfg.APIKey),
+		option.WithBaseURL("https://openrouter.io/api/v1"),
+	)
+
+	return &Provider{client: client}, nil
+}
+
+// Name returns the provider name
+func (p *Provider) Name() string {
+	return "openrouter"
+}
+
+// Available checks if the provider is accessible
+func (p *Provider) Available(ctx context.Context) bool {
+	// Attempt to list models as a health check
+	_, err := p.ListModels(ctx)
+	return err == nil
+}
+
+// ListModels returns available models from OpenRouter
+// Note: OpenRouter supports a dynamic list of models. For this implementation,
+// return a static list of commonly available models via OpenRouter.
+func (p *Provider) ListModels(ctx context.Context) ([]provider.ModelInfo, error) {
+	models := []provider.ModelInfo{
+		{ID: "openai/gpt-4-turbo", Name: "GPT-4 Turbo (OpenRouter)", Provider: "openrouter", Capabilities: provider.ModelCapabilities{SupportsTools: true, SupportsStreaming: true, MaxContextTokens: 128000}},
+		{ID: "openai/gpt-4", Name: "GPT-4 (OpenRouter)", Provider: "openrouter", Capabilities: provider.ModelCapabilities{SupportsTools: true, SupportsStreaming: true, MaxContextTokens: 8192}},
+		{ID: "openai/gpt-3.5-turbo", Name: "GPT-3.5 Turbo (OpenRouter)", Provider: "openrouter", Capabilities: provider.ModelCapabilities{SupportsTools: true, SupportsStreaming: true, MaxContextTokens: 4096}},
+		{ID: "anthropic/claude-opus", Name: "Claude Opus (OpenRouter)", Provider: "openrouter", Capabilities: provider.ModelCapabilities{SupportsTools: true, SupportsStreaming: true, MaxContextTokens: 200000}},
+		{ID: "anthropic/claude-sonnet", Name: "Claude Sonnet (OpenRouter)", Provider: "openrouter", Capabilities: provider.ModelCapabilities{SupportsTools: true, SupportsStreaming: true, MaxContextTokens: 200000}},
+		{ID: "google/gemini-pro", Name: "Gemini Pro (OpenRouter)", Provider: "openrouter", Capabilities: provider.ModelCapabilities{SupportsTools: true, SupportsStreaming: true, MaxContextTokens: 32768}},
+	}
+	return models, nil
+}
+
+// Chat implements streaming chat via OpenRouter's OpenAI-compatible API
+func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	// Convert provider.Message to openai.ChatCompletionMessageParamUnion
+	messages := make([]openai.ChatCompletionMessageParamUnion, len(req.Messages))
+	for i, msg := range req.Messages {
+		messages[i] = openai.ChatCompletionMessageParam{
+			Role:    openai.ChatCompletionMessageRoleUser,
+			Content: openai.F(msg.Content),
+		}
+	}
+
+	// Build request
+	params := openai.ChatCompletionNewParams{
+		Model:    openai.F(req.Model),
+		Messages: openai.F(messages),
+		Stream:   openai.F(true),
+	}
+
+	if req.Options.MaxTokens > 0 {
+		params.MaxTokens = openai.F(int64(req.Options.MaxTokens))
+	}
+
+	// Create event channel
+	eventChan := make(chan provider.ChatEvent, 100)
+
+	// Stream in goroutine
+	go func() {
+		defer close(eventChan)
+
+		stream, err := p.client.Chat.Completions.NewStream(ctx, params)
+		if err != nil {
+			eventChan <- provider.ChatEvent{
+				Type:  provider.EventTypeError,
+				Error: fmt.Errorf("openrouter chat: %w", err),
+			}
+			return
+		}
+		defer stream.Close()
+
+		for stream.Next() {
+			chunk := stream.Current()
+			if len(chunk.Choices) > 0 {
+				choice := chunk.Choices[0]
+				if choice.Delta.Content != "" {
+					eventChan <- provider.ChatEvent{
+						Type: provider.EventTypeTextDelta,
+						Text: choice.Delta.Content,
+					}
+				}
+			}
+		}
+
+		if stream.Err() != nil {
+			eventChan <- provider.ChatEvent{
+				Type:  provider.EventTypeError,
+				Error: stream.Err(),
+			}
+			return
+		}
+
+		eventChan <- provider.ChatEvent{Type: provider.EventTypeDone}
+	}()
+
+	return eventChan, nil
+}
+```
+
+**OpenRouter test cases:**
+
+`internal/provider/openrouter/openrouter_test.go`:
+
+```go
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+package openrouter_test
+
+import (
+	"context"
+	"os"
+	"testing"
+
+	"github.com/sigil-dev/sigil/internal/provider"
+	"github.com/sigil-dev/sigil/internal/provider/openrouter"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestOpenRouterProvider_ImplementsInterface(t *testing.T) {
+	var _ provider.Provider = (*openrouter.Provider)(nil)
+}
+
+func TestOpenRouterProvider_Name(t *testing.T) {
+	p, err := openrouter.New(openrouter.Config{APIKey: "test-key"})
+	require.NoError(t, err)
+	assert.Equal(t, "openrouter", p.Name())
+}
+
+func TestOpenRouterProvider_ListModels(t *testing.T) {
+	p, err := openrouter.New(openrouter.Config{APIKey: "test-key"})
+	require.NoError(t, err)
+
+	models, err := p.ListModels(context.Background())
+	require.NoError(t, err)
+	assert.NotEmpty(t, models)
+
+	// Should include known models available via OpenRouter
+	var ids []string
+	for _, m := range models {
+		ids = append(ids, m.ID)
+	}
+	assert.Contains(t, ids, "openai/gpt-4-turbo")
+	assert.Contains(t, ids, "anthropic/claude-opus")
+	assert.Contains(t, ids, "google/gemini-pro")
+}
+
+func TestOpenRouterProvider_MissingAPIKey(t *testing.T) {
+	_, err := openrouter.New(openrouter.Config{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "api_key")
+}
+
+// Integration test — requires real API key
+func TestOpenRouterProvider_Chat_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test")
+	}
+	// This test requires OPENROUTER_API_KEY env var
+	// Run with: task test -- -run TestOpenRouterProvider_Chat_Integration
+	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENROUTER_API_KEY not set")
+	}
+
+	p, err := openrouter.New(openrouter.Config{APIKey: apiKey})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	events, err := p.Chat(ctx, provider.ChatRequest{
+		Model: "openai/gpt-3.5-turbo",
+		Messages: []provider.Message{
+			{Role: "user", Content: "Say hello in exactly 2 words"},
+		},
+		Options: provider.ChatOptions{MaxTokens: 10, Stream: true},
+	})
+	require.NoError(t, err)
+
+	var text string
+	for event := range events {
+		if event.Type == provider.EventTypeTextDelta {
+			text += event.Text
+		}
+	}
+	assert.NotEmpty(t, text)
+}
+```
+
+**OpenRouter commit:**
+
+```bash
+git add internal/provider/openrouter/
+git commit -m "feat(provider): add built-in OpenRouter provider with OpenAI-compatible API"
 ```
 
 ---
@@ -734,6 +972,7 @@ After completing all 7 tasks, verify:
 - [ ] Failover chain works when primary provider is down
 - [ ] Budget enforcement denies requests exceeding limits
 - [ ] Anthropic provider sends/receives streaming chat (integration test with API key)
-- [ ] OpenAI and Google providers implement the provider interface
+- [ ] OpenAI, Google, and OpenRouter providers implement the provider interface
+- [ ] OpenRouter reuses OpenAI SDK with correct base URL (`https://openrouter.io/api/v1`)
 
 Only proceed to Phase 5 after all checks pass.
