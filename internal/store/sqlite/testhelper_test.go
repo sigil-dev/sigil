@@ -16,7 +16,7 @@ func testDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "sigil-test-*")
 	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }
 

@@ -32,12 +32,12 @@ func NewSessionStore(dbPath string) (*SessionStore, error) {
 	}
 
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("pinging sqlite db: %w", err)
 	}
 
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrating sqlite db: %w", err)
 	}
 
@@ -177,7 +177,7 @@ FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions for workspace %s: %w", workspaceID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []*store.Session
 	for rows.Next() {
@@ -259,7 +259,7 @@ FROM (
 	if err != nil {
 		return nil, fmt.Errorf("getting active window for session %s: %w", sessionID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var msgs []*store.Message
 	for rows.Next() {
