@@ -28,6 +28,10 @@ api/openapi/spec.yaml
 *.swo
 *~
 
+# AI tooling (user-local)
+.claude/settings.local.json
+.serena/
+
 # OS
 .DS_Store
 Thumbs.db
