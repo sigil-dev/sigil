@@ -56,24 +56,37 @@ type Session struct {
 }
 ```
 
-### Storage: SQLite per Workspace
+### Storage: Interface-Based (see [Section 11](11-storage-interfaces.md))
+
+All storage is accessed through interfaces, enabling backend swaps via configuration. Initial implementations use SQLite.
+
+| Interface | Scope | Default Backend |
+|-----------|-------|-----------------|
+| `SessionStore` | Per workspace | SQLite |
+| `MemoryStore` | Per workspace | SQLite (FTS5 + RDF triples) |
+| `VectorStore` | Per workspace | sqlite-vec |
+| `GatewayStore` | Global | SQLite |
+
+`MemoryStore` composes three sub-interfaces: `MessageStore` (Tier 1), `SummaryStore` (Tier 2), and `KnowledgeStore` (Tier 3). The `KnowledgeStore` sub-interface is independently swappable — enabling graph database backends for entity/relationship storage.
 
 ```
 data/
++-- gateway.db                 # GatewayStore (users, pairings, audit)
 +-- workspaces/
 |   +-- homelab/
-|   |   +-- sessions.db        # sessions + active messages
-|   |   +-- memory.db          # FTS5 + summaries + knowledge
-|   |   +-- memory.vec         # sqlite-vec embeddings
+|   |   +-- sessions.db        # SessionStore
+|   |   +-- memory.db          # MessageStore + SummaryStore (FTS5)
+|   |   +-- knowledge.db       # KnowledgeStore (RDF triples)
+|   |   +-- vectors.db         # VectorStore (sqlite-vec)
 |   |   +-- plugins/           # plugin-scoped KV data
 |   +-- family/
 |   |   +-- sessions.db
 |   |   +-- memory.db
-|   |   +-- memory.vec
+|   |   +-- knowledge.db
+|   |   +-- vectors.db
 |   |   +-- plugins/
 |   +-- personal/
 |       +-- ...
-+-- gateway.db                 # users, pairings, audit log
 ```
 
 ## Session Lanes (Concurrency Control)
@@ -99,13 +112,13 @@ Instead of stuffing entire history into context, older messages are summarized a
 
 ### Tiers
 
-| Tier | Store | Content | Access |
-|------|-------|---------|--------|
-| Active Window | In LLM context | Last N messages (configurable, default 20) | Automatic |
-| Tier 1: Recent | SQLite FTS5 | Full message text, last ~1000 messages | `memory_search(query)` tool |
-| Tier 2: Summaries | SQLite | LLM-generated summaries per ~50 messages | `memory_summary(date_range)` tool |
-| Tier 3: Knowledge | SQLite | Extracted entities, preferences, facts | `memory_recall(topic)` tool |
-| Tier 4: Embeddings | sqlite-vec | Semantic search across all history | `memory_semantic(query, k)` tool |
+| Tier | Interface | Default Backend | Content | Access |
+|------|-----------|-----------------|---------|--------|
+| Active Window | `SessionStore` | SQLite | Last N messages (configurable, default 20) | Automatic |
+| Tier 1: Recent | `MessageStore` | SQLite FTS5 | Full message text, last ~1000 messages | `memory_search(query)` tool |
+| Tier 2: Summaries | `SummaryStore` | SQLite | LLM-generated summaries per ~50 messages | `memory_summary(date_range)` tool |
+| Tier 3: Knowledge | `KnowledgeStore` | SQLite (RDF triples) | Entities, relationships, facts | `memory_recall(topic)` tool |
+| Tier 4: Embeddings | `VectorStore` | sqlite-vec | Semantic search across all history | `memory_semantic(query, k)` tool |
 
 ### Configuration
 
@@ -119,7 +132,6 @@ sessions:
       batch_size: 50
     recent_store:
       max_messages: 1000
-      engine: sqlite_fts5
     summaries:
       enabled: true
       extract_facts: true
@@ -129,16 +141,24 @@ sessions:
     embeddings:
       enabled: true
       model: "openai/text-embedding-3-small"
-      store: sqlite_vec
+
+# Storage backend selection (see Section 11)
+storage:
+  backend: sqlite             # default for all stores
+  memory:
+    knowledge:
+      backend: sqlite         # future: ladybugdb
+  vector:
+    backend: sqlite_vec       # future: lancedb
 ```
 
 ### Compaction Lifecycle
 
-Messages 1-20 are in the active window. When message 21 arrives, message 1 rolls out to Tier 1 (FTS5) and Tier 4 (embeddings). When 50 messages accumulate in Tier 1, a compaction trigger summarizes them, extracts facts to Tier 3, and stores the summary in Tier 2.
+Messages 1-20 are in the active window (`SessionStore.GetActiveWindow()`). When message 21 arrives, message 1 rolls out to Tier 1 (`MessageStore.Append()`) and Tier 4 (`VectorStore.Store()`). When 50 messages accumulate in Tier 1, a compaction trigger summarizes them, extracts facts to Tier 3 (`KnowledgeStore.PutFact()`), and stores the summary in Tier 2 (`SummaryStore.Store()`).
 
 The agent decides when to use memory tools. This keeps context lean for simple exchanges while giving access to unlimited history when needed. No automatic RAG injection burning tokens on every turn.
 
-Memory is workspace-scoped: the agent in "homelab" cannot recall conversations from "family".
+Memory is workspace-scoped: the agent in "homelab" cannot recall conversations from "family". Store interfaces enforce this via the `workspaceID` parameter on all queries.
 
 ## Skills (agentskills.io Format)
 
