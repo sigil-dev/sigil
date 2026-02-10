@@ -3,6 +3,7 @@ module github.com/sigil-dev/sigil
 go 1.25.7
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.78.0
