@@ -261,7 +261,7 @@ func scanMessages(rows *sql.Rows) ([]*store.Message, error) {
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating messages: %w", err)
 	}
 	return msgs, nil
 }

@@ -281,7 +281,10 @@ FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 		sessions = append(sessions, &sess)
 	}
 
-	return sessions, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sessions: %w", err)
+	}
+	return sessions, nil
 }
 
 func (s *SessionStore) DeleteSession(ctx context.Context, id string) error {
@@ -368,7 +371,10 @@ FROM (
 		msgs = append(msgs, &msg)
 	}
 
-	return msgs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating messages: %w", err)
+	}
+	return msgs, nil
 }
 
 // formatTime serialises a time.Time to RFC3339 with nanosecond precision.

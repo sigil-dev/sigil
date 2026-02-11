@@ -265,7 +265,7 @@ func (k *KnowledgeStore) FindEntities(ctx context.Context, workspaceID string, q
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating entity IDs: %w", err)
 	}
 
 	// Reconstruct each entity from its triples.
@@ -423,7 +423,7 @@ func (k *KnowledgeStore) GetRelationships(ctx context.Context, entityID string, 
 		rels = append(rels, rel)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating relationships: %w", err)
 	}
 
 	return rels, nil
@@ -548,7 +548,7 @@ func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, quer
 		facts = append(facts, f)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating facts: %w", err)
 	}
 
 	return facts, nil
@@ -622,7 +622,7 @@ SELECT DISTINCT node FROM reachable`)
 		nodeSet[node] = true
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating traversal nodes: %w", err)
 	}
 
 	// Collect entities for all reachable nodes.
@@ -726,7 +726,7 @@ WHERE workspace = ?
 		rels = append(rels, rel)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating relationship triples: %w", err)
 	}
 
 	return rels, nil

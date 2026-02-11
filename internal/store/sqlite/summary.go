@@ -186,7 +186,7 @@ func scanSummaries(rows *sql.Rows) ([]*store.Summary, error) {
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating summaries: %w", err)
 	}
 	return summaries, nil
 }

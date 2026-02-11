@@ -347,7 +347,10 @@ func loadIdentities(ctx context.Context, db *sql.DB, userID string) ([]store.Use
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating identities: %w", err)
+	}
+	return ids, nil
 }
 
 // ---------- pairingStore ----------
@@ -420,7 +423,10 @@ FROM pairings WHERE user_id = ? ORDER BY created_at ASC`
 		}
 		pairings = append(pairings, &p)
 	}
-	return pairings, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating pairings: %w", err)
+	}
+	return pairings, nil
 }
 
 func (s *pairingStore) Delete(ctx context.Context, id string) error {
@@ -541,5 +547,8 @@ func (s *auditStore) Query(ctx context.Context, filter store.AuditFilter) ([]*st
 		}
 		entries = append(entries, &e)
 	}
-	return entries, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating audit entries: %w", err)
+	}
+	return entries, nil
 }
