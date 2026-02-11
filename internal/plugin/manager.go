@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -47,11 +48,17 @@ func (m *Manager) Discover(ctx context.Context) ([]*Manifest, error) {
 		manifestPath := filepath.Join(m.pluginsDir, entry.Name(), "plugin.yaml")
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
+			if !os.IsNotExist(err) {
+				slog.Warn("skipping plugin: cannot read manifest",
+					"path", manifestPath, "error", err)
+			}
 			continue
 		}
 
 		manifest, err := ParseManifest(data)
 		if err != nil {
+			slog.Warn("skipping plugin: invalid manifest",
+				"path", manifestPath, "error", err)
 			continue
 		}
 

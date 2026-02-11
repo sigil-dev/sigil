@@ -4,7 +4,9 @@
 package plugin_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,6 +59,33 @@ func TestManager_DiscoverSkipsInvalidManifest(t *testing.T) {
 	plugins, err := mgr.Discover(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, plugins, 0)
+}
+
+func TestManager_DiscoverLogsInvalidManifestSkip(t *testing.T) {
+	dir := t.TempDir()
+
+	pluginDir := filepath.Join(dir, "bad-plugin")
+	require.NoError(t, os.MkdirAll(pluginDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "plugin.yaml"), []byte("not: valid: yaml: ["), 0644))
+
+	// Capture slog output
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(orig)
+
+	audit := &mockAuditStore{}
+	enforcer := security.NewEnforcer(audit)
+	mgr := plugin.NewManager(dir, enforcer)
+
+	plugins, err := mgr.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, plugins, 0)
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "skipping plugin")
+	assert.Contains(t, logOutput, "bad-plugin")
 }
 
 func TestManager_RegisterCapabilities(t *testing.T) {
