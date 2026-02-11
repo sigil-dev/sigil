@@ -186,6 +186,20 @@ func IsUnauthorized(err error) bool {
 	return r == "unauthorized" || r == "forbidden" || r == "denied"
 }
 
+func IsBudgetExceeded(err error) bool {
+	r := reason(CodeOf(err))
+	return r == "exceeded" || r == "budget_exceeded"
+}
+
+func IsTimeout(err error) bool {
+	return reason(CodeOf(err)) == "timeout"
+}
+
+func IsUpstreamFailure(err error) bool {
+	code := CodeOf(err)
+	return strings.Contains(string(code), "upstream") && reason(code) == "failure"
+}
+
 func HTTPStatus(err error) int {
 	switch {
 	case IsNotFound(err):
@@ -199,6 +213,12 @@ func HTTPStatus(err error) int {
 			return http.StatusForbidden
 		}
 		return http.StatusUnauthorized
+	case IsBudgetExceeded(err):
+		return http.StatusTooManyRequests
+	case IsTimeout(err):
+		return http.StatusGatewayTimeout
+	case IsUpstreamFailure(err):
+		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
 	}
