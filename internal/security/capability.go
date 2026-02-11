@@ -96,6 +96,8 @@ func MatchCapability(pattern, cap string) (bool, error) {
 
 // Contains reports whether any capability pattern in the set matches cap.
 // If MatchCapability returns an error, that pattern is skipped.
+// Callers MUST validate patterns at load time (e.g. via manifest.Validate)
+// to ensure errors here indicate programming bugs, not untrusted input.
 func (s CapabilitySet) Contains(cap string) bool {
 	for _, pattern := range s.patterns {
 		match, err := MatchCapability(pattern, cap)

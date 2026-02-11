@@ -92,6 +92,29 @@ func TestValidateManifest_ConflictingCapabilities(t *testing.T) {
 	assert.NotEmpty(t, errs)
 }
 
+func TestValidateManifest_CapabilitySegmentLimit(t *testing.T) {
+	// Build a 33-segment capability pattern that would cause MatchCapability
+	// to return an error. Manifest validation must catch this at load time
+	// so enforcement never encounters it.
+	segments := make([]string, 33)
+	for i := range segments {
+		segments[i] = "a"
+	}
+	longPattern := strings.Join(segments, ".")
+
+	m := &plugin.Manifest{
+		Name:         "segment-test",
+		Version:      "1.0.0",
+		Type:         plugin.TypeTool,
+		Capabilities: []string{longPattern},
+		Execution:    plugin.ExecutionConfig{Tier: plugin.TierProcess},
+	}
+
+	errs := m.Validate()
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "exceeds maximum 32 segments")
+}
+
 // NOTE: These are internal runtime types (plugin.TypeChannel, plugin.TierProcess),
 // distinct from the public SDK types in pkg/plugin (plugin.PluginTypeChannel, plugin.ExecutionTierProcess).
 // The internal types use simplified string constants for efficient runtime matching.

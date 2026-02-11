@@ -176,6 +176,8 @@ func (m *Manifest) Validate() []error {
 }
 
 // validateCapPattern checks that a capability pattern string is well-formed.
+// This catches malformed patterns at manifest load time so that
+// security.MatchCapability never returns errors during enforcement.
 func validateCapPattern(pattern string) error {
 	if pattern == "" {
 		return fmt.Errorf("capability pattern must not be empty")
@@ -188,6 +190,12 @@ func validateCapPattern(pattern string) error {
 	}
 	if strings.Contains(pattern, "..") {
 		return fmt.Errorf("capability pattern %q contains consecutive dots", pattern)
+	}
+	// Reject patterns that would exceed the segment limit enforced by
+	// security.MatchCapability (maxSegments = 32). Catching this at
+	// validation time prevents silent skip in CapabilitySet.Contains.
+	if segments := strings.Count(pattern, ".") + 1; segments > 32 {
+		return fmt.Errorf("capability pattern %q exceeds maximum 32 segments (has %d)", pattern, segments)
 	}
 	return nil
 }
