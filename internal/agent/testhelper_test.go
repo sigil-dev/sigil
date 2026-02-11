@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/agent"
@@ -122,6 +123,42 @@ func (m *mockSessionStore) GetActiveWindow(_ context.Context, _ string, _ int) (
 // newMockSessionManager creates a SessionManager backed by an in-memory store.
 func newMockSessionManager() *agent.SessionManager {
 	return agent.NewSessionManager(newMockSessionStore())
+}
+
+// newMockSessionManagerWithStore returns both the manager and its backing store,
+// allowing tests to manipulate session state directly (e.g., setting status to paused).
+func newMockSessionManagerWithStore() (*agent.SessionManager, *mockSessionStore) {
+	ss := newMockSessionStore()
+	return agent.NewSessionManager(ss), ss
+}
+
+// setSessionStatus directly mutates a session's status in the mock store.
+func (m *mockSessionStore) setSessionStatus(id string, status store.SessionStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if s, ok := m.sessions[id]; ok {
+		s.Status = status
+	}
+}
+
+// mockSessionStoreTracking wraps mockSessionStore and counts AppendMessage calls.
+type mockSessionStoreTracking struct {
+	mockSessionStore
+	appendCount atomic.Int32
+}
+
+func newMockSessionStoreTracking() *mockSessionStoreTracking {
+	return &mockSessionStoreTracking{
+		mockSessionStore: mockSessionStore{
+			sessions: make(map[string]*store.Session),
+		},
+	}
+}
+
+func (m *mockSessionStoreTracking) AppendMessage(_ context.Context, _ string, _ *store.Message) error {
+	m.appendCount.Add(1)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

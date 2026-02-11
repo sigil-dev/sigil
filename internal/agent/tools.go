@@ -27,6 +27,18 @@ type ToolCallRequest struct {
 	SessionID   string
 	WorkspaceID string
 	PluginName  string
+
+	// WorkspaceAllow is the workspace-scoped capability allowlist.
+	// The enforcer intersects plugin capabilities with this set;
+	// a tool call is denied unless the workspace allows the capability.
+	// A zero-value (empty) set denies all capabilities.
+	WorkspaceAllow security.CapabilitySet
+
+	// UserPermissions is the user-scoped capability set.
+	// The enforcer intersects plugin capabilities with this set;
+	// a tool call is denied unless the user has the required permission.
+	// A zero-value (empty) set denies all capabilities.
+	UserPermissions security.CapabilitySet
 }
 
 // ToolResult holds the output from a tool execution.
@@ -73,12 +85,14 @@ func (d *ToolDispatcher) ResetTurnBudget() {
 // Execute dispatches a single tool call with capability checks, timeout, and audit logging.
 func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*ToolResult, error) {
 	// Step 1: Capability check via enforcer.
+	// The intersection of plugin ∩ workspace ∩ user capabilities
+	// determines whether the tool call is permitted.
 	checkReq := security.CheckRequest{
-		Plugin:         req.PluginName,
-		Capability:     "tool:" + req.ToolName,
-		WorkspaceID:    req.WorkspaceID,
-		WorkspaceAllow: security.NewCapabilitySet("*"),
-		UserPermissions: security.NewCapabilitySet("*"),
+		Plugin:          req.PluginName,
+		Capability:      "tool:" + req.ToolName,
+		WorkspaceID:     req.WorkspaceID,
+		WorkspaceAllow:  req.WorkspaceAllow,
+		UserPermissions: req.UserPermissions,
 	}
 	if err := d.enforcer.Check(ctx, checkReq); err != nil {
 		return nil, err

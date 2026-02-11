@@ -156,6 +156,9 @@ func (l *Loop) validateInput(msg InboundMessage) error {
 	if msg.WorkspaceID == "" {
 		missing = append(missing, "WorkspaceID")
 	}
+	if msg.UserID == "" {
+		missing = append(missing, "UserID")
+	}
 	if msg.Content == "" {
 		missing = append(missing, "Content")
 	}
@@ -171,9 +174,55 @@ func (l *Loop) validateInput(msg InboundMessage) error {
 	return nil
 }
 
+// validateSessionBoundary ensures the loaded session belongs to the workspace
+// and user specified in the inbound message. This MUST be called before any
+// store writes to enforce session isolation.
+func (l *Loop) validateSessionBoundary(session *store.Session, msg InboundMessage) error {
+	if session.WorkspaceID != msg.WorkspaceID {
+		return sigilerr.New(
+			sigilerr.CodeAgentSessionBoundaryMismatch,
+			"session workspace mismatch: session belongs to workspace "+session.WorkspaceID+", got "+msg.WorkspaceID,
+			sigilerr.FieldSessionID(session.ID),
+			sigilerr.FieldWorkspaceID(msg.WorkspaceID),
+		)
+	}
+	if session.UserID != msg.UserID {
+		return sigilerr.New(
+			sigilerr.CodeAgentSessionBoundaryMismatch,
+			"session user mismatch: session belongs to user "+session.UserID+", got "+msg.UserID,
+			sigilerr.FieldSessionID(session.ID),
+			sigilerr.FieldUserID(msg.UserID),
+		)
+	}
+	return nil
+}
+
+// validateSessionStatus rejects sessions that are not in the active state.
+// Paused and archived sessions cannot accept new messages.
+func (l *Loop) validateSessionStatus(session *store.Session) error {
+	if session.Status != store.SessionStatusActive {
+		return sigilerr.New(
+			sigilerr.CodeAgentSessionInactive,
+			"session is "+string(session.Status)+", only active sessions accept messages",
+			sigilerr.FieldSessionID(session.ID),
+		)
+	}
+	return nil
+}
+
 func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session, []provider.Message, error) {
 	session, err := l.sessions.Get(ctx, msg.SessionID)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	// Validate session boundary: workspace and user must match the inbound message.
+	if err := l.validateSessionBoundary(session, msg); err != nil {
+		return nil, nil, err
+	}
+
+	// Reject non-active sessions (archived, paused, etc.).
+	if err := l.validateSessionStatus(session); err != nil {
 		return nil, nil, err
 	}
 

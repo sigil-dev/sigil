@@ -41,10 +41,12 @@ const (
 	CodeProviderUpstreamFailure Code = "provider.upstream.failure"
 	CodeProviderBudgetExceeded  Code = "provider.budget.exceeded"
 
-	CodeAgentLoopInvalidInput    Code = "agent.loop.invalid_input"
-	CodeAgentLoopFailure        Code = "agent.loop.failure"
-	CodeAgentToolBudgetExceeded Code = "agent.tool.budget_exceeded"
-	CodeAgentToolTimeout        Code = "agent.tool.timeout"
+	CodeAgentLoopInvalidInput         Code = "agent.loop.invalid_input"
+	CodeAgentLoopFailure             Code = "agent.loop.failure"
+	CodeAgentSessionBoundaryMismatch Code = "agent.session.boundary.forbidden"
+	CodeAgentSessionInactive         Code = "agent.session.status.forbidden"
+	CodeAgentToolBudgetExceeded      Code = "agent.tool.budget_exceeded"
+	CodeAgentToolTimeout             Code = "agent.tool.timeout"
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
@@ -73,6 +75,10 @@ func FieldWorkspaceID(value string) Attr {
 
 func FieldSessionID(value string) Attr {
 	return Field("session_id", value)
+}
+
+func FieldUserID(value string) Attr {
+	return Field("user_id", value)
 }
 
 func FieldPlugin(value string) Attr {

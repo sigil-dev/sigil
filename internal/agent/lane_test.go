@@ -120,3 +120,100 @@ func TestLane_ContextCancellation(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestLane_CloseIdempotent(t *testing.T) {
+	lane := agent.NewLane("session-idempotent")
+
+	// Close the lane multiple times concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lane.Close()
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify we can close again without panic.
+	lane.Close()
+}
+
+func TestLane_SubmitAfterClose(t *testing.T) {
+	lane := agent.NewLane("session-closed")
+	lane.Close()
+
+	// Submit should return an error, not panic.
+	err := lane.Submit(context.Background(), func(_ context.Context) error {
+		t.Fatal("should not execute")
+		return nil
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "lane is closed")
+}
+
+func TestLane_ConcurrentSubmitAndClose(t *testing.T) {
+	// Run this test multiple times to increase chance of catching race.
+	for i := 0; i < 10; i++ {
+		lane := agent.NewLane("session-race")
+
+		var wg sync.WaitGroup
+		submitted := atomic.Int32{}
+		succeeded := atomic.Int32{}
+		failed := atomic.Int32{}
+
+		// Start multiple goroutines submitting work.
+		for j := 0; j < 20; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				submitted.Add(1)
+				err := lane.Submit(context.Background(), func(_ context.Context) error {
+					time.Sleep(1 * time.Millisecond)
+					return nil
+				})
+				if err != nil {
+					failed.Add(1)
+				} else {
+					succeeded.Add(1)
+				}
+			}()
+		}
+
+		// Close the lane concurrently with submissions.
+		time.Sleep(5 * time.Millisecond)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lane.Close()
+		}()
+
+		wg.Wait()
+
+		// Verify that submitted = succeeded + failed (no panics or lost work).
+		assert.Equal(t, submitted.Load(), succeeded.Load()+failed.Load(),
+			"iteration %d: all submitted work should be accounted for", i)
+	}
+}
+
+func TestLane_WorkerPanicRecovery(t *testing.T) {
+	lane := agent.NewLane("session-panic")
+	defer lane.Close()
+
+	// Submit a task that panics.
+	err := lane.Submit(context.Background(), func(_ context.Context) error {
+		panic("intentional panic for testing")
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "worker panic")
+	assert.Contains(t, err.Error(), "intentional panic")
+
+	// Verify the lane is still functional after panic recovery.
+	err = lane.Submit(context.Background(), func(_ context.Context) error {
+		return nil
+	})
+	assert.NoError(t, err, "lane should still accept work after panic recovery")
+}
