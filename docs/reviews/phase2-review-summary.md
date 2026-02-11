@@ -75,25 +75,31 @@ All 8 tasks in the epic were reviewed by independent Opus agents running in para
 - **Code quality is consistently high**: Structured errors, SPDX headers, table-driven tests, proper mutex usage, idiomatic Go throughout.
 - **Test coverage exceeds spec in most tasks**: Tasks 1 and 2 in particular add many beyond-spec test cases.
 
-## Recommended Actions
+## Bug Fix Resolution
 
-### Blocking (before epic closure)
-1. Fix Seatbelt profile syntax errors (Task 7)
-2. Add path sanitization to Seatbelt profile generation (Task 7)
-3. Implement `WithFuelLimit`, `FuelLimit()`, and apply options in `NewHost` (Task 8)
-4. Add `TestWasmHost_FuelMeteringEnforced` test (Task 8)
+All important and critical issues from the review were filed as beads, fixed via TDD, independently reviewed, and merged. The table below tracks each fix.
 
-### Should fix (before merge to main)
-5. Add 3 missing enforcer test cases (Task 2)
-6. Fix `buildCommand` slice mutation (Task 6)
-7. Embed `NetRPCUnsupportedPlugin` instead of `plugin.Plugin` interface (Task 6)
-8. Add logging for skipped invalid manifests (Task 5)
+| # | Issue | Bead | Commit | Review | Status |
+|---|-------|------|--------|--------|--------|
+| 1 | Seatbelt path injection + syntax errors (Task 7) | sigil-anm.9 | `536d051` | PASS (Opus) | Closed |
+| 2 | Network rules ignore host:port (Task 7) | sigil-anm.9 | `536d051` | PASS (Opus) | Closed |
+| 3 | `/lib64` unconditionally mounted (Task 7) | sigil-anm.9 | `536d051` | PASS (Opus) | Closed |
+| 4 | bwrap path validation missing (Task 7) | sigil-anm.9 | `536d051` | PASS (Opus) | Closed |
+| 5 | Missing Seatbelt/bwrap content tests (Task 7) | sigil-anm.9 | `536d051` | PASS (Opus) | Closed |
+| 6 | 3 missing enforcer spec tests (Task 2) | sigil-anm.11 | `a29834c` | PASS (Sonnet) | Closed |
+| 7 | Silent manifest skip missing logging (Task 5) | sigil-anm.13 | `c69d090`, `a9189b8` | PASS (Sonnet) | Closed |
+| 8 | Missing semver validation (Task 3) | sigil-anm.14 | `0b67f3a` | PASS (Sonnet) | Closed |
+| 9 | Missing draining/stopping→error transitions (Task 4) | sigil-anm.15 | `bc92ddf` | PASS (Sonnet) | Closed |
+| 10 | Missing concurrency test (Task 4) | sigil-anm.15 | `bc92ddf` | PASS (Sonnet) | Closed |
+| 11 | Slice mutation bug in `buildCommand` (Task 6) | sigil-anm.12 | `ca34ce2` | PASS (Sonnet) | Closed |
+| 12 | Should embed `NetRPCUnsupportedPlugin` (Task 6) | sigil-anm.12 | `ca34ce2` | PASS (Sonnet) | Closed |
 
-### Nice to have (can be follow-up issues)
-9. Add semver validation to internal manifest (Task 3)
-10. Add draining/stopping -> error transitions (Task 4)
-11. Add concurrency test for lifecycle state machine (Task 4)
-12. File issue for seccomp filter support (Task 7)
+### Remaining (open items)
+
+| # | Issue | Bead | Status |
+|---|-------|------|--------|
+| 13 | Implement `WithFuelLimit` / fuel metering (Task 8) | sigil-anm.8 | Open -- replaced by Wasm runtime evaluation |
+| 14 | File issue for seccomp filter support (Task 7) | -- | Backlog suggestion, not filed |
 
 ## Individual Reports
 
