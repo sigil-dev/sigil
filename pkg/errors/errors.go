@@ -41,8 +41,10 @@ const (
 	CodeProviderUpstreamFailure Code = "provider.upstream.failure"
 	CodeProviderBudgetExceeded  Code = "provider.budget.exceeded"
 
-	CodeAgentLoopInvalidInput Code = "agent.loop.invalid_input"
-	CodeAgentLoopFailure     Code = "agent.loop.failure"
+	CodeAgentLoopInvalidInput    Code = "agent.loop.invalid_input"
+	CodeAgentLoopFailure        Code = "agent.loop.failure"
+	CodeAgentToolBudgetExceeded Code = "agent.tool.budget_exceeded"
+	CodeAgentToolTimeout        Code = "agent.tool.timeout"
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
