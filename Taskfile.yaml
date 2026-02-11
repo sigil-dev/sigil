@@ -29,6 +29,20 @@ tasks:
       - internal/gen/proto/**/*.go
     cmds:
       - buf generate
+  wasm:fixtures:
+    desc: Rebuild WebAssembly test fixtures from WAT source
+    sources:
+      - internal/plugin/wasm/testdata/*.wat
+    generates:
+      - internal/plugin/wasm/testdata/*.wasm
+    cmds:
+      - |
+        set -euo pipefail
+        command -v wat2wasm >/dev/null 2>&1 || { echo "wat2wasm not found. Install WABT: https://github.com/WebAssembly/wabt"; exit 1; }
+        cd internal/plugin/wasm/testdata
+        wat2wasm add.wat -o add.wasm
+        wat2wasm infinite_loop.wat -o infinite_loop.wasm
+        echo "WebAssembly fixtures rebuilt successfully"
   # Testing
   test:
     desc: Run all tests
