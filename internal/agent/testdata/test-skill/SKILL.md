@@ -10,6 +10,8 @@ metadata:
   gateway:workspace: test-ws
 ---
 
+# Test Skill
+
 You are a test skill that helps with testing.
 
 ## Instructions
