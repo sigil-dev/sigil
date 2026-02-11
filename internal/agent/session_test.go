@@ -5,7 +5,6 @@ package agent_test
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -14,104 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// mockSessionStore is an in-memory implementation of store.SessionStore for testing.
-type mockSessionStore struct {
-	mu       sync.RWMutex
-	sessions map[string]*store.Session
-}
-
-func newMockSessionStore() *mockSessionStore {
-	return &mockSessionStore{
-		sessions: make(map[string]*store.Session),
-	}
-}
-
-func (m *mockSessionStore) CreateSession(_ context.Context, session *store.Session) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.sessions[session.ID]; exists {
-		return store.ErrConflict
-	}
-
-	// Store a copy to avoid aliasing.
-	s := *session
-	m.sessions[session.ID] = &s
-	return nil
-}
-
-func (m *mockSessionStore) GetSession(_ context.Context, id string) (*store.Session, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	s, ok := m.sessions[id]
-	if !ok {
-		return nil, store.ErrNotFound
-	}
-
-	copy := *s
-	return &copy, nil
-}
-
-func (m *mockSessionStore) UpdateSession(_ context.Context, session *store.Session) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.sessions[session.ID]; !exists {
-		return store.ErrNotFound
-	}
-
-	s := *session
-	m.sessions[session.ID] = &s
-	return nil
-}
-
-func (m *mockSessionStore) ListSessions(_ context.Context, workspaceID string, opts store.ListOpts) ([]*store.Session, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var result []*store.Session
-	for _, s := range m.sessions {
-		if s.WorkspaceID == workspaceID {
-			copy := *s
-			result = append(result, &copy)
-		}
-	}
-
-	// Apply offset/limit.
-	if opts.Offset > 0 {
-		if opts.Offset >= len(result) {
-			return nil, nil
-		}
-		result = result[opts.Offset:]
-	}
-	if opts.Limit > 0 && opts.Limit < len(result) {
-		result = result[:opts.Limit]
-	}
-
-	return result, nil
-}
-
-func (m *mockSessionStore) DeleteSession(_ context.Context, id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.sessions[id]; !exists {
-		return store.ErrNotFound
-	}
-
-	delete(m.sessions, id)
-	return nil
-}
-
-func (m *mockSessionStore) AppendMessage(_ context.Context, _ string, _ *store.Message) error {
-	return nil
-}
-
-func (m *mockSessionStore) GetActiveWindow(_ context.Context, _ string, _ int) ([]*store.Message, error) {
-	return nil, nil
-}
 
 func TestSessionManager_CreateAndGet(t *testing.T) {
 	ms := newMockSessionStore()

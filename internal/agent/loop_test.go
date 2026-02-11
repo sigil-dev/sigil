@@ -9,96 +9,13 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/agent"
-	"github.com/sigil-dev/sigil/internal/provider"
-	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// --- Mock provider router ---
-
-type mockProviderRouter struct {
-	provider provider.Provider
-}
-
-func (r *mockProviderRouter) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
-	return r.provider, "mock-model", nil
-}
-
-func (r *mockProviderRouter) RegisterProvider(_ string, _ provider.Provider) error {
-	return nil
-}
-
-func (r *mockProviderRouter) Close() error { return nil }
-
-// --- Mock provider ---
-
-type mockProvider struct{}
-
-func (p *mockProvider) Name() string { return "mock" }
-
-func (p *mockProvider) Available(_ context.Context) bool { return true }
-
-func (p *mockProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
-	return nil, nil
-}
-
-func (p *mockProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
-	ch := make(chan provider.ChatEvent, 3)
-	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Hello, "}
-	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "world!"}
-	ch <- provider.ChatEvent{
-		Type:  provider.EventTypeDone,
-		Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5},
-	}
-	close(ch)
-	return ch, nil
-}
-
-func (p *mockProvider) Status(_ context.Context) (provider.ProviderStatus, error) {
-	return provider.ProviderStatus{Available: true, Provider: "mock"}, nil
-}
-
-func (p *mockProvider) Close() error { return nil }
-
-// --- Mock provider router that returns a budget error ---
-
-type mockProviderRouterBudgetExceeded struct{}
-
-func (r *mockProviderRouterBudgetExceeded) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
-	return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded for workspace")
-}
-
-func (r *mockProviderRouterBudgetExceeded) RegisterProvider(_ string, _ provider.Provider) error {
-	return nil
-}
-
-func (r *mockProviderRouterBudgetExceeded) Close() error { return nil }
-
-// --- Mock audit store ---
-
-type mockAuditStore struct {
-	mu      sync.Mutex
-	entries []*store.AuditEntry
-}
-
-func (s *mockAuditStore) Append(_ context.Context, entry *store.AuditEntry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.entries = append(s.entries, entry)
-	return nil
-}
-
-func (s *mockAuditStore) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
-	return nil, nil
-}
-
-// --- Tests ---
-
 func TestAgentLoop_ProcessMessage(t *testing.T) {
-	sessionStore := newMockSessionStore()
-	sm := agent.NewSessionManager(sessionStore)
+	sm := newMockSessionManager()
 	ctx := context.Background()
 
 	// Create a session to use.
@@ -107,8 +24,8 @@ func TestAgentLoop_ProcessMessage(t *testing.T) {
 
 	loop := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
-		ProviderRouter: &mockProviderRouter{provider: &mockProvider{}},
-		AuditStore:     &mockAuditStore{},
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     newMockAuditStore(),
 	})
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
@@ -129,8 +46,7 @@ func TestAgentLoop_ProcessMessage(t *testing.T) {
 }
 
 func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
-	sessionStore := newMockSessionStore()
-	sm := agent.NewSessionManager(sessionStore)
+	sm := newMockSessionManager()
 	ctx := context.Background()
 
 	session, err := sm.Create(ctx, "ws-1", "user-1")
@@ -148,8 +64,8 @@ func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
 
 	loop := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
-		ProviderRouter: &mockProviderRouter{provider: &mockProvider{}},
-		AuditStore:     &mockAuditStore{},
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     newMockAuditStore(),
 		Hooks: &agent.LoopHooks{
 			OnReceive:  record("receive"),
 			OnPrepare:  record("prepare"),
@@ -173,8 +89,7 @@ func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
 }
 
 func TestAgentLoop_BudgetEnforcement(t *testing.T) {
-	sessionStore := newMockSessionStore()
-	sm := agent.NewSessionManager(sessionStore)
+	sm := newMockSessionManager()
 	ctx := context.Background()
 
 	session, err := sm.Create(ctx, "ws-1", "user-1")
@@ -182,8 +97,8 @@ func TestAgentLoop_BudgetEnforcement(t *testing.T) {
 
 	loop := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
-		ProviderRouter: &mockProviderRouterBudgetExceeded{},
-		AuditStore:     &mockAuditStore{},
+		ProviderRouter: newMockProviderRouterWithBudgetExceeded(),
+		AuditStore:     newMockAuditStore(),
 	})
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
