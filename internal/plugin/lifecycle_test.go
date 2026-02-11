@@ -4,10 +4,12 @@
 package plugin_test
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/plugin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLifecycleState_Transitions(t *testing.T) {
@@ -26,6 +28,8 @@ func TestLifecycleState_Transitions(t *testing.T) {
 		{"validating to error", plugin.StateValidating, plugin.StateError, true},
 		{"loading to error", plugin.StateLoading, plugin.StateError, true},
 		{"running to error", plugin.StateRunning, plugin.StateError, true},
+		{"draining to error", plugin.StateDraining, plugin.StateError, true},
+		{"stopping to error", plugin.StateStopping, plugin.StateError, true},
 		// Invalid transitions
 		{"discovered to running", plugin.StateDiscovered, plugin.StateRunning, false},
 		{"stopped to running", plugin.StateStopped, plugin.StateRunning, false},
@@ -51,4 +55,61 @@ func TestPluginInstance_StateTransition(t *testing.T) {
 	err = inst.TransitionTo(plugin.StateRunning) // invalid: skip loading
 	assert.Error(t, err)
 	assert.Equal(t, plugin.StateValidating, inst.State()) // state unchanged
+}
+
+func TestPluginInstance_DrainingToError(t *testing.T) {
+	inst := plugin.NewInstance("test", plugin.StateDiscovered)
+	require.NoError(t, inst.TransitionTo(plugin.StateValidating))
+	require.NoError(t, inst.TransitionTo(plugin.StateLoading))
+	require.NoError(t, inst.TransitionTo(plugin.StateRunning))
+	require.NoError(t, inst.TransitionTo(plugin.StateDraining))
+
+	err := inst.TransitionTo(plugin.StateError)
+	assert.NoError(t, err)
+	assert.Equal(t, plugin.StateError, inst.State())
+}
+
+func TestPluginInstance_StoppingToError(t *testing.T) {
+	inst := plugin.NewInstance("test", plugin.StateDiscovered)
+	require.NoError(t, inst.TransitionTo(plugin.StateValidating))
+	require.NoError(t, inst.TransitionTo(plugin.StateLoading))
+	require.NoError(t, inst.TransitionTo(plugin.StateRunning))
+	require.NoError(t, inst.TransitionTo(plugin.StateDraining))
+	require.NoError(t, inst.TransitionTo(plugin.StateStopping))
+
+	err := inst.TransitionTo(plugin.StateError)
+	assert.NoError(t, err)
+	assert.Equal(t, plugin.StateError, inst.State())
+}
+
+func TestPluginInstance_ConcurrentTransitions(t *testing.T) {
+	// Exercises mutex under contention: N goroutines competing to transition.
+	const goroutines = 50
+	inst := plugin.NewInstance("concurrent", plugin.StateDiscovered)
+	require.NoError(t, inst.TransitionTo(plugin.StateValidating))
+	require.NoError(t, inst.TransitionTo(plugin.StateLoading))
+	require.NoError(t, inst.TransitionTo(plugin.StateRunning))
+
+	var wg sync.WaitGroup
+	successCount := 0
+	var mu sync.Mutex
+
+	// All goroutines race to transition running → draining.
+	// Only one should succeed; the rest get errors (already transitioned).
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := inst.TransitionTo(plugin.StateDraining)
+			if err == nil {
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+			}
+		}()
+	}
+
+	wg.Wait()
+	assert.Equal(t, 1, successCount, "exactly one goroutine should win the transition")
+	assert.Equal(t, plugin.StateDraining, inst.State())
 }

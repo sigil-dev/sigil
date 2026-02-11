@@ -65,9 +65,11 @@ var validTransitions = map[PluginState]map[PluginState]bool{
 	},
 	StateDraining: {
 		StateStopping: true,
+		StateError:    true,
 	},
 	StateStopping: {
 		StateStopped: true,
+		StateError:   true,
 	},
 	StateStopped: {},
 	StateError:   {},
