@@ -4,6 +4,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -97,15 +98,18 @@ func (c *compositeMemoryStore) Summaries() SummaryStore   { return c.summaries }
 func (c *compositeMemoryStore) Knowledge() KnowledgeStore { return c.knowledge }
 
 func (c *compositeMemoryStore) Close() error {
-	var firstErr error
-	if err := c.messages.Close(); err != nil && firstErr == nil {
-		firstErr = err
+	var errs []error
+	if err := c.messages.Close(); err != nil {
+		errs = append(errs, err)
 	}
-	if err := c.summaries.Close(); err != nil && firstErr == nil {
-		firstErr = err
+	if err := c.summaries.Close(); err != nil {
+		errs = append(errs, err)
 	}
-	if err := c.knowledge.Close(); err != nil && firstErr == nil {
-		firstErr = err
+	if err := c.knowledge.Close(); err != nil {
+		errs = append(errs, err)
 	}
-	return firstErr
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
 }

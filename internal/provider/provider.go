@@ -5,6 +5,8 @@ package provider
 
 import (
 	"context"
+
+	"github.com/sigil-dev/sigil/internal/store"
 )
 
 // Provider is the core interface for LLM providers.
@@ -14,7 +16,8 @@ type Provider interface {
 	// Name returns the provider's name (e.g., "anthropic", "openai").
 	Name() string
 
-	// Available checks if the provider is currently available.
+	// Available performs a simple boolean liveness check on the provider.
+	// Returns true if the provider is reachable and ready to serve requests.
 	Available(ctx context.Context) bool
 
 	// ListModels returns available models from this provider.
@@ -23,7 +26,8 @@ type Provider interface {
 	// Chat sends a chat request and streams responses.
 	Chat(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error)
 
-	// Status checks if the provider is available.
+	// Status returns detailed health and capability information about the provider.
+	// Includes health state, supported models, error details, and rate limit information.
 	Status(ctx context.Context) (ProviderStatus, error)
 
 	// Close cleans up provider resources.
@@ -63,21 +67,11 @@ type ChatOptions struct {
 
 // Message represents a conversation message.
 type Message struct {
-	Role       MessageRole
+	Role       store.MessageRole
 	Content    string
 	ToolCallID string
 	ToolName   string
 }
-
-// MessageRole defines the role of a message sender.
-type MessageRole string
-
-const (
-	MessageRoleUser      MessageRole = "user"
-	MessageRoleAssistant MessageRole = "assistant"
-	MessageRoleSystem    MessageRole = "system"
-	MessageRoleTool      MessageRole = "tool"
-)
 
 // ToolDefinition describes a tool available to the agent.
 type ToolDefinition struct {

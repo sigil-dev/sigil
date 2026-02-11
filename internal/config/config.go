@@ -4,7 +4,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -116,32 +119,163 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
 	}
 
+	if errs := cfg.Validate(); len(errs) > 0 {
+		return nil, fmt.Errorf("validating config: %w", errors.Join(errs...))
+	}
+
 	return &cfg, nil
 }
 
 // Validate checks the configuration for logical errors.
-// It returns a slice of all validation errors found.
+// It returns a slice of all validation errors found, collecting all issues
+// rather than stopping at the first one.
 func (c *Config) Validate() []error {
 	var errs []error
 
-	if c.Models.Default != "" {
+	errs = append(errs, c.validateNetworking()...)
+	errs = append(errs, c.validateStorage()...)
+	errs = append(errs, c.validateModels()...)
+	errs = append(errs, c.validateSessions()...)
+
+	return errs
+}
+
+func (c *Config) validateNetworking() []error {
+	var errs []error
+
+	validModes := map[string]bool{"local": true, "tailscale": true}
+	if !validModes[c.Networking.Mode] {
+		errs = append(errs, fmt.Errorf(
+			"config: networking.mode must be one of [local, tailscale], got %q",
+			c.Networking.Mode,
+		))
+	}
+
+	if c.Networking.Listen == "" {
+		errs = append(errs, fmt.Errorf("config: networking.listen must not be empty"))
+	} else {
+		host, portStr, err := net.SplitHostPort(c.Networking.Listen)
+		if err != nil {
+			errs = append(errs, fmt.Errorf(
+				"config: networking.listen must be a valid host:port address, got %q: %w",
+				c.Networking.Listen, err,
+			))
+		} else {
+			_ = host // host can be empty (e.g., ":8080"), which is valid
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				errs = append(errs, fmt.Errorf(
+					"config: networking.listen port must be a number, got %q",
+					portStr,
+				))
+			} else if port < 1 || port > 65535 {
+				errs = append(errs, fmt.Errorf(
+					"config: networking.listen port must be between 1 and 65535, got %d",
+					port,
+				))
+			}
+		}
+	}
+
+	return errs
+}
+
+func (c *Config) validateStorage() []error {
+	var errs []error
+
+	validBackends := map[string]bool{"sqlite": true}
+	if !validBackends[c.Storage.Backend] {
+		errs = append(errs, fmt.Errorf(
+			"config: storage.backend must be one of [sqlite], got %q",
+			c.Storage.Backend,
+		))
+	}
+
+	return errs
+}
+
+func (c *Config) validateModels() []error {
+	var errs []error
+
+	if c.Models.Default == "" {
+		errs = append(errs, fmt.Errorf("config: models.default must not be empty"))
+	} else if !strings.Contains(c.Models.Default, "/") {
+		errs = append(errs, fmt.Errorf(
+			"config: models.default must be in \"provider/model\" format, got %q",
+			c.Models.Default,
+		))
+	} else if c.Providers != nil {
+		// Only cross-reference providers when the providers section exists
+		// in config. A nil map means no providers section was configured
+		// (e.g., defaults only on fresh install), which is valid.
 		providerName := providerFromModel(c.Models.Default)
 		if _, ok := c.Providers[providerName]; !ok {
 			errs = append(errs, fmt.Errorf(
-				"default model %q references provider %q which is not configured",
+				"config: models.default %q references provider %q which is not configured",
 				c.Models.Default, providerName,
 			))
 		}
 	}
 
 	for i, model := range c.Models.Failover {
-		providerName := providerFromModel(model)
-		if _, ok := c.Providers[providerName]; !ok {
+		if !strings.Contains(model, "/") {
 			errs = append(errs, fmt.Errorf(
-				"failover model [%d] %q references provider %q which is not configured",
-				i, model, providerName,
+				"config: models.failover[%d] must be in \"provider/model\" format, got %q",
+				i, model,
 			))
+			continue
 		}
+		if c.Providers != nil {
+			providerName := providerFromModel(model)
+			if _, ok := c.Providers[providerName]; !ok {
+				errs = append(errs, fmt.Errorf(
+					"config: models.failover[%d] %q references provider %q which is not configured",
+					i, model, providerName,
+				))
+			}
+		}
+	}
+
+	if c.Models.Budgets.PerSessionTokens <= 0 {
+		errs = append(errs, fmt.Errorf(
+			"config: models.budgets.per_session_tokens must be greater than 0, got %d",
+			c.Models.Budgets.PerSessionTokens,
+		))
+	}
+
+	if c.Models.Budgets.PerDayUSD <= 0 {
+		errs = append(errs, fmt.Errorf(
+			"config: models.budgets.per_day_usd must be greater than 0, got %g",
+			c.Models.Budgets.PerDayUSD,
+		))
+	}
+
+	return errs
+}
+
+func (c *Config) validateSessions() []error {
+	var errs []error
+
+	if c.Sessions.Memory.ActiveWindow <= 0 {
+		errs = append(errs, fmt.Errorf(
+			"config: sessions.memory.active_window must be greater than 0, got %d",
+			c.Sessions.Memory.ActiveWindow,
+		))
+	}
+
+	validStrategies := map[string]bool{"summarize": true, "truncate": true}
+	if !validStrategies[c.Sessions.Memory.Compaction.Strategy] {
+		errs = append(errs, fmt.Errorf(
+			"config: sessions.memory.compaction.strategy must be one of [summarize, truncate], got %q",
+			c.Sessions.Memory.Compaction.Strategy,
+		))
+	}
+
+	if c.Sessions.Memory.Compaction.BatchSize <= 0 {
+		errs = append(errs, fmt.Errorf(
+			"config: sessions.memory.compaction.batch_size must be greater than 0, got %d",
+			c.Sessions.Memory.Compaction.BatchSize,
+		))
 	}
 
 	return errs

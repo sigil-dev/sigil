@@ -29,8 +29,8 @@ func TestUserStore_Create_and_Get(t *testing.T) {
 		Name: "Alice",
 		Role: "admin",
 		Identities: []store.UserIdentity{
-			{Channel: "telegram", PlatformID: "tg-123"},
-			{Channel: "discord", PlatformID: "dc-456"},
+			{UserID: "usr-1", Platform: "telegram", PlatformUserID: "tg-123", DisplayName: "Alice TG"},
+			{UserID: "usr-1", Platform: "discord", PlatformUserID: "dc-456", DisplayName: "Alice DC"},
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -45,11 +45,15 @@ func TestUserStore_Create_and_Get(t *testing.T) {
 	assert.Equal(t, "Alice", got.Name)
 	assert.Equal(t, "admin", got.Role)
 	assert.Len(t, got.Identities, 2)
-	// Identities are returned sorted by (channel, platform_id).
-	assert.Equal(t, "discord", got.Identities[0].Channel)
-	assert.Equal(t, "dc-456", got.Identities[0].PlatformID)
-	assert.Equal(t, "telegram", got.Identities[1].Channel)
-	assert.Equal(t, "tg-123", got.Identities[1].PlatformID)
+	// Identities are returned sorted by (platform, platform_user_id).
+	assert.Equal(t, "discord", got.Identities[0].Platform)
+	assert.Equal(t, "dc-456", got.Identities[0].PlatformUserID)
+	assert.Equal(t, "Alice DC", got.Identities[0].DisplayName)
+	assert.Equal(t, "usr-1", got.Identities[0].UserID)
+	assert.Equal(t, "telegram", got.Identities[1].Platform)
+	assert.Equal(t, "tg-123", got.Identities[1].PlatformUserID)
+	assert.Equal(t, "Alice TG", got.Identities[1].DisplayName)
+	assert.Equal(t, "usr-1", got.Identities[1].UserID)
 }
 
 func TestUserStore_Get_NotFound(t *testing.T) {
@@ -74,7 +78,7 @@ func TestUserStore_GetByExternalID(t *testing.T) {
 		Name: "Bob",
 		Role: "user",
 		Identities: []store.UserIdentity{
-			{Channel: "telegram", PlatformID: "tg-bob"},
+			{UserID: "usr-ext", Platform: "telegram", PlatformUserID: "tg-bob", DisplayName: "Bob TG"},
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -104,7 +108,7 @@ func TestUserStore_Update(t *testing.T) {
 		Name: "Carol",
 		Role: "user",
 		Identities: []store.UserIdentity{
-			{Channel: "slack", PlatformID: "sl-carol"},
+			{UserID: "usr-upd", Platform: "slack", PlatformUserID: "sl-carol", DisplayName: "Carol Slack"},
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -114,8 +118,8 @@ func TestUserStore_Update(t *testing.T) {
 	user.Name = "Carol Updated"
 	user.Role = "admin"
 	user.Identities = []store.UserIdentity{
-		{Channel: "slack", PlatformID: "sl-carol"},
-		{Channel: "telegram", PlatformID: "tg-carol"},
+		{UserID: "usr-upd", Platform: "slack", PlatformUserID: "sl-carol", DisplayName: "Carol Slack"},
+		{UserID: "usr-upd", Platform: "telegram", PlatformUserID: "tg-carol", DisplayName: "Carol TG"},
 	}
 	user.UpdatedAt = time.Now().Truncate(time.Millisecond)
 	require.NoError(t, gs.Users().Update(ctx, user))
@@ -183,7 +187,7 @@ func TestUserStore_Delete(t *testing.T) {
 		Name: "DeleteMe",
 		Role: "user",
 		Identities: []store.UserIdentity{
-			{Channel: "telegram", PlatformID: "tg-del"},
+			{UserID: "usr-del", Platform: "telegram", PlatformUserID: "tg-del", DisplayName: "DeleteMe TG"},
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -199,6 +203,61 @@ func TestUserStore_Delete(t *testing.T) {
 	// Delete non-existent
 	err = gs.Users().Delete(ctx, "nonexistent")
 	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// TestUserIdentity_AllFieldsRoundTrip verifies that all 4 UserIdentity fields
+// (UserID, Platform, PlatformUserID, DisplayName) persist through store → retrieve.
+func TestUserIdentity_AllFieldsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	gs, err := sqlite.NewGatewayStore(testDBPath(t, "gw-identity-roundtrip"))
+	require.NoError(t, err)
+	defer func() { _ = gs.Close() }()
+
+	now := time.Now().Truncate(time.Millisecond)
+	identities := []store.UserIdentity{
+		{UserID: "usr-rt", Platform: "telegram", PlatformUserID: "tg-999", DisplayName: "RT User TG"},
+		{UserID: "usr-rt", Platform: "discord", PlatformUserID: "dc-888", DisplayName: "RT User DC"},
+		{UserID: "usr-rt", Platform: "slack", PlatformUserID: "sl-777", DisplayName: ""},
+	}
+
+	user := &store.User{
+		ID:         "usr-rt",
+		Name:       "RoundTrip",
+		Role:       "user",
+		Identities: identities,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	require.NoError(t, gs.Users().Create(ctx, user))
+
+	got, err := gs.Users().Get(ctx, "usr-rt")
+	require.NoError(t, err)
+	require.Len(t, got.Identities, 3)
+
+	// Sorted by (platform, platform_user_id)
+	tests := []struct {
+		name           string
+		idx            int
+		wantUserID     string
+		wantPlatform   string
+		wantPlatformID string
+		wantDisplay    string
+	}{
+		{"discord identity", 0, "usr-rt", "discord", "dc-888", "RT User DC"},
+		{"slack identity", 1, "usr-rt", "slack", "sl-777", ""},
+		{"telegram identity", 2, "usr-rt", "telegram", "tg-999", "RT User TG"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id := got.Identities[tt.idx]
+			assert.Equal(t, tt.wantUserID, id.UserID, "UserID should persist")
+			assert.Equal(t, tt.wantPlatform, id.Platform, "Platform should persist")
+			assert.Equal(t, tt.wantPlatformID, id.PlatformUserID, "PlatformUserID should persist")
+			assert.Equal(t, tt.wantDisplay, id.DisplayName, "DisplayName should persist")
+		})
+	}
 }
 
 // ---------- PairingStore ----------

@@ -68,15 +68,16 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS user_identities (
-	user_id     TEXT NOT NULL,
-	channel     TEXT NOT NULL,
-	platform_id TEXT NOT NULL,
-	PRIMARY KEY (user_id, channel, platform_id),
+	user_id          TEXT NOT NULL,
+	platform         TEXT NOT NULL,
+	platform_user_id TEXT NOT NULL,
+	display_name     TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (user_id, platform, platform_user_id),
 	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_identities_lookup
-	ON user_identities(channel, platform_id);
+	ON user_identities(platform, platform_user_id);
 
 CREATE TABLE IF NOT EXISTS pairings (
 	id           TEXT PRIMARY KEY,
@@ -189,7 +190,7 @@ func (s *userStore) GetByExternalID(ctx context.Context, provider, externalID st
 	const q = `SELECT u.id, u.name, u.role, u.created_at, u.updated_at
 FROM users u
 JOIN user_identities ui ON u.id = ui.user_id
-WHERE ui.channel = ? AND ui.platform_id = ?`
+WHERE ui.platform = ? AND ui.platform_user_id = ?`
 
 	var u store.User
 	var createdAt, updatedAt string
@@ -321,17 +322,17 @@ type execer interface {
 }
 
 func insertIdentities(ctx context.Context, ex execer, userID string, ids []store.UserIdentity) error {
-	const q = `INSERT INTO user_identities (user_id, channel, platform_id) VALUES (?, ?, ?)`
+	const q = `INSERT INTO user_identities (user_id, platform, platform_user_id, display_name) VALUES (?, ?, ?, ?)`
 	for _, id := range ids {
-		if _, err := ex.ExecContext(ctx, q, userID, id.Channel, id.PlatformID); err != nil {
-			return fmt.Errorf("inserting identity %s/%s for user %s: %w", id.Channel, id.PlatformID, userID, err)
+		if _, err := ex.ExecContext(ctx, q, userID, id.Platform, id.PlatformUserID, id.DisplayName); err != nil {
+			return fmt.Errorf("inserting identity %s/%s for user %s: %w", id.Platform, id.PlatformUserID, userID, err)
 		}
 	}
 	return nil
 }
 
 func loadIdentities(ctx context.Context, db *sql.DB, userID string) ([]store.UserIdentity, error) {
-	const q = `SELECT channel, platform_id FROM user_identities WHERE user_id = ? ORDER BY channel, platform_id`
+	const q = `SELECT user_id, platform, platform_user_id, display_name FROM user_identities WHERE user_id = ? ORDER BY platform, platform_user_id`
 	rows, err := db.QueryContext(ctx, q, userID)
 	if err != nil {
 		return nil, fmt.Errorf("loading identities for user %s: %w", userID, err)
@@ -341,7 +342,7 @@ func loadIdentities(ctx context.Context, db *sql.DB, userID string) ([]store.Use
 	var ids []store.UserIdentity
 	for rows.Next() {
 		var id store.UserIdentity
-		if err := rows.Scan(&id.Channel, &id.PlatformID); err != nil {
+		if err := rows.Scan(&id.UserID, &id.Platform, &id.PlatformUserID, &id.DisplayName); err != nil {
 			return nil, fmt.Errorf("scanning identity row: %w", err)
 		}
 		ids = append(ids, id)

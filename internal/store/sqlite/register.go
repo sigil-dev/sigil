@@ -5,7 +5,9 @@ package sqlite
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/sigil-dev/sigil/internal/store"
@@ -18,10 +20,19 @@ func init() {
 func newWorkspaceStores(workspacePath string, vectorDims int) (store.SessionStore, store.MemoryStore, store.VectorStore, error) {
 	// Track opened stores for cleanup on partial failure.
 	var closers []interface{ Close() error }
-	cleanup := func() {
+	cleanup := func() error {
+		var errs []error
 		for _, c := range closers {
-			_ = c.Close()
+			if err := c.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
+		if len(errs) > 0 {
+			joined := errors.Join(errs...)
+			slog.Warn("cleanup errors during partial-failure cleanup", "error", joined)
+			return joined
+		}
+		return nil
 	}
 
 	ss, err := NewSessionStore(filepath.Join(workspacePath, "sessions.db"))
@@ -34,30 +45,26 @@ func newWorkspaceStores(workspacePath string, vectorDims int) (store.SessionStor
 	// to avoid connection waste and WAL contention.
 	memoryDB, err := sql.Open("sqlite3", filepath.Join(workspacePath, "memory.db")+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
-		cleanup()
-		return nil, nil, nil, fmt.Errorf("opening memory db: %w", err)
+		return nil, nil, nil, errors.Join(fmt.Errorf("opening memory db: %w", err), cleanup())
 	}
 	// Note: memoryDB is not added to closers here; it's closed via msgStore/sumStore Close()
 
 	msgStore, err := NewMessageStoreWithDB(memoryDB)
 	if err != nil {
 		_ = memoryDB.Close()
-		cleanup()
-		return nil, nil, nil, fmt.Errorf("creating message store: %w", err)
+		return nil, nil, nil, errors.Join(fmt.Errorf("creating message store: %w", err), cleanup())
 	}
 	closers = append(closers, msgStore)
 
 	sumStore, err := NewSummaryStoreWithDB(memoryDB)
 	if err != nil {
-		cleanup()
-		return nil, nil, nil, fmt.Errorf("creating summary store: %w", err)
+		return nil, nil, nil, errors.Join(fmt.Errorf("creating summary store: %w", err), cleanup())
 	}
 	closers = append(closers, sumStore)
 
 	kStore, err := NewKnowledgeStore(filepath.Join(workspacePath, "knowledge.db"))
 	if err != nil {
-		cleanup()
-		return nil, nil, nil, fmt.Errorf("creating knowledge store: %w", err)
+		return nil, nil, nil, errors.Join(fmt.Errorf("creating knowledge store: %w", err), cleanup())
 	}
 	closers = append(closers, kStore)
 
@@ -65,8 +72,7 @@ func newWorkspaceStores(workspacePath string, vectorDims int) (store.SessionStor
 
 	vs, err := NewVectorStore(filepath.Join(workspacePath, "vectors.db"), vectorDims)
 	if err != nil {
-		cleanup()
-		return nil, nil, nil, fmt.Errorf("creating vector store: %w", err)
+		return nil, nil, nil, errors.Join(fmt.Errorf("creating vector store: %w", err), cleanup())
 	}
 
 	return ss, ms, vs, nil

@@ -172,9 +172,12 @@ type User struct {
 }
 
 // UserIdentity links a user to a messaging platform account.
+// Fields match the proto UserIdentity message (common.v1.UserIdentity).
 type UserIdentity struct {
-	Channel    string
-	PlatformID string
+	UserID         string
+	Platform       string
+	PlatformUserID string
+	DisplayName    string
 }
 
 // Pairing represents a binding between a user, channel, and workspace.

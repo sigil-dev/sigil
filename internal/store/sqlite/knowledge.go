@@ -559,6 +559,12 @@ func (k *KnowledgeStore) Traverse(ctx context.Context, startID string, depth int
 		depth = 1
 	}
 
+	// Respect filter.MaxDepth if set (and non-zero).
+	// MaxDepth=0 means no limit (backward compatible).
+	if filter.MaxDepth > 0 && filter.MaxDepth < depth {
+		depth = filter.MaxDepth
+	}
+
 	// Look up workspace for scoping.
 	workspace, err := k.lookupWorkspace(ctx, startID)
 	if err != nil {

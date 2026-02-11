@@ -371,7 +371,7 @@ FROM (
 	return msgs, rows.Err()
 }
 
-// formatTime serialises a time.Time to RFC3339 with millisecond precision.
+// formatTime serialises a time.Time to RFC3339 with nanosecond precision.
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""

@@ -371,7 +371,7 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 
 **Question:** Proto `UserIdentity` has 4 fields (`user_id`, `platform`, `platform_user_id`, `display_name`) while the Go store type has 2 (`Channel`, `PlatformID`). Should the Go type be kept minimal or expanded?
 
-**Decision:** Expand Go `UserIdentity` to match proto with all 4 fields: `UserID`, `Platform` (renamed from `Channel`), `PlatformID`, `DisplayName`.
+**Decision:** Expand Go `UserIdentity` to match proto with all 4 fields: `UserID`, `Platform` (renamed from `Channel`), `PlatformUserID` (renamed from `PlatformID` to match proto `platform_user_id`), `DisplayName`.
 
 **Rationale:** The store type is the internal representation that maps to the proto wire format. Keeping them aligned avoids lossy conversions and simplifies the mapping layer. The additional fields (`UserID` for Sigil's internal identity, `DisplayName` for human-readable context) are needed for proper user management.
 
