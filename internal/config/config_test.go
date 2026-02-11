@@ -6,6 +6,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/config"
@@ -299,7 +300,7 @@ func TestValidate_Budgets(t *testing.T) {
 				require.NotEmpty(t, errs)
 				found := false
 				for _, err := range errs {
-					if containsStr(err.Error(), tt.wantErr) {
+					if strings.Contains(err.Error(), tt.wantErr) {
 						found = true
 					}
 				}
@@ -447,18 +448,4 @@ storage:
 	_, err = config.Load(cfgPath)
 	require.Error(t, err, "Load should fail with invalid config")
 	assert.Contains(t, err.Error(), "validating config")
-}
-
-// containsStr is a helper to check substring membership.
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && contains(s, substr))
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
