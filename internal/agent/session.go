@@ -51,6 +51,16 @@ func (m *SessionManager) List(ctx context.Context, workspaceID string) ([]*store
 	return m.ss.ListSessions(ctx, workspaceID, store.ListOpts{})
 }
 
+// AppendMessage persists a message to the given session's active window.
+func (m *SessionManager) AppendMessage(ctx context.Context, sessionID string, msg *store.Message) error {
+	return m.ss.AppendMessage(ctx, sessionID, msg)
+}
+
+// GetActiveWindow returns the last limit messages for the given session.
+func (m *SessionManager) GetActiveWindow(ctx context.Context, sessionID string, limit int) ([]*store.Message, error) {
+	return m.ss.GetActiveWindow(ctx, sessionID, limit)
+}
+
 // Archive marks a session as archived and updates its timestamp.
 func (m *SessionManager) Archive(ctx context.Context, id string) error {
 	session, err := m.ss.GetSession(ctx, id)

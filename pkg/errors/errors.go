@@ -39,6 +39,10 @@ const (
 	CodeProviderRequestInvalid  Code = "provider.request.invalid"
 	CodeProviderResponseInvalid Code = "provider.response.invalid"
 	CodeProviderUpstreamFailure Code = "provider.upstream.failure"
+	CodeProviderBudgetExceeded  Code = "provider.budget.exceeded"
+
+	CodeAgentLoopInvalidInput Code = "agent.loop.invalid_input"
+	CodeAgentLoopFailure     Code = "agent.loop.failure"
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
