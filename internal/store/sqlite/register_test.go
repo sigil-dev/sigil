@@ -15,8 +15,8 @@ import (
 
 func TestNewWorkspaceStores_PartialFailureCleanup(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupFailure  func(dir string) // Function to cause a partial failure
+		name              string
+		setupFailure      func(dir string) // Function to cause a partial failure
 		expectErrContains string
 	}{
 		{
@@ -24,7 +24,7 @@ func TestNewWorkspaceStores_PartialFailureCleanup(t *testing.T) {
 			setupFailure: func(dir string) {
 				// Make memory.db path a directory to trigger failure
 				memPath := filepath.Join(dir, "memory.db")
-				err := os.Mkdir(memPath, 0755)
+				err := os.Mkdir(memPath, 0o755)
 				require.NoError(t, err)
 			},
 			expectErrContains: "creating message store",
@@ -34,7 +34,7 @@ func TestNewWorkspaceStores_PartialFailureCleanup(t *testing.T) {
 			setupFailure: func(dir string) {
 				// Make knowledge.db path a directory to trigger failure
 				knowledgePath := filepath.Join(dir, "knowledge.db")
-				err := os.Mkdir(knowledgePath, 0755)
+				err := os.Mkdir(knowledgePath, 0o755)
 				require.NoError(t, err)
 			},
 			expectErrContains: "creating knowledge store",
@@ -44,7 +44,7 @@ func TestNewWorkspaceStores_PartialFailureCleanup(t *testing.T) {
 			setupFailure: func(dir string) {
 				// Make vectors.db path a directory to trigger failure
 				vectorPath := filepath.Join(dir, "vectors.db")
-				err := os.Mkdir(vectorPath, 0755)
+				err := os.Mkdir(vectorPath, 0o755)
 				require.NoError(t, err)
 			},
 			expectErrContains: "creating vector store",

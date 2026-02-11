@@ -7,13 +7,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Compile-time interface check.
@@ -30,17 +30,17 @@ type MessageStore struct {
 func NewMessageStore(dbPath string) (*MessageStore, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
-		return nil, fmt.Errorf("opening sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening sqlite db: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("pinging sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "pinging sqlite db: %w", err)
 	}
 
 	if err := migrateMessages(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrating message tables: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating message tables: %w", err)
 	}
 
 	return &MessageStore{db: db, ownsDB: true}, nil
@@ -50,7 +50,7 @@ func NewMessageStore(dbPath string) (*MessageStore, error) {
 // The caller retains ownership of the connection; Close() becomes a no-op.
 func NewMessageStoreWithDB(db *sql.DB) (*MessageStore, error) {
 	if err := migrateMessages(db); err != nil {
-		return nil, fmt.Errorf("migrating message tables: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating message tables: %w", err)
 	}
 
 	return &MessageStore{db: db, ownsDB: false}, nil
@@ -127,7 +127,7 @@ func sanitizeFTS5(query string) string {
 func (m *MessageStore) Append(ctx context.Context, workspaceID string, msg *store.Message) error {
 	metadata, err := json.Marshal(msg.Metadata)
 	if err != nil {
-		return fmt.Errorf("marshalling message metadata: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling message metadata: %w", err)
 	}
 
 	const q = `INSERT INTO memory_messages (id, workspace_id, session_id, role, content, tool_call_id, tool_name, created_at, metadata)
@@ -145,7 +145,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		string(metadata),
 	)
 	if err != nil {
-		return fmt.Errorf("appending message %s: %w", msg.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "appending message %s: %w", msg.ID, err)
 	}
 	return nil
 }
@@ -171,7 +171,7 @@ LIMIT ? OFFSET ?`
 
 	rows, err := m.db.QueryContext(ctx, q, safeQuery, workspaceID, limit, opts.Offset)
 	if err != nil {
-		return nil, fmt.Errorf("searching messages: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "searching messages: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -187,7 +187,7 @@ ORDER BY created_at ASC`
 
 	rows, err := m.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
 	if err != nil {
-		return nil, fmt.Errorf("getting message range: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting message range: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -202,7 +202,7 @@ func (m *MessageStore) Count(ctx context.Context, workspaceID string) (int64, er
 		workspaceID,
 	).Scan(&count)
 	if err != nil {
-		return 0, fmt.Errorf("counting messages: %w", err)
+		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "counting messages: %w", err)
 	}
 	return count, nil
 }
@@ -220,7 +220,7 @@ WHERE workspace_id = ? AND rowid NOT IN (
 
 	result, err := m.db.ExecContext(ctx, q, workspaceID, workspaceID, keepLast)
 	if err != nil {
-		return 0, fmt.Errorf("trimming messages: %w", err)
+		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "trimming messages: %w", err)
 	}
 
 	return result.RowsAffected()
@@ -244,24 +244,24 @@ func scanMessages(rows *sql.Rows) ([]*store.Message, error) {
 			&createdAt,
 			&metaJSON,
 		); err != nil {
-			return nil, fmt.Errorf("scanning message row: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning message row: %w", err)
 		}
 
 		var err error
 		msg.CreatedAt, err = ParseTime(createdAt)
 		if err != nil {
-			return nil, fmt.Errorf("parsing message %s created_at: %w", msg.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing message %s created_at: %w", msg.ID, err)
 		}
 		if metaJSON != "" && metaJSON != "{}" {
 			if err := json.Unmarshal([]byte(metaJSON), &msg.Metadata); err != nil {
-				return nil, fmt.Errorf("unmarshalling message metadata: %w", err)
+				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling message metadata: %w", err)
 			}
 		}
 		msgs = append(msgs, &msg)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating messages: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating messages: %w", err)
 	}
 	return msgs, nil
 }

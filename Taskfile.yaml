@@ -1,29 +1,23 @@
 # https://taskfile.dev
-
 version: "3"
-
 vars:
   BINARY_NAME: sigil
   MAIN_PKG: ./cmd/sigil
-
 tasks:
   default:
     desc: Show available tasks
     cmds:
       - task --list
-
   # Development
   dev:
     desc: Run sigil in development mode
     deps: [generate]
     cmds:
       - go run {{.MAIN_PKG}}
-
   # Code Generation
   generate:
     desc: Generate all code (proto, OpenAPI)
     deps: [proto]
-
   proto:
     desc: Generate Go code from protobuf definitions
     sources:
@@ -34,24 +28,20 @@ tasks:
       - internal/gen/proto/**/*.go
     cmds:
       - buf generate
-
   # Testing
   test:
     desc: Run all tests
     cmds:
-      - go test -tags "fts5" -race -v ./...
-
+      - go test -race -v ./...
   test:coverage:
     desc: Run tests with coverage
     cmds:
-      - go test -tags "fts5" -race -coverprofile=coverage.out -covermode=atomic ./...
+      - go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -html=coverage.out -o coverage.html
-
   test:short:
     desc: Run short tests only
     cmds:
-      - go test -tags "fts5" -short -v ./...
-
+      - go test -short -v ./...
   # Linting
   lint:
     desc: Run all linters
@@ -59,22 +49,58 @@ tasks:
       - task: lint:go
       - task: lint:markdown
       - task: lint:yaml
-
+      - task: ui:check
   lint:go:
     desc: Lint Go code
     cmds:
       - golangci-lint run
-
   lint:markdown:
     desc: Lint Markdown files
     cmds:
-      - rumdl .
-
+      - rumdl check .
   lint:yaml:
     desc: Check YAML formatting
     cmds:
       - yamlfmt -lint .
-
+  # UI
+  ui:deps:
+    desc: Install UI dependencies
+    dir: ui
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+    cmds:
+      - npm install
+  ui:build:
+    desc: Build UI assets
+    dir: ui
+    deps: ['ui:deps']
+    sources:
+      - src/**/*
+      - static/**/*
+      - svelte.config.js
+      - tsconfig.json
+      - vite.config.ts
+      - tailwind.config.ts
+    generates:
+      - .svelte-kit/**/*
+      - build/**/*
+    cmds:
+      - npm run build
+  ui:dev:
+    desc: Start UI development server
+    dir: ui
+    deps: ['ui:deps']
+    cmds:
+      - npm run dev
+  ui:check:
+    desc: Run Svelte/TypeScript check
+    dir: ui
+    deps: ['ui:deps']
+    cmds:
+      - npm run check
   # Formatting
   fmt:
     desc: Format all files
@@ -82,48 +108,40 @@ tasks:
       - task: fmt:go
       - task: fmt:yaml
       - task: fmt:dprint
-
   fmt:go:
     desc: Format Go code
     cmds:
       - gofumpt -w .
-
   fmt:yaml:
     desc: Format YAML files
     cmds:
       - yamlfmt .
-
   fmt:dprint:
     desc: Format with dprint
     cmds:
       - dprint fmt
-
   # Building
   build:
     desc: Build sigil binary
     deps: [generate]
     cmds:
       - go build -o {{.BINARY_NAME}} {{.MAIN_PKG}}
-
   build:all:
     desc: Build for all platforms
     deps: [generate]
     cmds:
       - task: build:linux
       - task: build:darwin
-
   build:linux:
     desc: Build for Linux
     cmds:
       - GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -o dist/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PKG}}
       - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -o dist/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PKG}}
-
   build:darwin:
     desc: Build for macOS
     cmds:
       - GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -o dist/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PKG}}
       - GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -o dist/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PKG}}
-
   # License headers
   license:check:
     desc: Check SPDX license headers
@@ -137,7 +155,6 @@ tasks:
         done
         command -v addlicense >/dev/null 2>&1 || go install github.com/google/addlicense@latest
         addlicense -check -f LICENSE_HEADER -ignore '**/*.pb.go' -ignore 'vendor/**' $EXISTING_DIRS
-
   license:add:
     desc: Add missing SPDX license headers
     cmds:
@@ -150,62 +167,52 @@ tasks:
         done
         command -v addlicense >/dev/null 2>&1 || go install github.com/google/addlicense@latest
         addlicense -f LICENSE_HEADER -ignore '**/*.pb.go' -ignore 'vendor/**' $EXISTING_DIRS
-
   # Dependencies
   deps:
     desc: Download and tidy dependencies
     cmds:
       - go mod download
       - go mod tidy
-
   # Release
   release:check:
     desc: Validate goreleaser config
     cmds:
       - goreleaser check
-
   release:snapshot:
     desc: Build snapshot locally (no publish)
     cmds:
       - goreleaser build --snapshot --clean --single-target
-
   # Documentation
   docs:setup:
     desc: Set up documentation dev environment
     dir: site
     cmds:
       - uv sync
-
   docs:build:
     desc: Build documentation site
     dir: site
     cmds:
       - uv run zensical build
-
   docs:serve:
     desc: Start documentation dev server
     dir: site
     cmds:
       - uv run zensical serve
-
   # Git hooks
   hooks:install:
     desc: Install git hooks
     cmds:
       - lefthook install
-
   hooks:uninstall:
     desc: Uninstall git hooks
     cmds:
       - lefthook uninstall
-
   # Tools
   tools:
     desc: Install development tools
     cmds:
       - brew install golangci-lint gofumpt lefthook actionlint goreleaser dprint cocogitto rumdl yamlfmt buf
       - echo "Tools installed. Run 'task hooks:install' to set up git hooks."
-
   # Cleanup
   clean:
     desc: Clean build artifacts

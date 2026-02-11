@@ -5,22 +5,22 @@ package config
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"strconv"
 	"strings"
 
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/viper"
 )
 
 // Config is the top-level Sigil configuration.
 type Config struct {
-	Networking NetworkingConfig            `mapstructure:"networking"`
-	Providers  map[string]ProviderConfig   `mapstructure:"providers"`
-	Models     ModelsConfig                `mapstructure:"models"`
-	Sessions   SessionsConfig              `mapstructure:"sessions"`
-	Storage    StorageConfig               `mapstructure:"storage"`
-	Workspaces map[string]WorkspaceConfig  `mapstructure:"workspaces"`
+	Networking NetworkingConfig           `mapstructure:"networking"`
+	Providers  map[string]ProviderConfig  `mapstructure:"providers"`
+	Models     ModelsConfig               `mapstructure:"models"`
+	Sessions   SessionsConfig             `mapstructure:"sessions"`
+	Storage    StorageConfig              `mapstructure:"storage"`
+	Workspaces map[string]WorkspaceConfig `mapstructure:"workspaces"`
 }
 
 // NetworkingConfig controls how Sigil listens for connections.
@@ -110,17 +110,17 @@ func Load(path string) (*Config, error) {
 	if path != "" {
 		v.SetConfigFile(path)
 		if err := v.ReadInConfig(); err != nil {
-			return nil, fmt.Errorf("reading config %s: %w", path, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config %s: %w", path, err)
 		}
 	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("unmarshalling config: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeConfigParseInvalidFormat, "unmarshalling config: %w", err)
 	}
 
 	if errs := cfg.Validate(); len(errs) > 0 {
-		return nil, fmt.Errorf("validating config: %w", errors.Join(errs...))
+		return nil, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "validating config: %w", errors.Join(errs...))
 	}
 
 	return &cfg, nil
@@ -145,18 +145,18 @@ func (c *Config) validateNetworking() []error {
 
 	validModes := map[string]bool{"local": true, "tailscale": true}
 	if !validModes[c.Networking.Mode] {
-		errs = append(errs, fmt.Errorf(
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: networking.mode must be one of [local, tailscale], got %q",
 			c.Networking.Mode,
 		))
 	}
 
 	if c.Networking.Listen == "" {
-		errs = append(errs, fmt.Errorf("config: networking.listen must not be empty"))
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "config: networking.listen must not be empty"))
 	} else {
 		host, portStr, err := net.SplitHostPort(c.Networking.Listen)
 		if err != nil {
-			errs = append(errs, fmt.Errorf(
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 				"config: networking.listen must be a valid host:port address, got %q: %w",
 				c.Networking.Listen, err,
 			))
@@ -164,12 +164,12 @@ func (c *Config) validateNetworking() []error {
 			_ = host // host can be empty (e.g., ":8080"), which is valid
 			port, err := strconv.Atoi(portStr)
 			if err != nil {
-				errs = append(errs, fmt.Errorf(
+				errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 					"config: networking.listen port must be a number, got %q",
 					portStr,
 				))
 			} else if port < 1 || port > 65535 {
-				errs = append(errs, fmt.Errorf(
+				errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 					"config: networking.listen port must be between 1 and 65535, got %d",
 					port,
 				))
@@ -185,7 +185,7 @@ func (c *Config) validateStorage() []error {
 
 	validBackends := map[string]bool{"sqlite": true}
 	if !validBackends[c.Storage.Backend] {
-		errs = append(errs, fmt.Errorf(
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: storage.backend must be one of [sqlite], got %q",
 			c.Storage.Backend,
 		))
@@ -198,9 +198,9 @@ func (c *Config) validateModels() []error {
 	var errs []error
 
 	if c.Models.Default == "" {
-		errs = append(errs, fmt.Errorf("config: models.default must not be empty"))
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "config: models.default must not be empty"))
 	} else if !strings.Contains(c.Models.Default, "/") {
-		errs = append(errs, fmt.Errorf(
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: models.default must be in \"provider/model\" format, got %q",
 			c.Models.Default,
 		))
@@ -210,7 +210,7 @@ func (c *Config) validateModels() []error {
 		// (e.g., defaults only on fresh install), which is valid.
 		providerName := providerFromModel(c.Models.Default)
 		if _, ok := c.Providers[providerName]; !ok {
-			errs = append(errs, fmt.Errorf(
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 				"config: models.default %q references provider %q which is not configured",
 				c.Models.Default, providerName,
 			))
@@ -219,7 +219,7 @@ func (c *Config) validateModels() []error {
 
 	for i, model := range c.Models.Failover {
 		if !strings.Contains(model, "/") {
-			errs = append(errs, fmt.Errorf(
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 				"config: models.failover[%d] must be in \"provider/model\" format, got %q",
 				i, model,
 			))
@@ -228,7 +228,7 @@ func (c *Config) validateModels() []error {
 		if c.Providers != nil {
 			providerName := providerFromModel(model)
 			if _, ok := c.Providers[providerName]; !ok {
-				errs = append(errs, fmt.Errorf(
+				errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 					"config: models.failover[%d] %q references provider %q which is not configured",
 					i, model, providerName,
 				))
@@ -237,14 +237,14 @@ func (c *Config) validateModels() []error {
 	}
 
 	if c.Models.Budgets.PerSessionTokens <= 0 {
-		errs = append(errs, fmt.Errorf(
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: models.budgets.per_session_tokens must be greater than 0, got %d",
 			c.Models.Budgets.PerSessionTokens,
 		))
 	}
 
 	if c.Models.Budgets.PerDayUSD <= 0 {
-		errs = append(errs, fmt.Errorf(
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: models.budgets.per_day_usd must be greater than 0, got %g",
 			c.Models.Budgets.PerDayUSD,
 		))
@@ -257,7 +257,7 @@ func (c *Config) validateSessions() []error {
 	var errs []error
 
 	if c.Sessions.Memory.ActiveWindow <= 0 {
-		errs = append(errs, fmt.Errorf(
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: sessions.memory.active_window must be greater than 0, got %d",
 			c.Sessions.Memory.ActiveWindow,
 		))
@@ -265,14 +265,14 @@ func (c *Config) validateSessions() []error {
 
 	validStrategies := map[string]bool{"summarize": true, "truncate": true}
 	if !validStrategies[c.Sessions.Memory.Compaction.Strategy] {
-		errs = append(errs, fmt.Errorf(
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: sessions.memory.compaction.strategy must be one of [summarize, truncate], got %q",
 			c.Sessions.Memory.Compaction.Strategy,
 		))
 	}
 
 	if c.Sessions.Memory.Compaction.BatchSize <= 0 {
-		errs = append(errs, fmt.Errorf(
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: sessions.memory.compaction.batch_size must be greater than 0, got %d",
 			c.Sessions.Memory.Compaction.BatchSize,
 		))

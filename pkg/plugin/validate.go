@@ -4,9 +4,10 @@
 package plugin
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // semverRe matches strict semver (no "v" prefix): MAJOR.MINOR.PATCH[-prerelease][+build].
@@ -63,24 +64,24 @@ func (m *Manifest) Validate() error {
 
 func (m *Manifest) validateName() error {
 	if strings.TrimSpace(m.Name) == "" {
-		return fmt.Errorf("manifest validation: name must not be empty")
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "manifest validation: name must not be empty")
 	}
 	return nil
 }
 
 func (m *Manifest) validateVersion() error {
 	if m.Version == "" {
-		return fmt.Errorf("manifest validation: version must not be empty")
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "manifest validation: version must not be empty")
 	}
 	if !semverRe.MatchString(m.Version) {
-		return fmt.Errorf("manifest validation: version must be valid semver (MAJOR.MINOR.PATCH), got %q", m.Version)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "manifest validation: version must be valid semver (MAJOR.MINOR.PATCH), got %q", m.Version)
 	}
 	return nil
 }
 
 func (m *Manifest) validateType() error {
 	if !validPluginTypes[m.Type] {
-		return fmt.Errorf("manifest validation: type must be one of [provider, channel, tool, skill], got %q", m.Type)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "manifest validation: type must be one of [provider, channel, tool, skill], got %q", m.Type)
 	}
 	return nil
 }
@@ -88,7 +89,7 @@ func (m *Manifest) validateType() error {
 func (m *Manifest) validateCapabilities() error {
 	for i, cap := range m.Capabilities {
 		if err := validateCapabilityPattern(cap.Pattern); err != nil {
-			return fmt.Errorf("manifest validation: capabilities[%d]: %w", i, err)
+			return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "manifest validation: capabilities[%d]: %w", i, err)
 		}
 	}
 	return nil
@@ -96,7 +97,7 @@ func (m *Manifest) validateCapabilities() error {
 
 func (m *Manifest) validateExecution() error {
 	if !validExecutionTiers[m.Execution.Tier] {
-		return fmt.Errorf("manifest validation: execution tier must be one of [wasm, process, container], got %q", m.Execution.Tier)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "manifest validation: execution tier must be one of [wasm, process, container], got %q", m.Execution.Tier)
 	}
 	return nil
 }
@@ -104,10 +105,10 @@ func (m *Manifest) validateExecution() error {
 func (m *Manifest) validateDenyCapabilities() error {
 	for i, dc := range m.DenyCapabilities {
 		if err := validateDenyCapabilityPattern(dc.Pattern); err != nil {
-			return fmt.Errorf("manifest validation: deny_capabilities[%d]: %w", i, err)
+			return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "manifest validation: deny_capabilities[%d]: %w", i, err)
 		}
 		if err := m.checkDenyConflict(dc); err != nil {
-			return fmt.Errorf("manifest validation: deny_capabilities[%d]: %w", i, err)
+			return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "manifest validation: deny_capabilities[%d]: %w", i, err)
 		}
 	}
 	return nil
@@ -116,16 +117,16 @@ func (m *Manifest) validateDenyCapabilities() error {
 // validateCapabilityPattern checks that a single capability pattern string is well-formed.
 func validateCapabilityPattern(pattern string) error {
 	if pattern == "" {
-		return fmt.Errorf("capability pattern must not be empty")
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "capability pattern must not be empty")
 	}
 	if !capPatternRe.MatchString(pattern) {
-		return fmt.Errorf("capability pattern %q contains invalid characters", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "capability pattern %q contains invalid characters", pattern)
 	}
 	if strings.HasPrefix(pattern, ".") || strings.HasSuffix(pattern, ".") {
-		return fmt.Errorf("capability pattern %q must not start or end with a dot", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "capability pattern %q must not start or end with a dot", pattern)
 	}
 	if strings.Contains(pattern, "..") {
-		return fmt.Errorf("capability pattern %q contains consecutive dots", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "capability pattern %q contains consecutive dots", pattern)
 	}
 	return nil
 }
@@ -133,16 +134,16 @@ func validateCapabilityPattern(pattern string) error {
 // validateDenyCapabilityPattern checks a deny capability pattern string.
 func validateDenyCapabilityPattern(pattern string) error {
 	if pattern == "" {
-		return fmt.Errorf("deny capability pattern must not be empty")
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "deny capability pattern must not be empty")
 	}
 	if !capPatternRe.MatchString(pattern) {
-		return fmt.Errorf("deny capability pattern %q contains invalid characters", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "deny capability pattern %q contains invalid characters", pattern)
 	}
 	if strings.HasPrefix(pattern, ".") || strings.HasSuffix(pattern, ".") {
-		return fmt.Errorf("deny capability pattern %q must not start or end with a dot", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "deny capability pattern %q must not start or end with a dot", pattern)
 	}
 	if strings.Contains(pattern, "..") {
-		return fmt.Errorf("deny capability pattern %q contains consecutive dots", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "deny capability pattern %q contains consecutive dots", pattern)
 	}
 	return nil
 }
@@ -155,7 +156,7 @@ func validateDenyCapabilityPattern(pattern string) error {
 func (m *Manifest) checkDenyConflict(deny Capability) error {
 	for _, grant := range m.Capabilities {
 		if capabilitiesConflict(grant.Pattern, deny.Pattern) {
-			return fmt.Errorf(
+			return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 				"deny pattern %q conflicts with granted capability %q",
 				deny.Pattern, grant.Pattern,
 			)

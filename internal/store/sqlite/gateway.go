@@ -7,12 +7,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Compile-time interface checks.
@@ -36,17 +36,17 @@ type GatewayStore struct {
 func NewGatewayStore(dbPath string) (*GatewayStore, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
-		return nil, fmt.Errorf("opening gateway db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening gateway db: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("pinging gateway db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "pinging gateway db: %w", err)
 	}
 
 	if err := migrateGateway(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrating gateway db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating gateway db: %w", err)
 	}
 
 	return &GatewayStore{
@@ -136,7 +136,7 @@ type userStore struct {
 func (s *userStore) Create(ctx context.Context, user *store.User) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("beginning tx for user %s: %w", user.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning tx for user %s: %w", user.ID, err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -146,7 +146,7 @@ func (s *userStore) Create(ctx context.Context, user *store.User) error {
 		formatTime(user.CreatedAt), formatTime(user.UpdatedAt),
 	)
 	if err != nil {
-		return fmt.Errorf("inserting user %s: %w", user.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "inserting user %s: %w", user.ID, err)
 	}
 
 	if err := insertIdentities(ctx, tx, user.ID, user.Identities); err != nil {
@@ -163,18 +163,18 @@ func (s *userStore) Get(ctx context.Context, id string) (*store.User, error) {
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(ctx, q, id).Scan(&u.ID, &u.Name, &u.Role, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("user %s: %w", id, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user %s: %w", id, store.ErrNotFound)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("getting user %s: %w", id, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting user %s: %w", id, err)
 	}
 	u.CreatedAt, err = ParseTime(createdAt)
 	if err != nil {
-		return nil, fmt.Errorf("parsing user %s created_at: %w", id, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing user %s created_at: %w", id, err)
 	}
 	u.UpdatedAt, err = ParseTime(updatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("parsing user %s updated_at: %w", id, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing user %s updated_at: %w", id, err)
 	}
 
 	ids, err := loadIdentities(ctx, s.db, id)
@@ -198,18 +198,18 @@ WHERE ui.platform = ? AND ui.platform_user_id = ?`
 		&u.ID, &u.Name, &u.Role, &createdAt, &updatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("user with external id %s/%s: %w", provider, externalID, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user with external id %s/%s: %w", provider, externalID, store.ErrNotFound)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("getting user by external id %s/%s: %w", provider, externalID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting user by external id %s/%s: %w", provider, externalID, err)
 	}
 	u.CreatedAt, err = ParseTime(createdAt)
 	if err != nil {
-		return nil, fmt.Errorf("parsing user %s created_at: %w", u.ID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing user %s created_at: %w", u.ID, err)
 	}
 	u.UpdatedAt, err = ParseTime(updatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("parsing user %s updated_at: %w", u.ID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing user %s updated_at: %w", u.ID, err)
 	}
 
 	ids, err := loadIdentities(ctx, s.db, u.ID)
@@ -224,26 +224,26 @@ WHERE ui.platform = ? AND ui.platform_user_id = ?`
 func (s *userStore) Update(ctx context.Context, user *store.User) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("beginning tx for user update %s: %w", user.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning tx for user update %s: %w", user.ID, err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
 	const q = `UPDATE users SET name = ?, role = ?, updated_at = ? WHERE id = ?`
 	result, err := tx.ExecContext(ctx, q, user.Name, user.Role, formatTime(user.UpdatedAt), user.ID)
 	if err != nil {
-		return fmt.Errorf("updating user %s: %w", user.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "updating user %s: %w", user.ID, err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("checking rows for user %s: %w", user.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows for user %s: %w", user.ID, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("user %s: %w", user.ID, store.ErrNotFound)
+		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user %s: %w", user.ID, store.ErrNotFound)
 	}
 
 	// Replace identities: delete old, insert new.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM user_identities WHERE user_id = ?`, user.ID); err != nil {
-		return fmt.Errorf("clearing identities for user %s: %w", user.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "clearing identities for user %s: %w", user.ID, err)
 	}
 	if err := insertIdentities(ctx, tx, user.ID, user.Identities); err != nil {
 		return err
@@ -261,7 +261,7 @@ func (s *userStore) List(ctx context.Context, opts store.ListOpts) ([]*store.Use
 	const q = `SELECT id, name, role, created_at, updated_at FROM users ORDER BY created_at ASC LIMIT ? OFFSET ?`
 	rows, err := s.db.QueryContext(ctx, q, limit, opts.Offset)
 	if err != nil {
-		return nil, fmt.Errorf("listing users: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "listing users: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // error on read-path close is not actionable
 
@@ -270,21 +270,21 @@ func (s *userStore) List(ctx context.Context, opts store.ListOpts) ([]*store.Use
 		var u store.User
 		var createdAt, updatedAt string
 		if err := rows.Scan(&u.ID, &u.Name, &u.Role, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("scanning user row: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning user row: %w", err)
 		}
 		var err error
 		u.CreatedAt, err = ParseTime(createdAt)
 		if err != nil {
-			return nil, fmt.Errorf("parsing user %s created_at: %w", u.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing user %s created_at: %w", u.ID, err)
 		}
 		u.UpdatedAt, err = ParseTime(updatedAt)
 		if err != nil {
-			return nil, fmt.Errorf("parsing user %s updated_at: %w", u.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing user %s updated_at: %w", u.ID, err)
 		}
 		users = append(users, &u)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating user rows: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating user rows: %w", err)
 	}
 
 	// Load identities for each user.
@@ -302,14 +302,14 @@ func (s *userStore) List(ctx context.Context, opts store.ListOpts) ([]*store.Use
 func (s *userStore) Delete(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
 	if err != nil {
-		return fmt.Errorf("deleting user %s: %w", id, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting user %s: %w", id, err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("checking rows for user %s: %w", id, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows for user %s: %w", id, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("user %s: %w", id, store.ErrNotFound)
+		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user %s: %w", id, store.ErrNotFound)
 	}
 	return nil
 }
@@ -325,7 +325,7 @@ func insertIdentities(ctx context.Context, ex execer, userID string, ids []store
 	const q = `INSERT INTO user_identities (user_id, platform, platform_user_id, display_name) VALUES (?, ?, ?, ?)`
 	for _, id := range ids {
 		if _, err := ex.ExecContext(ctx, q, userID, id.Platform, id.PlatformUserID, id.DisplayName); err != nil {
-			return fmt.Errorf("inserting identity %s/%s for user %s: %w", id.Platform, id.PlatformUserID, userID, err)
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "inserting identity %s/%s for user %s: %w", id.Platform, id.PlatformUserID, userID, err)
 		}
 	}
 	return nil
@@ -335,7 +335,7 @@ func loadIdentities(ctx context.Context, db *sql.DB, userID string) ([]store.Use
 	const q = `SELECT user_id, platform, platform_user_id, display_name FROM user_identities WHERE user_id = ? ORDER BY platform, platform_user_id`
 	rows, err := db.QueryContext(ctx, q, userID)
 	if err != nil {
-		return nil, fmt.Errorf("loading identities for user %s: %w", userID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "loading identities for user %s: %w", userID, err)
 	}
 	defer rows.Close() //nolint:errcheck // error on read-path close is not actionable
 
@@ -343,12 +343,12 @@ func loadIdentities(ctx context.Context, db *sql.DB, userID string) ([]store.Use
 	for rows.Next() {
 		var id store.UserIdentity
 		if err := rows.Scan(&id.UserID, &id.Platform, &id.PlatformUserID, &id.DisplayName); err != nil {
-			return nil, fmt.Errorf("scanning identity row: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning identity row: %w", err)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating identities: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating identities: %w", err)
 	}
 	return ids, nil
 }
@@ -368,7 +368,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`
 		pairing.WorkspaceID, string(pairing.Status), formatTime(pairing.CreatedAt),
 	)
 	if err != nil {
-		return fmt.Errorf("creating pairing %s: %w", pairing.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "creating pairing %s: %w", pairing.ID, err)
 	}
 	return nil
 }
@@ -384,14 +384,14 @@ FROM pairings WHERE channel_type = ? AND channel_id = ?`
 		&p.WorkspaceID, &p.Status, &createdAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("pairing for channel %s/%s: %w", channelType, channelID, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "pairing for channel %s/%s: %w", channelType, channelID, store.ErrNotFound)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("getting pairing for channel %s/%s: %w", channelType, channelID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting pairing for channel %s/%s: %w", channelType, channelID, err)
 	}
 	p.CreatedAt, err = ParseTime(createdAt)
 	if err != nil {
-		return nil, fmt.Errorf("parsing pairing %s created_at: %w", p.ID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing pairing %s created_at: %w", p.ID, err)
 	}
 	return &p, nil
 }
@@ -402,7 +402,7 @@ FROM pairings WHERE user_id = ? ORDER BY created_at ASC`
 
 	rows, err := s.db.QueryContext(ctx, q, userID)
 	if err != nil {
-		return nil, fmt.Errorf("listing pairings for user %s: %w", userID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "listing pairings for user %s: %w", userID, err)
 	}
 	defer rows.Close() //nolint:errcheck // error on read-path close is not actionable
 
@@ -414,17 +414,17 @@ FROM pairings WHERE user_id = ? ORDER BY created_at ASC`
 			&p.ID, &p.UserID, &p.ChannelType, &p.ChannelID,
 			&p.WorkspaceID, &p.Status, &createdAt,
 		); err != nil {
-			return nil, fmt.Errorf("scanning pairing row: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning pairing row: %w", err)
 		}
 		var err error
 		p.CreatedAt, err = ParseTime(createdAt)
 		if err != nil {
-			return nil, fmt.Errorf("parsing pairing %s created_at: %w", p.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing pairing %s created_at: %w", p.ID, err)
 		}
 		pairings = append(pairings, &p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating pairings: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating pairings: %w", err)
 	}
 	return pairings, nil
 }
@@ -432,14 +432,14 @@ FROM pairings WHERE user_id = ? ORDER BY created_at ASC`
 func (s *pairingStore) Delete(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM pairings WHERE id = ?`, id)
 	if err != nil {
-		return fmt.Errorf("deleting pairing %s: %w", id, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting pairing %s: %w", id, err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("checking rows for pairing %s: %w", id, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows for pairing %s: %w", id, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("pairing %s: %w", id, store.ErrNotFound)
+		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "pairing %s: %w", id, store.ErrNotFound)
 	}
 	return nil
 }
@@ -455,7 +455,7 @@ func (s *auditStore) Append(ctx context.Context, entry *store.AuditEntry) error 
 	if entry.Details != nil {
 		b, err := json.Marshal(entry.Details)
 		if err != nil {
-			return fmt.Errorf("marshalling audit details: %w", err)
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling audit details: %w", err)
 		}
 		details = string(b)
 	}
@@ -468,7 +468,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		entry.Plugin, entry.WorkspaceID, entry.SessionID, details, entry.Result,
 	)
 	if err != nil {
-		return fmt.Errorf("appending audit entry %s: %w", entry.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "appending audit entry %s: %w", entry.ID, err)
 	}
 	return nil
 }
@@ -521,7 +521,7 @@ func (s *auditStore) Query(ctx context.Context, filter store.AuditFilter) ([]*st
 
 	rows, err := s.db.QueryContext(ctx, qb.String(), args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying audit log: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "querying audit log: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // error on read-path close is not actionable
 
@@ -533,22 +533,22 @@ func (s *auditStore) Query(ctx context.Context, filter store.AuditFilter) ([]*st
 			&e.ID, &ts, &e.Action, &e.Actor, &e.Plugin,
 			&e.WorkspaceID, &e.SessionID, &detailsJSON, &e.Result,
 		); err != nil {
-			return nil, fmt.Errorf("scanning audit row: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning audit row: %w", err)
 		}
 		var err error
 		e.Timestamp, err = ParseTime(ts)
 		if err != nil {
-			return nil, fmt.Errorf("parsing audit entry %s timestamp: %w", e.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing audit entry %s timestamp: %w", e.ID, err)
 		}
 		if detailsJSON != "" && detailsJSON != "{}" {
 			if err := json.Unmarshal([]byte(detailsJSON), &e.Details); err != nil {
-				return nil, fmt.Errorf("unmarshalling audit details: %w", err)
+				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling audit details: %w", err)
 			}
 		}
 		entries = append(entries, &e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating audit entries: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating audit entries: %w", err)
 	}
 	return entries, nil
 }

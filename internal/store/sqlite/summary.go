@@ -7,12 +7,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Compile-time interface check.
@@ -29,17 +29,17 @@ type SummaryStore struct {
 func NewSummaryStore(dbPath string) (*SummaryStore, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
-		return nil, fmt.Errorf("opening sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening sqlite db: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("pinging sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "pinging sqlite db: %w", err)
 	}
 
 	if err := migrateSummaries(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrating summary tables: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating summary tables: %w", err)
 	}
 
 	return &SummaryStore{db: db, ownsDB: true}, nil
@@ -49,7 +49,7 @@ func NewSummaryStore(dbPath string) (*SummaryStore, error) {
 // The caller retains ownership of the connection; Close() becomes a no-op.
 func NewSummaryStoreWithDB(db *sql.DB) (*SummaryStore, error) {
 	if err := migrateSummaries(db); err != nil {
-		return nil, fmt.Errorf("migrating summary tables: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating summary tables: %w", err)
 	}
 
 	return &SummaryStore{db: db, ownsDB: false}, nil
@@ -88,7 +88,7 @@ func (s *SummaryStore) Close() error {
 func (s *SummaryStore) Store(ctx context.Context, workspaceID string, summary *store.Summary) error {
 	msgIDs, err := json.Marshal(summary.MessageIDs)
 	if err != nil {
-		return fmt.Errorf("marshalling message IDs: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling message IDs: %w", err)
 	}
 
 	const q = `INSERT INTO summaries (id, workspace_id, from_time, to_time, content, message_ids, created_at)
@@ -104,7 +104,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`
 		formatTime(summary.CreatedAt),
 	)
 	if err != nil {
-		return fmt.Errorf("storing summary %s: %w", summary.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "storing summary %s: %w", summary.ID, err)
 	}
 	return nil
 }
@@ -119,7 +119,7 @@ ORDER BY from_time ASC`
 
 	rows, err := s.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
 	if err != nil {
-		return nil, fmt.Errorf("getting summaries by range: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting summaries by range: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -136,7 +136,7 @@ LIMIT ?`
 
 	rows, err := s.db.QueryContext(ctx, q, workspaceID, n)
 	if err != nil {
-		return nil, fmt.Errorf("getting latest summaries: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting latest summaries: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -159,26 +159,26 @@ func scanSummaries(rows *sql.Rows) ([]*store.Summary, error) {
 			&msgIDsJSON,
 			&createdAt,
 		); err != nil {
-			return nil, fmt.Errorf("scanning summary row: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning summary row: %w", err)
 		}
 
 		var err error
 		sm.FromTime, err = ParseTime(fromTime)
 		if err != nil {
-			return nil, fmt.Errorf("parsing summary %s from_time: %w", sm.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing summary %s from_time: %w", sm.ID, err)
 		}
 		sm.ToTime, err = ParseTime(toTime)
 		if err != nil {
-			return nil, fmt.Errorf("parsing summary %s to_time: %w", sm.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing summary %s to_time: %w", sm.ID, err)
 		}
 		sm.CreatedAt, err = ParseTime(createdAt)
 		if err != nil {
-			return nil, fmt.Errorf("parsing summary %s created_at: %w", sm.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing summary %s created_at: %w", sm.ID, err)
 		}
 
 		if msgIDsJSON != "" && msgIDsJSON != "[]" {
 			if err := json.Unmarshal([]byte(msgIDsJSON), &sm.MessageIDs); err != nil {
-				return nil, fmt.Errorf("unmarshalling message IDs: %w", err)
+				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling message IDs: %w", err)
 			}
 		}
 
@@ -186,7 +186,7 @@ func scanSummaries(rows *sql.Rows) ([]*store.Summary, error) {
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating summaries: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating summaries: %w", err)
 	}
 	return summaries, nil
 }

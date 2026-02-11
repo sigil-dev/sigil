@@ -36,7 +36,7 @@ providers:
   openai:
     api_key: "test-key"
 `
-	err := os.WriteFile(cfgPath, []byte(content), 0644)
+	err := os.WriteFile(cfgPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg, err := config.Load(cfgPath)
@@ -61,7 +61,7 @@ func TestLoad_ValidationCalledAtLoadTime(t *testing.T) {
 networking:
   mode: "invalid-mode"
 `
-	err := os.WriteFile(cfgPath, []byte(content), 0644)
+	err := os.WriteFile(cfgPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	_, err = config.Load(cfgPath)
@@ -231,7 +231,7 @@ func TestValidate_ModelsDefault(t *testing.T) {
 				require.NotEmpty(t, errs)
 				found := false
 				for _, err := range errs {
-					if assert.ObjectsAreEqual(true, containsStr(err.Error(), "models.default")) {
+					if strings.Contains(err.Error(), "models.default") {
 						found = true
 					}
 				}
@@ -254,7 +254,7 @@ func TestValidate_ModelProviderReference(t *testing.T) {
 		require.NotEmpty(t, errs)
 		found := false
 		for _, err := range errs {
-			if containsStr(err.Error(), "provider") && containsStr(err.Error(), "openai") {
+			if strings.Contains(err.Error(), "provider") && strings.Contains(err.Error(), "openai") {
 				found = true
 			}
 		}
@@ -268,7 +268,7 @@ func TestValidate_ModelProviderReference(t *testing.T) {
 		require.NotEmpty(t, errs)
 		found := false
 		for _, err := range errs {
-			if containsStr(err.Error(), "failover") && containsStr(err.Error(), "openai") {
+			if strings.Contains(err.Error(), "failover") && strings.Contains(err.Error(), "openai") {
 				found = true
 			}
 		}
@@ -442,7 +442,7 @@ networking:
 storage:
   backend: "mysql"
 `
-	err := os.WriteFile(cfgPath, []byte(content), 0644)
+	err := os.WriteFile(cfgPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	_, err = config.Load(cfgPath)
