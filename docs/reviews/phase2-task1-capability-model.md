@@ -35,10 +35,10 @@ All spec test cases present except one minor gap:
 
 ## Suggestions
 
-| # | Finding | Recommendation |
-|---|---------|----------------|
-| S1 | Missing spec test: `sessions.*` vs `messages.send` | Add test case |
-| S2 | Tests use `t.Fatalf` instead of testify | Switch to `assert.Equal` for consistency |
-| S3 | Conditional logic in `TestCapabilitySetContains` loop | Move `CapabilitySet` into test table struct |
-| S4 | No input length bounds on `MatchCapability` | Add max segment count check if exposed to untrusted input |
-| S5 | No docs that only `*` glob syntax is supported | Add package-level comment clarifying glob subset |
+| # | Finding | Recommendation | Resolution |
+|---|---------|----------------|------------|
+| S1 | Missing spec test: `sessions.*` vs `messages.send` | Add test case | **Closed:** sigil-anm.16 |
+| S2 | Tests use `t.Fatalf` instead of testify | Switch to `assert.Equal` for consistency | **Closed:** sigil-anm.16 |
+| S3 | Conditional logic in `TestCapabilitySetContains` loop | Move `CapabilitySet` into test table struct | **Closed:** sigil-anm.16 |
+| S4 | No input length bounds on `MatchCapability` | Add max segment count check if exposed to untrusted input | **Closed:** sigil-anm.16 (max 32 segments, validated at manifest load time) |
+| S5 | No docs that only `*` glob syntax is supported | Add package-level comment clarifying glob subset | **Closed:** sigil-anm.16 |

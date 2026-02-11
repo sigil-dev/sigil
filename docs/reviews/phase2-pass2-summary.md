@@ -62,29 +62,32 @@ All 12 bug fixes from pass 1 were verified as correctly implemented:
 
 ### Task 7: Sandbox Config (Informational)
 
-- **N1:** Seatbelt network rules allow any host on permitted ports (`*:443`). This is a Seatbelt platform limitation, not a code bug. Hostname filtering requires userspace proxy (anticipated by `Proxy` field).
-- **N2:** `expandPath` handles `~` prefix but not `~user` syntax. Unlikely to trigger since manifest schema doesn't document `~user`.
+- **N1:** Seatbelt network rules allow any host on permitted ports (`*:443`). This is a Seatbelt platform limitation, not a code bug. Hostname filtering requires userspace proxy (anticipated by `Proxy` field). **Closed:** sigil-anm.24 (SBPL limitation documented in code)
+- **N2:** `expandPath` handles `~` prefix but not `~user` syntax. Unlikely to trigger since manifest schema doesn't document `~user`. **Closed:** sigil-anm.24 (only `~/` expanded, `~user` passed through, documented)
 
 ### Task 8: Wasm Host (Minor)
 
-- **M1:** Error code `CodePluginRuntimeStartFailure` reused for call-time missing-function error. A dedicated call error code would be more precise.
-- **M2:** `fn.Call` error not wrapped with `sigilerr.Wrapf`. Raw Wazero errors pass through.
-- **M3:** No documented procedure for recompiling `.wat` to `.wasm` test fixtures.
-
-None of these are blocking. All are suggestions for future improvement.
+- **M1:** Error code `CodePluginRuntimeStartFailure` reused for call-time missing-function error. A dedicated call error code would be more precise. **Closed:** sigil-anm.22 (added `CodePluginRuntimeCallFailure`)
+- **M2:** `fn.Call` error not wrapped with `sigilerr.Wrapf`. Raw Wazero errors pass through. **Closed:** sigil-anm.22 (wrapped with `sigilerr.Wrapf`)
+- **M3:** No documented procedure for recompiling `.wat` to `.wasm` test fixtures. **Closed:** sigil-anm.23 (testdata/README.md + `task wasm:fixtures`)
 
 ## Remaining Open Items
 
-| Bead | Title | Priority | Items |
-|------|-------|----------|-------|
-| sigil-anm.16 | Capability: test + doc suggestions | P3 | 5 items (test traceability, testify, length bounds, package docs) |
-| sigil-anm.17 | Enforcer: nil guard + ID counter | P3 | 3 items (nil audit store, global counter, actor semantics) |
-| sigil-anm.18 | Manifest: design doc fields + timeout | P4 | 3 items (test isolation, field tracking, timeout parsing) |
-| sigil-anm.19 | Lifecycle: documentation + stringer | P4 | 3 items (ValidTransition docs, error state docs, stringer) |
-| sigil-anm.20 | Manager: unused ctx + ordering | P3 | 4 items (ctx, List ordering, Get/List tests, duplicate names) |
-| sigil-anm.21 | Sandbox: hardening pass | P3 | 7 items (seccomp, unshare-pid, profile file, binaryPath validation) |
+All suggestion beads from pass 2 have been resolved:
 
-All are tracked, prioritized, and non-blocking for Phase 2 gate.
+| Bead | Title | Priority | Status |
+|------|-------|----------|--------|
+| sigil-anm.16 | Capability: test + doc suggestions | P3 | **Closed** — 5 items resolved |
+| sigil-anm.17 | Enforcer: nil guard + ID counter | P3 | **Closed** — 3 items resolved |
+| sigil-anm.18 | Manifest: design doc fields + timeout | P4 | **Closed** — 3 items resolved |
+| sigil-anm.19 | Lifecycle: documentation + stringer | P4 | **Closed** — 3 items resolved |
+| sigil-anm.20 | Manager: unused ctx + ordering | P3 | **Closed** — 4 items resolved |
+| sigil-anm.21 | Sandbox: hardening pass | P3 | **Closed** — 7 items resolved (seccomp deferred as TODO) |
+| sigil-anm.22 | Wasm: error code + call wrapping | P3 | **Closed** — 2 items resolved |
+| sigil-anm.23 | Wasm: fixture rebuild docs | P4 | **Closed** — README + Taskfile target |
+| sigil-anm.24 | Sandbox: Seatbelt docs + ~user fix | P4 | **Closed** — SBPL limitation documented, ~user fixed |
+
+All tracked items resolved. No remaining open suggestion beads.
 
 ## Conclusion
 

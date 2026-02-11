@@ -94,12 +94,28 @@ All important and critical issues from the review were filed as beads, fixed via
 | 11 | Slice mutation bug in `buildCommand` (Task 6) | sigil-anm.12 | `ca34ce2` | PASS (Sonnet) | Closed |
 | 12 | Should embed `NetRPCUnsupportedPlugin` (Task 6) | sigil-anm.12 | `ca34ce2` | PASS (Sonnet) | Closed |
 
-### Remaining (open items)
+### Remaining (deferred items)
 
 | # | Issue | Bead | Status |
 |---|-------|------|--------|
-| 13 | Implement `WithFuelLimit` / fuel metering (Task 8) | sigil-anm.8 | Open -- replaced by Wasm runtime evaluation |
-| 14 | File issue for seccomp filter support (Task 7) | -- | Backlog suggestion, not filed |
+| 13 | Implement `WithFuelLimit` / fuel metering (Task 8) | sigil-anm.8 | Deferred — replaced by Wasm runtime evaluation (D035) |
+| 14 | File issue for seccomp filter support (Task 7) | -- | Deferred — TODO in sandbox.go (needs per-arch BPF filter work) |
+
+### Pass 2 Suggestion Resolution
+
+All suggestion beads from the pass 2 review have been resolved:
+
+| Bead | Task | Items | Status |
+|------|------|-------|--------|
+| sigil-anm.16 | 1. Capability Model | S1-S5 (5 items) | **Closed** |
+| sigil-anm.17 | 2. Security Enforcer | S1-S3 (3 items) | **Closed** |
+| sigil-anm.18 | 3. Plugin Manifest | S1-S3 (3 items) | **Closed** |
+| sigil-anm.19 | 4. Lifecycle SM | S1-S3 (3 items) | **Closed** |
+| sigil-anm.20 | 5. Plugin Manager | S1-S4 (4 items) | **Closed** |
+| sigil-anm.21 | 7. Sandbox Config | S2-S7 (6 of 7 items; S1 seccomp deferred) | **Closed** |
+| sigil-anm.22 | 8. Wasm Host | M1-M2 (error codes + wrapping) | **Closed** |
+| sigil-anm.23 | 8. Wasm Host | M3 (fixture rebuild docs) | **Closed** |
+| sigil-anm.24 | 7. Sandbox Config | N1-N2 (SBPL docs + ~user fix) | **Closed** |
 
 ## Individual Reports
 

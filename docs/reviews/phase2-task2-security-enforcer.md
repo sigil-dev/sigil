@@ -31,8 +31,8 @@ Fail-closed: unregistered plugins denied. Audit logging on every decision path.
 
 ## Suggestions
 
-| # | Finding | Recommendation |
-|---|---------|----------------|
-| S1 | Nil audit store guard | `NewEnforcer(nil)` silently disables audit. Require non-nil or document. |
-| S2 | Global audit ID counter | Move `auditIDCounter` into `Enforcer` struct for isolation |
-| S3 | Actor field semantics | `Actor` set to plugin name; revisit when user identity enters the check flow |
+| # | Finding | Recommendation | Resolution |
+|---|---------|----------------|------------|
+| S1 | Nil audit store guard | `NewEnforcer(nil)` silently disables audit. Require non-nil or document. | **Closed:** sigil-anm.17 (slog.Warn on nil, enforcement continues) |
+| S2 | Global audit ID counter | Move `auditIDCounter` into `Enforcer` struct for isolation | **Closed:** sigil-anm.17 (per-enforcer atomic counter) |
+| S3 | Actor field semantics | `Actor` set to plugin name; revisit when user identity enters the check flow | **Closed:** sigil-anm.17 (doc comment + Phase 4 TODO) |
