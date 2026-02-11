@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+syntax = "proto3";
+
+package plugin.v1;
+
+option go_package = "github.com/sigil-dev/sigil/internal/gen/proto/plugin/v1;pluginv1";
+
+import "common/v1/types.proto";
+import "google/protobuf/struct.proto";
+
+service Tool {
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc Execute(ExecuteRequest) returns (stream ExecuteChunk);
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  repeated common.v1.ToolDefinition tools = 1;
+}
+
+message ExecuteRequest {
+  string tool_name = 1;
+  string arguments = 2;  // JSON string
+  string session_id = 3;
+  int32 timeout_seconds = 4;
+}
+
+message ExecuteChunk {
+  oneof chunk {
+    string text = 1;
+    string error = 2;
+    bool done = 3;
+  }
+}

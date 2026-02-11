@@ -364,3 +364,51 @@ Factory reads `storage.*` config, creates the right backend. Callers import only
 - LadybugDB is a community fork after Kùzu Inc. abandoned KuzuDB (Oct 2025); fork stability uncertain
 
 The interface-first approach means we can adopt either when their Go SDKs stabilize without changing any caller code. Monitor progress and add implementations when ready.
+
+---
+
+## D030: Expand Go UserIdentity to Match Proto
+
+**Question:** Proto `UserIdentity` has 4 fields (`user_id`, `platform`, `platform_user_id`, `display_name`) while the Go store type has 2 (`Channel`, `PlatformID`). Should the Go type be kept minimal or expanded?
+
+**Decision:** Expand Go `UserIdentity` to match proto with all 4 fields: `UserID`, `Platform` (renamed from `Channel`), `PlatformUserID` (renamed from `PlatformID` to match proto `platform_user_id`), `DisplayName`.
+
+**Rationale:** The store type is the internal representation that maps to the proto wire format. Keeping them aligned avoids lossy conversions and simplifies the mapping layer. The additional fields (`UserID` for Sigil's internal identity, `DisplayName` for human-readable context) are needed for proper user management.
+
+**Ref:** PR #5 review finding 12, bead `sigil-fuw.25`
+
+---
+
+## D031: Add Manifest.Validate() as Security Boundary
+
+**Question:** Should the plugin Manifest type have a `Validate()` method?
+
+**Decision:** Yes. Add `Validate()` to `pkg/plugin/types.go` `Manifest` to enforce security invariants at the SDK level.
+
+**Rationale:** The Manifest is the security boundary for capability grants (design doc §3). Default deny means every capability must be explicitly declared and well-formed. Validation catches malformed manifests before they enter the system: empty names, invalid semver versions, unknown plugin types, malformed capability glob patterns, and invalid execution tiers.
+
+**Ref:** PR #5 review suggestion 1, bead `sigil-fuw.26`
+
+---
+
+## D032: Store Package Owns Canonical MessageRole Type
+
+**Question:** Both `internal/store/types.go` and `internal/provider/provider.go` define an identical `MessageRole` type. Which package should own the canonical definition?
+
+**Decision:** `internal/store` owns `MessageRole`. The `provider` package imports from `store`.
+
+**Rationale:** The store package is more foundational — messages are persisted with roles, and all consumers (providers, agents, API layer) read from the store. Having providers import from store follows the dependency direction (higher-level imports lower-level). The proto definitions remain the source of truth for wire format.
+
+**Ref:** PR #5 review suggestion 3, bead `sigil-fuw.29`
+
+---
+
+## D033: Config Validates at Load Time (Fail-Fast)
+
+**Question:** Should configuration be validated at load time or lazily when values are used?
+
+**Decision:** Fail-fast. `config.Load()` calls `Validate()` and returns an error for invalid configurations.
+
+**Rationale:** Late validation produces confusing errors deep in startup or at runtime. Fail-fast at load time gives clear, actionable error messages before any side effects. This is consistent with the security-first design — invalid configuration should never reach the runtime.
+
+**Ref:** PR #5 review suggestion 5, bead `sigil-fuw.31`

@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+syntax = "proto3";
+
+package plugin.v1;
+
+option go_package = "github.com/sigil-dev/sigil/internal/gen/proto/plugin/v1;pluginv1";
+
+import "common/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+service Channel {
+  rpc Start(StartRequest) returns (stream InboundMessage);
+  rpc Send(SendRequest) returns (SendResponse);
+  rpc UpdatePresence(PresenceRequest) returns (PresenceResponse);
+  rpc GetIdentity(GetIdentityRequest) returns (common.v1.UserIdentity);
+}
+
+message StartRequest {}
+
+message InboundMessage {
+  string message_id = 1;
+  string channel_id = 2;
+  common.v1.UserIdentity sender = 3;
+  string content = 4;
+  string thread_id = 5;
+  repeated MediaAttachment media = 6;
+  google.protobuf.Timestamp timestamp = 7;
+  map<string, string> metadata = 8;
+}
+
+message MediaAttachment {
+  string url = 1;
+  string mime_type = 2;
+  string filename = 3;
+  int64 size_bytes = 4;
+}
+
+message SendRequest {
+  string channel_id = 1;
+  string content = 2;
+  string thread_id = 3;
+  repeated MediaAttachment media = 4;
+  bool typing_indicator = 5;
+  string reply_to_message_id = 6;
+}
+
+message SendResponse {
+  bool ok = 1;
+  string platform_message_id = 2;
+  string error = 3;
+}
+
+message PresenceRequest {
+  string channel_id = 1;
+  PresenceStatus status = 2;
+}
+
+enum PresenceStatus {
+  PRESENCE_STATUS_UNSPECIFIED = 0;
+  PRESENCE_STATUS_ONLINE = 1;
+  PRESENCE_STATUS_TYPING = 2;
+  PRESENCE_STATUS_OFFLINE = 3;
+}
+
+message PresenceResponse {
+  bool ok = 1;
+}
+
+message GetIdentityRequest {
+  string platform_user_id = 1;
+}

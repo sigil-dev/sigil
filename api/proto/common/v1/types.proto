@@ -1,0 +1,84 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "github.com/sigil-dev/sigil/internal/gen/proto/common/v1;commonv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// Message represents a conversation message.
+message Message {
+  string id = 1;
+  string session_id = 2;
+  Role role = 3;
+  string content = 4;
+  string tool_call_id = 5;
+  string tool_name = 6;
+  google.protobuf.Timestamp created_at = 7;
+  map<string, string> metadata = 8;
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_USER = 1;
+  ROLE_ASSISTANT = 2;
+  ROLE_SYSTEM = 3;
+  ROLE_TOOL = 4;
+}
+
+// ToolDefinition describes a tool available to the agent.
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  google.protobuf.Struct input_schema = 3;
+}
+
+// ToolCall represents a tool invocation by the LLM.
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments = 3;  // JSON string
+}
+
+// UserIdentity maps a platform user to a canonical identity.
+message UserIdentity {
+  string user_id = 1;
+  string platform = 2;
+  string platform_user_id = 3;
+  string display_name = 4;
+}
+
+// ChannelCapabilities declares what a channel supports.
+message ChannelCapabilities {
+  bool supports_media = 1;
+  bool supports_reactions = 2;
+  bool supports_threads = 3;
+  bool supports_editing = 4;
+  bool supports_typing = 5;
+  bool supports_voice = 6;
+  bool supports_rich_text = 7;
+  int32 max_message_length = 8;
+  repeated string media_types = 9;
+}
+
+// ModelCapabilities declares what a model supports.
+message ModelCapabilities {
+  bool supports_tools = 1;
+  bool supports_vision = 2;
+  bool supports_streaming = 3;
+  bool supports_thinking = 4;
+  int32 max_context_tokens = 5;
+  int32 max_output_tokens = 6;
+}
+
+// Usage tracks token consumption for a single LLM call.
+message Usage {
+  int32 input_tokens = 1;
+  int32 output_tokens = 2;
+  int32 cache_read_tokens = 3;
+  int32 cache_write_tokens = 4;
+}

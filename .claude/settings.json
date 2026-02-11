@@ -26,9 +26,13 @@
   "hooks": {
     "SessionStart": [
       {
-        "type": "command",
-        "command": "./.claude/hooks/session-start.sh",
-        "timeout": 30
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/hooks/session-start.sh",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PreToolUse": [
