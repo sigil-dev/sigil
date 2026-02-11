@@ -3,6 +3,7 @@ version: "3"
 vars:
   BINARY_NAME: sigil
   MAIN_PKG: ./cmd/sigil
+  GO_TAGS: sqlite_fts5
 tasks:
   default:
     desc: Show available tasks
@@ -13,7 +14,7 @@ tasks:
     desc: Run sigil in development mode
     deps: [generate]
     cmds:
-      - go run {{.MAIN_PKG}}
+      - go run -tags {{.GO_TAGS}} {{.MAIN_PKG}}
   # Code Generation
   generate:
     desc: Generate all code (proto, OpenAPI)
@@ -32,16 +33,16 @@ tasks:
   test:
     desc: Run all tests
     cmds:
-      - go test -race -v ./...
+      - go test -race -tags {{.GO_TAGS}} -v ./...
   test:coverage:
     desc: Run tests with coverage
     cmds:
-      - go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - go test -race -tags {{.GO_TAGS}} -coverprofile=coverage.out -covermode=atomic ./...
       - go tool cover -html=coverage.out -o coverage.html
   test:short:
     desc: Run short tests only
     cmds:
-      - go test -short -v ./...
+      - go test -short -tags {{.GO_TAGS}} -v ./...
   # Linting
   lint:
     desc: Run all linters
@@ -53,7 +54,7 @@ tasks:
   lint:go:
     desc: Lint Go code
     cmds:
-      - golangci-lint run
+      - golangci-lint run --build-tags {{.GO_TAGS}}
   lint:markdown:
     desc: Lint Markdown files
     cmds:
@@ -125,7 +126,7 @@ tasks:
     desc: Build sigil binary
     deps: [generate]
     cmds:
-      - go build -o {{.BINARY_NAME}} {{.MAIN_PKG}}
+      - go build -tags {{.GO_TAGS}} -o {{.BINARY_NAME}} {{.MAIN_PKG}}
   build:all:
     desc: Build for all platforms
     deps: [generate]
@@ -135,13 +136,13 @@ tasks:
   build:linux:
     desc: Build for Linux
     cmds:
-      - GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -o dist/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PKG}}
-      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -o dist/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PKG}}
+      - GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PKG}}
+      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PKG}}
   build:darwin:
     desc: Build for macOS
     cmds:
-      - GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -o dist/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PKG}}
-      - GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -o dist/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PKG}}
+      - GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PKG}}
+      - GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PKG}}
   # License headers
   license:check:
     desc: Check SPDX license headers
