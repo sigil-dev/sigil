@@ -59,7 +59,7 @@ tasks:
     cmds:
       - rumdl check .
   lint:yaml:
-    desc: Check YAML formatting
+    desc: Lint YAML files
     cmds:
       - yamlfmt -lint .
   # UI

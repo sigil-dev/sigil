@@ -1,0 +1,10 @@
+exclude:
+  - .beads
+  - .serena
+  - .git
+  - node_modules
+  - vendor
+  - .direnv
+formatter:
+  include_document_start: false
+  pad_line_comments: 2
