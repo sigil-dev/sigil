@@ -20,9 +20,15 @@ const (
 	StateDraining
 	StateStopping
 	StateStopped
+	// StateError is a terminal state by design. When a plugin enters error state,
+	// the plugin infrastructure creates a new Instance rather than attempting recovery.
+	// This ensures clean error handling and prevents stale plugin state.
 	StateError
 )
 
+// String returns the human-readable representation of a plugin state.
+// Hand-written stringer is used instead of go:generate stringer to avoid build
+// complexity for a small, fixed state set and to ensure custom formatting control.
 func (s PluginState) String() string {
 	switch s {
 	case StateDiscovered:
@@ -76,6 +82,8 @@ var validTransitions = map[PluginState]map[PluginState]bool{
 }
 
 // ValidTransition returns true if transitioning from one state to another is allowed.
+// Looking up an unknown from state returns nil from the outer map; checking membership
+// in a nil map returns false, so out-of-range states safely return false without panic.
 func ValidTransition(from, to PluginState) bool {
 	allowed, exists := validTransitions[from][to]
 	return exists && allowed
