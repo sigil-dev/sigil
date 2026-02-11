@@ -228,6 +228,64 @@ func newMockProviderRouterWithBudgetExceeded() *mockProviderRouterBudgetExceeded
 	return &mockProviderRouterBudgetExceeded{}
 }
 
+// mockProviderStreamError emits only an error event.
+type mockProviderStreamError struct{}
+
+func (p *mockProviderStreamError) Name() string                { return "mock-error" }
+func (p *mockProviderStreamError) Available(_ context.Context) bool { return true }
+
+func (p *mockProviderStreamError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderStreamError) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 1)
+	ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: "upstream provider failure"}
+	close(ch)
+	return ch, nil
+}
+
+func (p *mockProviderStreamError) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-error"}, nil
+}
+
+func (p *mockProviderStreamError) Close() error { return nil }
+
+// mockProviderStreamPartialThenError emits partial text then an error event.
+type mockProviderStreamPartialThenError struct{}
+
+func (p *mockProviderStreamPartialThenError) Name() string                { return "mock-partial-error" }
+func (p *mockProviderStreamPartialThenError) Available(_ context.Context) bool { return true }
+
+func (p *mockProviderStreamPartialThenError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderStreamPartialThenError) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 3)
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Partial "}
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "response..."}
+	ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: "connection lost mid-stream"}
+	close(ch)
+	return ch, nil
+}
+
+func (p *mockProviderStreamPartialThenError) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-partial-error"}, nil
+}
+
+func (p *mockProviderStreamPartialThenError) Close() error { return nil }
+
+// newMockProviderRouterStreamError returns a Router with a provider that emits only error events.
+func newMockProviderRouterStreamError() *mockProviderRouter {
+	return &mockProviderRouter{provider: &mockProviderStreamError{}}
+}
+
+// newMockProviderRouterStreamPartialThenError returns a Router with a provider that emits partial text then error.
+func newMockProviderRouterStreamPartialThenError() *mockProviderRouter {
+	return &mockProviderRouter{provider: &mockProviderStreamPartialThenError{}}
+}
+
 // ---------------------------------------------------------------------------
 // Audit store mock
 // ---------------------------------------------------------------------------

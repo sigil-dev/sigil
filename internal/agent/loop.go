@@ -93,8 +93,13 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	l.fireHook(l.hooks, hookCallLLM)
 
 	// Step 4: PROCESS — buffer text deltas and collect tool calls.
-	text, usage := l.processEvents(eventCh)
+	text, usage, streamErr := l.processEvents(eventCh)
 	l.fireHook(l.hooks, hookProcess)
+
+	// If the stream emitted a fatal error, discard partial output and fail the turn.
+	if streamErr != nil {
+		return nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error: session %s", msg.SessionID)
+	}
 
 	// Step 5: RESPOND — build outbound message, persist assistant message.
 	out, err := l.respond(ctx, msg.SessionID, text, usage)
@@ -294,9 +299,10 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 	return eventCh, nil
 }
 
-func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, *provider.Usage) {
+func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, *provider.Usage, error) {
 	var buf strings.Builder
 	var usage *provider.Usage
+	var streamErr error
 
 	for ev := range eventCh {
 		switch ev.Type {
@@ -311,11 +317,12 @@ func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, *provid
 		case provider.EventTypeToolCall:
 			// Tool dispatch is Task 4 — collect but don't process.
 		case provider.EventTypeError:
-			// Errors in the stream are noted but not fatal for now.
+			// Capture fatal stream errors. Partial text is discarded when error occurs.
+			streamErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, ev.Error)
 		}
 	}
 
-	return buf.String(), usage
+	return buf.String(), usage, streamErr
 }
 
 func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {

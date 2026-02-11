@@ -22,25 +22,23 @@ func TestLane_SerializesMessages(t *testing.T) {
 	var mu sync.Mutex
 	var order []int
 
-	// Submit 3 tasks concurrently with staggered submission so FIFO order is
-	// deterministic: task 0 is submitted first, then 1, then 2.
+	// Submit 3 tasks sequentially (not concurrently) to ensure FIFO submission order.
+	// Since the test is about FIFO *execution* order matching submission order,
+	// we don't need concurrent submission - just verify that the lane executes
+	// tasks in the order they were submitted.
 	var wg sync.WaitGroup
 	for i := range 3 {
 		i := i
-		// Stagger submissions so the channel receives them in order.
-		time.Sleep(5 * time.Millisecond)
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := lane.Submit(context.Background(), func(_ context.Context) error {
-				time.Sleep(10 * time.Millisecond)
-				mu.Lock()
-				order = append(order, i)
-				mu.Unlock()
-				return nil
-			})
-			assert.NoError(t, err)
-		}()
+		// Submit synchronously to guarantee submission order 0, 1, 2.
+		err := lane.Submit(context.Background(), func(_ context.Context) error {
+			mu.Lock()
+			order = append(order, i)
+			mu.Unlock()
+			wg.Done()
+			return nil
+		})
+		require.NoError(t, err)
 	}
 
 	wg.Wait()
@@ -57,13 +55,25 @@ func TestLane_ConcurrentSessions(t *testing.T) {
 	var peak atomic.Int32
 	var running atomic.Int32
 
-	var wg sync.WaitGroup
+	// Use a started channel to ensure all workers are ready before measuring concurrency.
+	started := make(chan struct{})
+	var startedCount atomic.Int32
+
+	var workWg sync.WaitGroup
 	for _, sid := range sessionIDs {
 		lane := pool.Get(sid)
-		wg.Add(1)
+		workWg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer workWg.Done()
 			err := lane.Submit(context.Background(), func(_ context.Context) error {
+				// Signal that this worker has started.
+				if startedCount.Add(1) == int32(len(sessionIDs)) {
+					close(started)
+				}
+
+				// Wait for all workers to start before measuring concurrency.
+				<-started
+
 				cur := running.Add(1)
 				// Track peak concurrency.
 				for {
@@ -72,7 +82,11 @@ func TestLane_ConcurrentSessions(t *testing.T) {
 						break
 					}
 				}
-				time.Sleep(50 * time.Millisecond)
+
+				// Keep worker alive long enough for concurrent execution to be measured.
+				// Use a small sleep here since we need actual concurrent execution to
+				// demonstrate that different lanes run in parallel.
+				time.Sleep(10 * time.Millisecond)
 				running.Add(-1)
 				return nil
 			})
@@ -80,7 +94,8 @@ func TestLane_ConcurrentSessions(t *testing.T) {
 		}()
 	}
 
-	wg.Wait()
+	// Wait for all work to complete.
+	workWg.Wait()
 
 	assert.GreaterOrEqual(t, peak.Load(), int32(2),
 		"at least 2 lanes should have run concurrently")

@@ -259,3 +259,71 @@ func TestAgentLoop_BudgetEnforcement(t *testing.T) {
 	assert.Nil(t, out)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded), "expected budget exceeded error code")
 }
+
+func TestAgentLoop_ProviderStreamErrorOnly(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouterStreamError(),
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err, "ProcessMessage should return error when stream emits error event")
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+		"expected CodeProviderUpstreamFailure, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "upstream provider failure")
+
+	// Verify no assistant message was persisted.
+	history, err := ss.GetActiveWindow(ctx, session.ID, 10)
+	require.NoError(t, err)
+	// Should only have the user message, not an assistant message.
+	for _, msg := range history {
+		assert.NotEqual(t, "assistant", msg.Role, "assistant message should not be persisted after stream error")
+	}
+}
+
+func TestAgentLoop_ProviderStreamPartialTextThenError(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouterStreamPartialThenError(),
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err, "ProcessMessage should return error when stream emits error after partial text")
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+		"expected CodeProviderUpstreamFailure, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "connection lost mid-stream")
+
+	// Verify no assistant message was persisted (partial text discarded).
+	history, err := ss.GetActiveWindow(ctx, session.ID, 10)
+	require.NoError(t, err)
+	// Should only have the user message, not an assistant message.
+	for _, msg := range history {
+		assert.NotEqual(t, "assistant", msg.Role, "assistant message should not be persisted after stream error")
+	}
+}
