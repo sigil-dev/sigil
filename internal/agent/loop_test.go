@@ -375,6 +375,239 @@ func TestAgentLoop_NoDuplicateUserMessage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Invalid input and error propagation tests
+// ---------------------------------------------------------------------------
+
+func TestAgentLoop_InvalidInputCombinations(t *testing.T) {
+	tests := []struct {
+		name       string
+		msg        agent.InboundMessage
+		wantCode   sigilerr.Code
+		wantSubstr string
+	}{
+		{
+			name: "empty SessionID",
+			msg: agent.InboundMessage{
+				SessionID:   "",
+				WorkspaceID: "ws-1",
+				UserID:      "user-1",
+				Content:     "hello",
+			},
+			wantCode:   sigilerr.CodeAgentLoopInvalidInput,
+			wantSubstr: "SessionID",
+		},
+		{
+			name: "empty WorkspaceID",
+			msg: agent.InboundMessage{
+				SessionID:   "sess-1",
+				WorkspaceID: "",
+				UserID:      "user-1",
+				Content:     "hello",
+			},
+			wantCode:   sigilerr.CodeAgentLoopInvalidInput,
+			wantSubstr: "WorkspaceID",
+		},
+		{
+			name: "empty UserID",
+			msg: agent.InboundMessage{
+				SessionID:   "sess-1",
+				WorkspaceID: "ws-1",
+				UserID:      "",
+				Content:     "hello",
+			},
+			wantCode:   sigilerr.CodeAgentLoopInvalidInput,
+			wantSubstr: "UserID",
+		},
+		{
+			name: "empty Content",
+			msg: agent.InboundMessage{
+				SessionID:   "sess-1",
+				WorkspaceID: "ws-1",
+				UserID:      "user-1",
+				Content:     "",
+			},
+			wantCode:   sigilerr.CodeAgentLoopInvalidInput,
+			wantSubstr: "Content",
+		},
+		{
+			name: "all fields empty",
+			msg: agent.InboundMessage{
+				SessionID:   "",
+				WorkspaceID: "",
+				UserID:      "",
+				Content:     "",
+			},
+			wantCode:   sigilerr.CodeAgentLoopInvalidInput,
+			wantSubstr: "missing required fields",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loop := agent.NewLoop(agent.LoopConfig{
+				SessionManager: newMockSessionManager(),
+				ProviderRouter: newMockProviderRouter(),
+				AuditStore:     newMockAuditStore(),
+			})
+
+			out, err := loop.ProcessMessage(context.Background(), tt.msg)
+			require.Error(t, err)
+			assert.Nil(t, out)
+			assert.True(t, sigilerr.HasCode(err, tt.wantCode),
+				"expected error code %s, got %s", tt.wantCode, sigilerr.CodeOf(err))
+			assert.Contains(t, err.Error(), tt.wantSubstr)
+		})
+	}
+}
+
+func TestAgentLoop_SessionNotFound(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   "nonexistent-session",
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	// The error should be a not-found error from the session store.
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"expected wrapped error code, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "prepare")
+}
+
+func TestAgentLoop_AppendMessageFailure(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Wrap the store with one that fails on AppendMessage.
+	failingStore := &mockSessionStoreAppendError{
+		mockSessionStore: ss,
+		appendErr:        assert.AnError,
+	}
+	sm = agent.NewSessionManager(failingStore)
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"expected CodeAgentLoopFailure, got %s", sigilerr.CodeOf(err))
+}
+
+func TestAgentLoop_GetActiveWindowFailure(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Wrap the store with one that fails on GetActiveWindow.
+	failingStore := &mockSessionStoreWindowError{
+		mockSessionStore: ss,
+		windowErr:        assert.AnError,
+	}
+	sm = agent.NewSessionManager(failingStore)
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"expected CodeAgentLoopFailure, got %s", sigilerr.CodeOf(err))
+}
+
+func TestAgentLoop_ProviderChatFailure(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Provider whose Chat() method returns an error.
+	router := &mockProviderRouter{
+		provider: &mockProviderChatError{},
+	}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+		"expected CodeProviderUpstreamFailure, got %s", sigilerr.CodeOf(err))
+}
+
+func TestAgentLoop_RouterNonBudgetFailure(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Router that returns a generic error (not budget-exceeded).
+	router := &mockProviderRouterGenericError{}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"expected CodeAgentLoopFailure, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "routing provider")
+}
+
+// ---------------------------------------------------------------------------
 // Tool dispatch mock providers
 // ---------------------------------------------------------------------------
 
@@ -615,3 +848,57 @@ func (p *mockProviderToolCallWithText) Chat(_ context.Context, _ provider.ChatRe
 	close(ch)
 	return ch, nil
 }
+
+// ---------------------------------------------------------------------------
+// Error-propagation mock types
+// ---------------------------------------------------------------------------
+
+// mockSessionStoreAppendError wraps mockSessionStore and fails on AppendMessage.
+type mockSessionStoreAppendError struct {
+	*mockSessionStore
+	appendErr error
+}
+
+func (m *mockSessionStoreAppendError) AppendMessage(_ context.Context, _ string, _ *store.Message) error {
+	return m.appendErr
+}
+
+// mockSessionStoreWindowError wraps mockSessionStore and fails on GetActiveWindow.
+type mockSessionStoreWindowError struct {
+	*mockSessionStore
+	windowErr error
+}
+
+func (m *mockSessionStoreWindowError) GetActiveWindow(_ context.Context, _ string, _ int) ([]*store.Message, error) {
+	return nil, m.windowErr
+}
+
+// mockProviderChatError is a provider whose Chat() method returns an error.
+type mockProviderChatError struct{}
+
+func (p *mockProviderChatError) Name() string                         { return "mock-chat-error" }
+func (p *mockProviderChatError) Available(_ context.Context) bool     { return true }
+func (p *mockProviderChatError) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-chat-error"}, nil
+}
+func (p *mockProviderChatError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderChatError) Close() error { return nil }
+
+func (p *mockProviderChatError) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	return nil, assert.AnError
+}
+
+// mockProviderRouterGenericError is a router that returns a generic error (not budget-exceeded).
+type mockProviderRouterGenericError struct{}
+
+func (r *mockProviderRouterGenericError) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return nil, "", assert.AnError
+}
+
+func (r *mockProviderRouterGenericError) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+
+func (r *mockProviderRouterGenericError) Close() error { return nil }

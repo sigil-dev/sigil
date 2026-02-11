@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -720,6 +721,144 @@ func TestToolDispatcher_CleanOutputNoScanMetadataInAudit(t *testing.T) {
 	assert.NotContains(t, entry.Details, "scan_score")
 }
 
+func TestToolDispatcher_DenyShortCircuitsPluginExecution(t *testing.T) {
+	mockPluginExec := &mockPluginExecutorTracking{}
+
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcerDenyAll(),
+		PluginManager: mockPluginExec,
+		AuditStore:    newMockAuditStore(),
+	})
+
+	result, err := d.Execute(context.Background(), agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "denied")
+	assert.Equal(t, int32(0), mockPluginExec.callCount.Load(), "plugin executor should not be called when capability is denied")
+}
+
+func TestToolDispatcher_PluginRuntimeError(t *testing.T) {
+	pluginErr := fmt.Errorf("plugin crashed unexpectedly")
+	mockPluginExec := &mockPluginExecutorError{err: pluginErr}
+
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcer(),
+		PluginManager: mockPluginExec,
+		AuditStore:    newMockAuditStore(),
+	})
+
+	result, err := d.Execute(context.Background(), agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeCallFailure), "expected CodePluginRuntimeCallFailure")
+	assert.Contains(t, err.Error(), "test-plugin")
+	assert.Contains(t, err.Error(), "search")
+}
+
+func TestToolDispatcher_ContextCancellation(t *testing.T) {
+	mockPluginExec := &mockPluginExecutorCtxAware{}
+
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcer(),
+		PluginManager: mockPluginExec,
+		AuditStore:    newMockAuditStore(),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	result, err := d.Execute(ctx, agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, context.Canceled, "expected context.Canceled error")
+}
+
+func TestToolDispatcher_TimeoutVsCancellation(t *testing.T) {
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       newMockEnforcer(),
+		PluginManager:  newMockPluginManagerSlow(5 * time.Second),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 1 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel context after a short delay (before timeout)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	result, err := d.Execute(ctx, agent.ToolCallRequest{
+		ToolName:        "slow-tool",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	// Verify it's a cancellation error, not a timeout error
+	assert.ErrorIs(t, err, context.Canceled, "expected context.Canceled, not timeout")
+}
+
+func TestToolDispatcher_AuditNotCalledOnDeny(t *testing.T) {
+	auditStore := newMockAuditStore()
+
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcerDenyAll(),
+		PluginManager: newMockPluginManager(),
+		AuditStore:    auditStore,
+	})
+
+	result, err := d.Execute(context.Background(), agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+	assert.Len(t, auditStore.entries, 0, "no audit entry should be created when capability is denied")
+}
+
 // scanToolOutputForTest is a test-accessible wrapper for the private scanToolOutput function.
 // It calls a dummy dispatcher Execute which internally calls scanToolOutput.
 func scanToolOutputForTest(output string) *agent.ScanResult {
@@ -743,4 +882,39 @@ func scanToolOutputForTest(output string) *agent.ScanResult {
 		return nil
 	}
 	return result.ScanResult
+}
+
+// mockPluginExecutorTracking tracks how many times ExecuteTool was called.
+type mockPluginExecutorTracking struct {
+	callCount atomic.Int32
+	result    string
+}
+
+func (m *mockPluginExecutorTracking) ExecuteTool(ctx context.Context, _, _, _ string) (string, error) {
+	m.callCount.Add(1)
+	if m.result != "" {
+		return m.result, nil
+	}
+	return "executed", nil
+}
+
+// mockPluginExecutorError always returns an error.
+type mockPluginExecutorError struct {
+	err error
+}
+
+func (m *mockPluginExecutorError) ExecuteTool(ctx context.Context, _, _, _ string) (string, error) {
+	return "", m.err
+}
+
+// mockPluginExecutorCtxAware checks if context is cancelled before executing.
+type mockPluginExecutorCtxAware struct{}
+
+func (m *mockPluginExecutorCtxAware) ExecuteTool(ctx context.Context, _, _, _ string) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+		return "executed", nil
+	}
 }
