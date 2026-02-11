@@ -20,7 +20,8 @@ var _ store.SummaryStore = (*SummaryStore)(nil)
 
 // SummaryStore implements store.SummaryStore backed by SQLite.
 type SummaryStore struct {
-	db *sql.DB
+	db     *sql.DB
+	ownsDB bool // if true, Close() will close the underlying db connection
 }
 
 // NewSummaryStore opens (or creates) a SQLite database at dbPath and
@@ -41,17 +42,17 @@ func NewSummaryStore(dbPath string) (*SummaryStore, error) {
 		return nil, fmt.Errorf("migrating summary tables: %w", err)
 	}
 
-	return &SummaryStore{db: db}, nil
+	return &SummaryStore{db: db, ownsDB: true}, nil
 }
 
 // NewSummaryStoreWithDB creates a SummaryStore using an existing database connection.
-// This is useful for sharing a single database connection between multiple stores.
+// The caller retains ownership of the connection; Close() becomes a no-op.
 func NewSummaryStoreWithDB(db *sql.DB) (*SummaryStore, error) {
 	if err := migrateSummaries(db); err != nil {
 		return nil, fmt.Errorf("migrating summary tables: %w", err)
 	}
 
-	return &SummaryStore{db: db}, nil
+	return &SummaryStore{db: db, ownsDB: false}, nil
 }
 
 func migrateSummaries(db *sql.DB) error {
@@ -74,9 +75,13 @@ CREATE INDEX IF NOT EXISTS idx_summaries_workspace_created ON summaries(workspac
 	return err
 }
 
-// Close closes the underlying database connection.
+// Close closes the underlying database connection if this store owns it.
+// Stores created with NewSummaryStoreWithDB do not own the connection.
 func (s *SummaryStore) Close() error {
-	return s.db.Close()
+	if s.ownsDB {
+		return s.db.Close()
+	}
+	return nil
 }
 
 // Store inserts a summary into the store for the given workspace.

@@ -495,7 +495,7 @@ func (s *auditStore) Query(ctx context.Context, filter store.AuditFilter) ([]*st
 		args = append(args, formatTime(filter.From))
 	}
 	if !filter.To.IsZero() {
-		conditions = append(conditions, "timestamp <= ?")
+		conditions = append(conditions, "timestamp < ?")
 		args = append(args, formatTime(filter.To))
 	}
 

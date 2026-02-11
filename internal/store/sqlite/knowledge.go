@@ -333,7 +333,10 @@ func (k *KnowledgeStore) lookupWorkspace(ctx context.Context, entityID string) (
 	var ws string
 	err := k.db.QueryRowContext(ctx, q, entityID).Scan(&ws)
 	if err != nil {
-		return "", fmt.Errorf("entity %s: %w", entityID, store.ErrNotFound)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("entity %s: %w", entityID, store.ErrNotFound)
+		}
+		return "", fmt.Errorf("looking up workspace for entity %s: %w", entityID, err)
 	}
 	return ws, nil
 }
@@ -406,15 +409,15 @@ func (k *KnowledgeStore) GetRelationships(ctx context.Context, entityID string, 
 		if metaStr.Valid && metaStr.String != "" {
 			var rm relTripleMetadata
 			if err := json.Unmarshal([]byte(metaStr.String), &rm); err != nil {
-				slog.Warn("failed to unmarshal relationship metadata",
+				slog.Warn("skipping relationship with corrupt metadata",
 					slog.String("from_id", subject),
 					slog.String("to_id", object),
 					slog.String("error", err.Error()),
 				)
-			} else {
-				rel.ID = rm.RelID
-				rel.Metadata = rm.Metadata
+				continue
 			}
+			rel.ID = rm.RelID
+			rel.Metadata = rm.Metadata
 		}
 
 		rels = append(rels, rel)
@@ -530,16 +533,16 @@ func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, quer
 		if metaStr.Valid && metaStr.String != "" {
 			var fm factTripleMetadata
 			if err := json.Unmarshal([]byte(metaStr.String), &fm); err != nil {
-				slog.Warn("failed to unmarshal fact metadata",
-					slog.String("fact_id", f.ID),
+				slog.Warn("skipping fact with corrupt metadata",
 					slog.String("entity_id", subject),
+					slog.String("predicate", predicate),
 					slog.String("error", err.Error()),
 				)
-			} else {
-				f.ID = fm.FactID
-				f.Confidence = fm.Confidence
-				f.Source = fm.Source
+				continue
 			}
+			f.ID = fm.FactID
+			f.Confidence = fm.Confidence
+			f.Source = fm.Source
 		}
 
 		facts = append(facts, f)
@@ -701,15 +704,15 @@ WHERE workspace = ?
 		if metaStr.Valid && metaStr.String != "" {
 			var rm relTripleMetadata
 			if err := json.Unmarshal([]byte(metaStr.String), &rm); err != nil {
-				slog.Warn("failed to unmarshal relationship metadata",
+				slog.Warn("skipping relationship with corrupt metadata",
 					slog.String("from_id", subject),
 					slog.String("to_id", object),
 					slog.String("error", err.Error()),
 				)
-			} else {
-				rel.ID = rm.RelID
-				rel.Metadata = rm.Metadata
+				continue
 			}
+			rel.ID = rm.RelID
+			rel.Metadata = rm.Metadata
 		}
 
 		// Deduplicate by relationship ID.

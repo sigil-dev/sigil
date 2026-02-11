@@ -47,7 +47,8 @@ func newWorkspaceStores(workspacePath string, vectorDims int) (store.SessionStor
 	if err != nil {
 		return nil, nil, nil, errors.Join(fmt.Errorf("opening memory db: %w", err), cleanup())
 	}
-	// Note: memoryDB is not added to closers here; it's closed via msgStore/sumStore Close()
+	// memoryDB is not added to closers because it's passed to
+	// NewCompositeMemoryStore as an additional closer for proper lifecycle.
 
 	msgStore, err := NewMessageStoreWithDB(memoryDB)
 	if err != nil {
@@ -68,7 +69,7 @@ func newWorkspaceStores(workspacePath string, vectorDims int) (store.SessionStor
 	}
 	closers = append(closers, kStore)
 
-	ms := store.NewCompositeMemoryStore(msgStore, sumStore, kStore)
+	ms := store.NewCompositeMemoryStore(msgStore, sumStore, kStore, memoryDB)
 
 	vs, err := NewVectorStore(filepath.Join(workspacePath, "vectors.db"), vectorDims)
 	if err != nil {

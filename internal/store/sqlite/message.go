@@ -21,7 +21,8 @@ var _ store.MessageStore = (*MessageStore)(nil)
 
 // MessageStore implements store.MessageStore backed by SQLite with FTS5.
 type MessageStore struct {
-	db *sql.DB
+	db     *sql.DB
+	ownsDB bool // if true, Close() will close the underlying db connection
 }
 
 // NewMessageStore opens (or creates) a SQLite database at dbPath and
@@ -42,17 +43,17 @@ func NewMessageStore(dbPath string) (*MessageStore, error) {
 		return nil, fmt.Errorf("migrating message tables: %w", err)
 	}
 
-	return &MessageStore{db: db}, nil
+	return &MessageStore{db: db, ownsDB: true}, nil
 }
 
 // NewMessageStoreWithDB creates a MessageStore using an existing database connection.
-// This is useful for sharing a single database connection between multiple stores.
+// The caller retains ownership of the connection; Close() becomes a no-op.
 func NewMessageStoreWithDB(db *sql.DB) (*MessageStore, error) {
 	if err := migrateMessages(db); err != nil {
 		return nil, fmt.Errorf("migrating message tables: %w", err)
 	}
 
-	return &MessageStore{db: db}, nil
+	return &MessageStore{db: db, ownsDB: false}, nil
 }
 
 func migrateMessages(db *sql.DB) error {
@@ -97,9 +98,13 @@ END;
 	return err
 }
 
-// Close closes the underlying database connection.
+// Close closes the underlying database connection if this store owns it.
+// Stores created with NewMessageStoreWithDB do not own the connection.
 func (m *MessageStore) Close() error {
-	return m.db.Close()
+	if m.ownsDB {
+		return m.db.Close()
+	}
+	return nil
 }
 
 // sanitizeFTS5 escapes FTS5 query metacharacters to prevent injection.

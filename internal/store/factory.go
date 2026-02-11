@@ -6,6 +6,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 )
 
@@ -81,15 +82,19 @@ type compositeMemoryStore struct {
 	messages  MessageStore
 	summaries SummaryStore
 	knowledge KnowledgeStore
+	closers   []io.Closer // additional resources to close (e.g. shared DB connections)
 }
 
 // NewCompositeMemoryStore creates a MemoryStore from individual sub-stores.
 // Backend packages use this to avoid duplicating the composition logic.
-func NewCompositeMemoryStore(msgs MessageStore, sums SummaryStore, know KnowledgeStore) MemoryStore {
+// Additional closers (e.g. shared database connections) are closed after
+// the sub-stores during Close().
+func NewCompositeMemoryStore(msgs MessageStore, sums SummaryStore, know KnowledgeStore, closers ...io.Closer) MemoryStore {
 	return &compositeMemoryStore{
 		messages:  msgs,
 		summaries: sums,
 		knowledge: know,
+		closers:   closers,
 	}
 }
 
@@ -107,6 +112,11 @@ func (c *compositeMemoryStore) Close() error {
 	}
 	if err := c.knowledge.Close(); err != nil {
 		errs = append(errs, err)
+	}
+	for _, cl := range c.closers {
+		if err := cl.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
