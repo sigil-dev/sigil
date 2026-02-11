@@ -5,9 +5,10 @@ package store
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"sync"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // defaultVectorDimensions is the default embedding dimension (matches OpenAI text-embedding-ada-002).
@@ -52,7 +53,7 @@ func NewWorkspaceStores(cfg *StorageConfig, workspacePath string) (SessionStore,
 	factory, ok := workspaceFactories[backend]
 	factoriesMu.RUnlock()
 	if !ok {
-		return nil, nil, nil, fmt.Errorf("unsupported storage backend: %q", backend)
+		return nil, nil, nil, sigilerr.Errorf(sigilerr.CodeStoreBackendUnsupported, "unsupported storage backend: %q", backend)
 	}
 
 	dims := defaultVectorDimensions
@@ -71,7 +72,7 @@ func NewGatewayStore(cfg *StorageConfig, dataPath string) (GatewayStore, error) 
 	factory, ok := gatewayFactories[backend]
 	factoriesMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("unsupported storage backend: %q", backend)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreBackendUnsupported, "unsupported storage backend: %q", backend)
 	}
 
 	return factory(dataPath)

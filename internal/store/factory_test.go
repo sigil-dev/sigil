@@ -218,12 +218,12 @@ func (m *mockKnowledgeStore) Traverse(ctx context.Context, startID string, depth
 
 func TestCompositeMemoryStore_Close(t *testing.T) {
 	tests := []struct {
-		name          string
-		messagesErr   error
-		summariesErr  error
-		knowledgeErr  error
-		wantNil       bool
-		wantContains  []string // error messages that should be present
+		name         string
+		messagesErr  error
+		summariesErr error
+		knowledgeErr error
+		wantNil      bool
+		wantContains []string // error messages that should be present
 	}{
 		{
 			name:         "all stores close successfully",

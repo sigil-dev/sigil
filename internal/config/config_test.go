@@ -36,7 +36,7 @@ providers:
   openai:
     api_key: "test-key"
 `
-	err := os.WriteFile(cfgPath, []byte(content), 0644)
+	err := os.WriteFile(cfgPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg, err := config.Load(cfgPath)
@@ -61,7 +61,7 @@ func TestLoad_ValidationCalledAtLoadTime(t *testing.T) {
 networking:
   mode: "invalid-mode"
 `
-	err := os.WriteFile(cfgPath, []byte(content), 0644)
+	err := os.WriteFile(cfgPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	_, err = config.Load(cfgPath)
@@ -442,10 +442,14 @@ networking:
 storage:
   backend: "mysql"
 `
-	err := os.WriteFile(cfgPath, []byte(content), 0644)
+	err := os.WriteFile(cfgPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	_, err = config.Load(cfgPath)
 	require.Error(t, err, "Load should fail with invalid config")
 	assert.Contains(t, err.Error(), "validating config")
+}
+
+func containsStr(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

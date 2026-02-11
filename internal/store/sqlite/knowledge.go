@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Compile-time interface check.
@@ -33,17 +33,17 @@ type KnowledgeStore struct {
 func NewKnowledgeStore(dbPath string) (*KnowledgeStore, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
-		return nil, fmt.Errorf("opening sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening sqlite db: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("pinging sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "pinging sqlite db: %w", err)
 	}
 
 	if err := migrateKnowledge(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrating knowledge tables: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating knowledge tables: %w", err)
 	}
 
 	return &KnowledgeStore{db: db}, nil
@@ -101,7 +101,7 @@ type entityMetadata struct {
 func (k *KnowledgeStore) PutEntity(ctx context.Context, workspaceID string, entity *store.Entity) error {
 	tx, err := k.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -114,32 +114,32 @@ func (k *KnowledgeStore) PutEntity(ctx context.Context, workspaceID string, enti
 	}
 	metaJSON, err := json.Marshal(em)
 	if err != nil {
-		return fmt.Errorf("marshalling entity metadata: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling entity metadata: %w", err)
 	}
 
 	// Type triple carries entity-level metadata.
 	if err := k.upsertTriple(ctx, tx, workspaceID, entity.ID, "type", entity.Type, string(metaJSON), created); err != nil {
-		return fmt.Errorf("putting entity type triple: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "putting entity type triple: %w", err)
 	}
 
 	// Name triple.
 	if err := k.upsertTriple(ctx, tx, workspaceID, entity.ID, "name", entity.Name, "", created); err != nil {
-		return fmt.Errorf("putting entity name triple: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "putting entity name triple: %w", err)
 	}
 
 	// Property triples.
 	for key, val := range entity.Properties {
 		valJSON, err := json.Marshal(val)
 		if err != nil {
-			return fmt.Errorf("marshalling property %s: %w", key, err)
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling property %s: %w", key, err)
 		}
 		if err := k.upsertTriple(ctx, tx, workspaceID, entity.ID, "prop:"+key, string(valJSON), "", created); err != nil {
-			return fmt.Errorf("putting entity property triple %s: %w", key, err)
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "putting entity property triple %s: %w", key, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing entity %s: %w", entity.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "committing entity %s: %w", entity.ID, err)
 	}
 	return nil
 }
@@ -151,7 +151,7 @@ WHERE workspace = ? AND subject = ? AND (predicate = 'type' OR predicate = 'name
 
 	rows, err := k.db.QueryContext(ctx, q, workspaceID, id)
 	if err != nil {
-		return nil, fmt.Errorf("getting entity %s: %w", id, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting entity %s: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -167,7 +167,7 @@ WHERE workspace = ? AND subject = ? AND (predicate = 'type' OR predicate = 'name
 		var metadataStr sql.NullString
 
 		if err := rows.Scan(&predicate, &object, &metadataStr); err != nil {
-			return nil, fmt.Errorf("scanning entity triple: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning entity triple: %w", err)
 		}
 		found = true
 
@@ -186,11 +186,11 @@ WHERE workspace = ? AND subject = ? AND (predicate = 'type' OR predicate = 'name
 					var parseErr error
 					ent.CreatedAt, parseErr = ParseTime(em.CreatedAt)
 					if parseErr != nil {
-						return nil, fmt.Errorf("parsing entity %s created_at: %w", id, parseErr)
+						return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing entity %s created_at: %w", id, parseErr)
 					}
 					ent.UpdatedAt, parseErr = ParseTime(em.UpdatedAt)
 					if parseErr != nil {
-						return nil, fmt.Errorf("parsing entity %s updated_at: %w", id, parseErr)
+						return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing entity %s updated_at: %w", id, parseErr)
 					}
 				}
 			}
@@ -206,11 +206,11 @@ WHERE workspace = ? AND subject = ? AND (predicate = 'type' OR predicate = 'name
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating entity triples: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating entity triples: %w", err)
 	}
 
 	if !found {
-		return nil, fmt.Errorf("entity %s in workspace %s: %w", id, workspaceID, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "entity %s in workspace %s: %w", id, workspaceID, store.ErrNotFound)
 	}
 
 	if len(ent.Properties) == 0 {
@@ -252,7 +252,7 @@ func (k *KnowledgeStore) FindEntities(ctx context.Context, workspaceID string, q
 
 	rows, err := k.db.QueryContext(ctx, qb.String(), args...)
 	if err != nil {
-		return nil, fmt.Errorf("finding entity IDs: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "finding entity IDs: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -260,12 +260,12 @@ func (k *KnowledgeStore) FindEntities(ctx context.Context, workspaceID string, q
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scanning entity ID: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning entity ID: %w", err)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating entity IDs: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating entity IDs: %w", err)
 	}
 
 	// Reconstruct each entity from its triples.
@@ -295,7 +295,7 @@ func (k *KnowledgeStore) PutRelationship(ctx context.Context, rel *store.Relatio
 	// Look up workspace from the source entity's type triple.
 	workspace, err := k.lookupWorkspace(ctx, rel.FromID)
 	if err != nil {
-		return fmt.Errorf("looking up workspace for relationship: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "looking up workspace for relationship: %w", err)
 	}
 
 	rm := relTripleMetadata{
@@ -304,7 +304,7 @@ func (k *KnowledgeStore) PutRelationship(ctx context.Context, rel *store.Relatio
 	}
 	metaJSON, err := json.Marshal(rm)
 	if err != nil {
-		return fmt.Errorf("marshalling relationship metadata: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling relationship metadata: %w", err)
 	}
 
 	const q = `INSERT INTO triples (subject, predicate, object, workspace, metadata, created)
@@ -322,7 +322,7 @@ ON CONFLICT(workspace, subject, predicate, object) DO UPDATE SET
 		formatTime(time.Now()),
 	)
 	if err != nil {
-		return fmt.Errorf("putting relationship %s: %w", rel.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "putting relationship %s: %w", rel.ID, err)
 	}
 	return nil
 }
@@ -334,9 +334,9 @@ func (k *KnowledgeStore) lookupWorkspace(ctx context.Context, entityID string) (
 	err := k.db.QueryRowContext(ctx, q, entityID).Scan(&ws)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("entity %s: %w", entityID, store.ErrNotFound)
+			return "", sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "entity %s: %w", entityID, store.ErrNotFound)
 		}
-		return "", fmt.Errorf("looking up workspace for entity %s: %w", entityID, err)
+		return "", sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "looking up workspace for entity %s: %w", entityID, err)
 	}
 	return ws, nil
 }
@@ -347,7 +347,7 @@ func (k *KnowledgeStore) GetRelationships(ctx context.Context, entityID string, 
 	// Look up workspace for scoping.
 	workspace, err := k.lookupWorkspace(ctx, entityID)
 	if err != nil {
-		return nil, fmt.Errorf("looking up workspace for relationships: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "looking up workspace for relationships: %w", err)
 	}
 
 	var (
@@ -387,7 +387,7 @@ func (k *KnowledgeStore) GetRelationships(ctx context.Context, entityID string, 
 
 	rows, err := k.db.QueryContext(ctx, qb.String(), args...)
 	if err != nil {
-		return nil, fmt.Errorf("getting relationships for %s: %w", entityID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting relationships for %s: %w", entityID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -397,7 +397,7 @@ func (k *KnowledgeStore) GetRelationships(ctx context.Context, entityID string, 
 		var metaStr sql.NullString
 
 		if err := rows.Scan(&subject, &predicate, &object, &metaStr); err != nil {
-			return nil, fmt.Errorf("scanning relationship triple: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning relationship triple: %w", err)
 		}
 
 		rel := &store.Relationship{
@@ -423,7 +423,7 @@ func (k *KnowledgeStore) GetRelationships(ctx context.Context, entityID string, 
 		rels = append(rels, rel)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating relationships: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating relationships: %w", err)
 	}
 
 	return rels, nil
@@ -446,7 +446,7 @@ func (k *KnowledgeStore) PutFact(ctx context.Context, workspaceID string, fact *
 	}
 	metaJSON, err := json.Marshal(fm)
 	if err != nil {
-		return fmt.Errorf("marshalling fact metadata: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling fact metadata: %w", err)
 	}
 
 	const q = `INSERT INTO triples (subject, predicate, object, workspace, metadata, created)
@@ -464,7 +464,7 @@ ON CONFLICT(workspace, subject, predicate, object) DO UPDATE SET
 		formatTime(fact.CreatedAt),
 	)
 	if err != nil {
-		return fmt.Errorf("putting fact %s: %w", fact.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "putting fact %s: %w", fact.ID, err)
 	}
 	return nil
 }
@@ -504,7 +504,7 @@ func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, quer
 
 	rows, err := k.db.QueryContext(ctx, qb.String(), args...)
 	if err != nil {
-		return nil, fmt.Errorf("finding facts: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "finding facts: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -514,12 +514,12 @@ func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, quer
 		var metaStr sql.NullString
 
 		if err := rows.Scan(&subject, &predicate, &object, &workspace, &metaStr, &created); err != nil {
-			return nil, fmt.Errorf("scanning fact triple: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning fact triple: %w", err)
 		}
 
 		createdAt, err := ParseTime(created)
 		if err != nil {
-			return nil, fmt.Errorf("parsing fact created_at: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing fact created_at: %w", err)
 		}
 
 		f := &store.Fact{
@@ -548,7 +548,7 @@ func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, quer
 		facts = append(facts, f)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating facts: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating facts: %w", err)
 	}
 
 	return facts, nil
@@ -571,7 +571,7 @@ func (k *KnowledgeStore) Traverse(ctx context.Context, startID string, depth int
 	// Look up workspace for scoping.
 	workspace, err := k.lookupWorkspace(ctx, startID)
 	if err != nil {
-		return nil, fmt.Errorf("looking up workspace for traversal: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "looking up workspace for traversal: %w", err)
 	}
 
 	// Use recursive CTE to find all reachable nodes.
@@ -609,7 +609,7 @@ SELECT DISTINCT node FROM reachable`)
 
 	rows, err := k.db.QueryContext(ctx, qb.String(), args...)
 	if err != nil {
-		return nil, fmt.Errorf("traversing from %s: %w", startID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "traversing from %s: %w", startID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -617,12 +617,12 @@ SELECT DISTINCT node FROM reachable`)
 	for rows.Next() {
 		var node string
 		if err := rows.Scan(&node); err != nil {
-			return nil, fmt.Errorf("scanning traversal node: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning traversal node: %w", err)
 		}
 		nodeSet[node] = true
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating traversal nodes: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating traversal nodes: %w", err)
 	}
 
 	// Collect entities for all reachable nodes.
@@ -634,7 +634,7 @@ SELECT DISTINCT node FROM reachable`)
 			if errors.Is(err, store.ErrNotFound) {
 				continue // Node might not be a full entity
 			}
-			return nil, fmt.Errorf("getting entity %s during traversal: %w", id, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting entity %s during traversal: %w", id, err)
 		}
 		entities = append(entities, ent)
 	}
@@ -642,7 +642,7 @@ SELECT DISTINCT node FROM reachable`)
 	// Collect relationships between reachable nodes.
 	rels, err := k.getRelsBetweenNodes(ctx, workspace, nodeSet)
 	if err != nil {
-		return nil, fmt.Errorf("collecting traversal relationships: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "collecting traversal relationships: %w", err)
 	}
 
 	return &store.Graph{
@@ -692,7 +692,7 @@ WHERE workspace = ?
 		var metaStr sql.NullString
 
 		if err := rows.Scan(&subject, &predicate, &object, &metaStr); err != nil {
-			return nil, fmt.Errorf("scanning relationship triple: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning relationship triple: %w", err)
 		}
 
 		rel := &store.Relationship{
@@ -726,7 +726,7 @@ WHERE workspace = ?
 		rels = append(rels, rel)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating relationship triples: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating relationship triples: %w", err)
 	}
 
 	return rels, nil

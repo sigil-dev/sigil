@@ -7,12 +7,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Compile-time interface check.
@@ -28,17 +28,17 @@ type SessionStore struct {
 func NewSessionStore(dbPath string) (*SessionStore, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
-		return nil, fmt.Errorf("opening sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening sqlite db: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("pinging sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "pinging sqlite db: %w", err)
 	}
 
 	if err := migrate(db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrating sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating sqlite db: %w", err)
 	}
 
 	return &SessionStore{db: db}, nil
@@ -121,7 +121,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		formatTime(session.UpdatedAt),
 	)
 	if err != nil {
-		return fmt.Errorf("creating session %s: %w", session.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "creating session %s: %w", session.ID, err)
 	}
 	return nil
 }
@@ -158,23 +158,23 @@ FROM sessions WHERE id = ?`
 		&updatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("session %s: %w", id, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "session %s: %w", id, store.ErrNotFound)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("getting session %s: %w", id, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting session %s: %w", id, err)
 	}
 
 	sess.LastCompaction, err = ParseTime(lastComp)
 	if err != nil {
-		return nil, fmt.Errorf("parsing session %s last_compaction: %w", id, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing session %s last_compaction: %w", id, err)
 	}
 	sess.CreatedAt, err = ParseTime(createdAt)
 	if err != nil {
-		return nil, fmt.Errorf("parsing session %s created_at: %w", id, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing session %s created_at: %w", id, err)
 	}
 	sess.UpdatedAt, err = ParseTime(updatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("parsing session %s updated_at: %w", id, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing session %s updated_at: %w", id, err)
 	}
 
 	return &sess, nil
@@ -208,15 +208,15 @@ updated_at = ? WHERE id = ?`
 		session.ID,
 	)
 	if err != nil {
-		return fmt.Errorf("updating session %s: %w", session.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "updating session %s: %w", session.ID, err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("checking rows affected for session %s: %w", session.ID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows affected for session %s: %w", session.ID, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("session %s: %w", session.ID, store.ErrNotFound)
+		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "session %s: %w", session.ID, store.ErrNotFound)
 	}
 	return nil
 }
@@ -236,7 +236,7 @@ FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 
 	rows, err := s.db.QueryContext(ctx, q, workspaceID, limit, opts.Offset)
 	if err != nil {
-		return nil, fmt.Errorf("listing sessions for workspace %s: %w", workspaceID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "listing sessions for workspace %s: %w", workspaceID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -264,25 +264,25 @@ FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 			&createdAt,
 			&updatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scanning session row: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning session row: %w", err)
 		}
 		sess.LastCompaction, err = ParseTime(lastComp)
 		if err != nil {
-			return nil, fmt.Errorf("parsing session %s last_compaction: %w", sess.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing session %s last_compaction: %w", sess.ID, err)
 		}
 		sess.CreatedAt, err = ParseTime(createdAt)
 		if err != nil {
-			return nil, fmt.Errorf("parsing session %s created_at: %w", sess.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing session %s created_at: %w", sess.ID, err)
 		}
 		sess.UpdatedAt, err = ParseTime(updatedAt)
 		if err != nil {
-			return nil, fmt.Errorf("parsing session %s updated_at: %w", sess.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing session %s updated_at: %w", sess.ID, err)
 		}
 		sessions = append(sessions, &sess)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating sessions: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating sessions: %w", err)
 	}
 	return sessions, nil
 }
@@ -290,15 +290,15 @@ FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
 func (s *SessionStore) DeleteSession(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
 	if err != nil {
-		return fmt.Errorf("deleting session %s: %w", id, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting session %s: %w", id, err)
 	}
 
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("checking rows affected for session %s: %w", id, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows affected for session %s: %w", id, err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("session %s: %w", id, store.ErrNotFound)
+		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "session %s: %w", id, store.ErrNotFound)
 	}
 	return nil
 }
@@ -306,7 +306,7 @@ func (s *SessionStore) DeleteSession(ctx context.Context, id string) error {
 func (s *SessionStore) AppendMessage(ctx context.Context, sessionID string, msg *store.Message) error {
 	metadata, err := json.Marshal(msg.Metadata)
 	if err != nil {
-		return fmt.Errorf("marshalling message metadata: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling message metadata: %w", err)
 	}
 
 	const q = `INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_name, created_at, metadata)
@@ -323,7 +323,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		string(metadata),
 	)
 	if err != nil {
-		return fmt.Errorf("appending message %s to session %s: %w", msg.ID, sessionID, err)
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "appending message %s to session %s: %w", msg.ID, sessionID, err)
 	}
 	return nil
 }
@@ -339,7 +339,7 @@ FROM (
 
 	rows, err := s.db.QueryContext(ctx, q, sessionID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("getting active window for session %s: %w", sessionID, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting active window for session %s: %w", sessionID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -357,22 +357,22 @@ FROM (
 			&createdAt,
 			&metaJSON,
 		); err != nil {
-			return nil, fmt.Errorf("scanning message row: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning message row: %w", err)
 		}
 		msg.CreatedAt, err = ParseTime(createdAt)
 		if err != nil {
-			return nil, fmt.Errorf("parsing message %s created_at: %w", msg.ID, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing message %s created_at: %w", msg.ID, err)
 		}
 		if metaJSON != "" && metaJSON != "{}" {
 			if err := json.Unmarshal([]byte(metaJSON), &msg.Metadata); err != nil {
-				return nil, fmt.Errorf("unmarshalling message metadata: %w", err)
+				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling message metadata: %w", err)
 			}
 		}
 		msgs = append(msgs, &msg)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating messages: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating messages: %w", err)
 	}
 	return msgs, nil
 }
@@ -392,7 +392,7 @@ func ParseTime(s string) (time.Time, error) {
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parsing timestamp %q: %w", s, err)
+		return time.Time{}, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "parsing timestamp %q: %w", s, err)
 	}
 	return t, nil
 }
