@@ -436,3 +436,81 @@ func TestEnforcer_AuditLogging(t *testing.T) {
 	assert.NotEmpty(t, denied.ID)
 	assert.NotEqual(t, allowed.ID, denied.ID)
 }
+
+// --- sigil-anm.17: Nil audit store guard and counter isolation ---
+
+func TestEnforcer_NilAuditStore(t *testing.T) {
+	t.Parallel()
+
+	// Nil audit store should be allowed (silent audit disabling).
+	// Verify no panic and no audit operations.
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("telegram", security.NewCapabilitySet(
+		"sessions.read",
+	), security.NewCapabilitySet())
+
+	// Should succeed even with nil audit store
+	err := enforcer.Check(context.Background(), security.CheckRequest{
+		Plugin:          "telegram",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	})
+	require.NoError(t, err)
+}
+
+func TestEnforcer_IndependentAuditIDSequences(t *testing.T) {
+	t.Parallel()
+
+	// Two independent enforcers should have independent audit ID counters.
+	// This ensures multi-tenant scenarios don't have ID collisions.
+	audit1 := &mockAuditStore{}
+	audit2 := &mockAuditStore{}
+	enforcer1 := security.NewEnforcer(audit1)
+	enforcer2 := security.NewEnforcer(audit2)
+
+	enforcer1.RegisterPlugin("plugin1", security.NewCapabilitySet("sessions.read"), security.NewCapabilitySet())
+	enforcer2.RegisterPlugin("plugin2", security.NewCapabilitySet("sessions.read"), security.NewCapabilitySet())
+
+	ctx := context.Background()
+
+	// Generate multiple audit entries in each enforcer
+	for i := 0; i < 3; i++ {
+		require.NoError(t, enforcer1.Check(ctx, security.CheckRequest{
+			Plugin:          "plugin1",
+			Capability:      "sessions.read",
+			WorkspaceID:     "ws-1",
+			WorkspaceAllow:  security.NewCapabilitySet("*"),
+			UserPermissions: security.NewCapabilitySet("*"),
+		}))
+
+		require.NoError(t, enforcer2.Check(ctx, security.CheckRequest{
+			Plugin:          "plugin2",
+			Capability:      "sessions.read",
+			WorkspaceID:     "ws-2",
+			WorkspaceAllow:  security.NewCapabilitySet("*"),
+			UserPermissions: security.NewCapabilitySet("*"),
+		}))
+	}
+
+	entries1 := audit1.snapshot()
+	entries2 := audit2.snapshot()
+
+	require.Len(t, entries1, 3)
+	require.Len(t, entries2, 3)
+
+	// Extract all IDs
+	ids := make(map[string]bool)
+	for _, e := range entries1 {
+		assert.NotEmpty(t, e.ID)
+		ids[e.ID] = true
+	}
+	for _, e := range entries2 {
+		assert.NotEmpty(t, e.ID)
+		ids[e.ID] = true
+	}
+
+	// All IDs should be unique (no collision across enforcers)
+	assert.Len(t, ids, 6, "expected 6 unique audit IDs across two independent enforcers")
+}

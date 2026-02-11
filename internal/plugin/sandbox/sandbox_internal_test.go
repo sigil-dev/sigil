@@ -4,6 +4,7 @@
 package sandbox
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -364,6 +365,232 @@ func TestBwrapArgs_RejectDashDashPaths(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// --- Item 1: --unshare-pid in bwrap args ---
+
+func TestBwrapArgs_UnsharesPID(t *testing.T) {
+	manifest := &plugin.Manifest{
+		Execution: plugin.ExecutionConfig{
+			Tier:    plugin.TierProcess,
+			Sandbox: plugin.SandboxConfig{},
+		},
+	}
+
+	args, err := generateBwrapArgs(manifest, "/path/to/binary")
+	require.NoError(t, err)
+	assert.Contains(t, args, "--unshare-pid",
+		"bwrap args must include --unshare-pid for PID namespace isolation")
+}
+
+// --- Item 2: expandPath warns on UserHomeDir failure ---
+
+func TestExpandPath_ErrorOnHomeDirFailure(t *testing.T) {
+	// Save and unset HOME to make os.UserHomeDir fail.
+	origHome := os.Getenv("HOME")
+	t.Cleanup(func() { _ = os.Setenv("HOME", origHome) })
+	_ = os.Unsetenv("HOME")
+	// Also unset platform-specific fallbacks.
+	if v, ok := os.LookupEnv("USERPROFILE"); ok {
+		_ = os.Unsetenv("USERPROFILE")
+		t.Cleanup(func() { _ = os.Setenv("USERPROFILE", v) })
+	}
+
+	_, err := expandPath("~/some/path")
+	require.Error(t, err, "should return error when home dir unavailable")
+	assert.Contains(t, err.Error(), "home directory unavailable")
+}
+
+// --- Item 3: binaryPath validation ---
+
+func TestGenerateArgs_BinaryPathValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		binaryPath string
+		wantErr    string
+	}{
+		{
+			name:       "empty binary path",
+			binaryPath: "",
+			wantErr:    "binaryPath must not be empty",
+		},
+		{
+			name:       "whitespace-only binary path",
+			binaryPath: "   ",
+			wantErr:    "binaryPath must not be empty",
+		},
+		{
+			name:       "tab-only binary path",
+			binaryPath: "\t\n",
+			wantErr:    "binaryPath must not be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origOS := targetOS
+			defer func() { targetOS = origOS }()
+
+			for _, osName := range []string{"linux", "darwin"} {
+				targetOS = osName
+				manifest := &plugin.Manifest{
+					Execution: plugin.ExecutionConfig{
+						Tier:    plugin.TierProcess,
+						Sandbox: plugin.SandboxConfig{},
+					},
+				}
+				_, err := GenerateArgs(manifest, tt.binaryPath)
+				require.Error(t, err, "OS=%s binaryPath=%q should error", osName, tt.binaryPath)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// --- binaryPath injection validation ---
+
+func TestGenerateArgs_BinaryPathInjection(t *testing.T) {
+	tests := []struct {
+		name       string
+		binaryPath string
+	}{
+		{"double-quote injection", `/usr/bin/plugin"--dev-bind /etc /etc`},
+		{"semicolon injection", `/usr/bin/plugin;rm -rf /`},
+		{"backslash injection", `/usr/bin/plugin\n--bind / /`},
+		{"dash prefix", "--dev-bind-try"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origOS := targetOS
+			defer func() { targetOS = origOS }()
+			targetOS = "linux"
+
+			manifest := &plugin.Manifest{
+				Execution: plugin.ExecutionConfig{
+					Tier:    plugin.TierProcess,
+					Sandbox: plugin.SandboxConfig{},
+				},
+			}
+			_, err := GenerateArgs(manifest, tt.binaryPath)
+			require.Error(t, err, "binaryPath %q should be rejected", tt.binaryPath)
+			assert.Contains(t, err.Error(), "invalid binaryPath")
+		})
+	}
+}
+
+// --- Item 4: Seatbelt profile written to temp file, referenced via -f ---
+
+func TestSeatbeltArgs_UsesFileBasedProfile(t *testing.T) {
+	origOS := targetOS
+	defer func() { targetOS = origOS }()
+	targetOS = "darwin"
+
+	manifest := &plugin.Manifest{
+		Execution: plugin.ExecutionConfig{
+			Tier:    plugin.TierProcess,
+			Sandbox: plugin.SandboxConfig{},
+		},
+	}
+
+	args, err := GenerateArgs(manifest, "/usr/bin/plugin-binary")
+	require.NoError(t, err)
+
+	// Must use -f flag, not -p flag
+	assert.Contains(t, args, "-f",
+		"sandbox-exec args must use -f for file-based profile")
+	assert.NotContains(t, args, "-p",
+		"sandbox-exec args must not use -p for inline profile")
+
+	// Find the index of -f and verify the file exists and contains profile content.
+	for i, arg := range args {
+		if arg == "-f" {
+			require.Greater(t, len(args), i+1, "must have file path after -f")
+			profilePath := args[i+1]
+			content, err := os.ReadFile(profilePath)
+			require.NoError(t, err, "profile temp file must be readable")
+			assert.Contains(t, string(content), "(version 1)")
+			assert.Contains(t, string(content), "(deny default)")
+			// Clean up the temp file
+			_ = os.Remove(profilePath)
+			return
+		}
+	}
+	t.Fatal("-f flag found but no file path followed")
+}
+
+// --- Item 5: Container tier returns descriptive error ---
+
+func TestGenerateArgs_ContainerTierReturnsError(t *testing.T) {
+	manifest := &plugin.Manifest{
+		Name: "test-plugin",
+		Execution: plugin.ExecutionConfig{
+			Tier: plugin.TierContainer,
+		},
+	}
+
+	_, err := GenerateArgs(manifest, "/path/to/binary")
+	require.Error(t, err, "container tier must return an error")
+	assert.Contains(t, err.Error(), "container")
+	assert.Contains(t, err.Error(), "not yet implemented")
+}
+
+// --- ~user path expansion ---
+
+func TestExpandPath_TildeUserSyntax(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected string // If empty, expect path unchanged via home expansion
+	}{
+		{
+			name:     "tilde-slash expands to home",
+			path:     "~/config",
+			expected: "", // Will be user's home + "/config"
+		},
+		{
+			name:     "bare tilde is returned unchanged",
+			path:     "~",
+			expected: "~",
+		},
+		{
+			name:     "tilde-user is returned unchanged",
+			path:     "~otheruser/data",
+			expected: "~otheruser/data",
+		},
+		{
+			name:     "tilde-user with multiple segments",
+			path:     "~alice/documents/projects",
+			expected: "~alice/documents/projects",
+		},
+		{
+			name:     "absolute path unchanged",
+			path:     "/usr/bin",
+			expected: "/usr/bin",
+		},
+		{
+			name:     "relative path unchanged",
+			path:     "data/files",
+			expected: "data/files",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := expandPath(tt.path)
+			require.NoError(t, err)
+
+			if tt.expected == "" && strings.HasPrefix(tt.path, "~/") {
+				// For ~/foo, expect expansion to $HOME/foo
+				home, err := os.UserHomeDir()
+				require.NoError(t, err)
+				expected := strings.Replace(tt.path, "~", home, 1)
+				assert.Equal(t, expected, result)
+			} else {
+				assert.Equal(t, tt.expected, result)
 			}
 		})
 	}

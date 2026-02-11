@@ -113,9 +113,15 @@ func (m *Module) CallWithTimeout(ctx context.Context, fnName string, params ...u
 
 	fn := m.instance.ExportedFunction(fnName)
 	if fn == nil {
-		return nil, sigilerr.Errorf(sigilerr.CodePluginRuntimeStartFailure,
+		return nil, sigilerr.Errorf(sigilerr.CodePluginRuntimeCallFailure,
 			"function %q not exported by module %s", fnName, m.name)
 	}
 
-	return fn.Call(ctx, params...)
+	results, err := fn.Call(ctx, params...)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure,
+			"calling function %q in module %s", fnName, m.name)
+	}
+
+	return results, nil
 }

@@ -6,6 +6,7 @@ package security
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,8 +20,6 @@ type pluginCapabilities struct {
 	deny  CapabilitySet
 }
 
-var auditIDCounter uint64
-
 // CheckRequest describes a capability check for a plugin invocation.
 type CheckRequest struct {
 	Plugin          string
@@ -32,13 +31,19 @@ type CheckRequest struct {
 
 // Enforcer applies plugin, workspace, and user capability policy checks.
 type Enforcer struct {
-	mu      sync.RWMutex
-	audit   store.AuditStore
-	plugins map[string]pluginCapabilities
+	mu             sync.RWMutex
+	audit          store.AuditStore
+	plugins        map[string]pluginCapabilities
+	auditIDCounter uint64 // Per-enforcer audit ID sequence (not shared globally)
 }
 
 // NewEnforcer creates an Enforcer that writes decision audits to audit.
+// If audit is nil, audit logging is silently disabled (all checks still enforced).
 func NewEnforcer(audit store.AuditStore) *Enforcer {
+	if audit == nil {
+		slog.Warn("enforcer created with nil audit store; audit logging disabled")
+	}
+
 	return &Enforcer{
 		audit:   audit,
 		plugins: make(map[string]pluginCapabilities),
@@ -137,9 +142,12 @@ func (e *Enforcer) auditDecision(
 	}
 
 	entry := &store.AuditEntry{
-		ID:          nextAuditID(),
-		Timestamp:   time.Now().UTC(),
-		Action:      "capability_check",
+		ID:        e.nextAuditID(),
+		Timestamp: time.Now().UTC(),
+		Action:    "capability_check",
+		// Actor represents the entity performing the action.
+		// Currently set to plugin name for capability checks.
+		// TODO(Phase 4): Integrate with user identity system to track actual user performing the action.
 		Actor:       req.Plugin,
 		Plugin:      req.Plugin,
 		WorkspaceID: req.WorkspaceID,
@@ -161,7 +169,7 @@ func (e *Enforcer) auditDecision(
 	return nil
 }
 
-func nextAuditID() string {
-	seq := atomic.AddUint64(&auditIDCounter, 1)
+func (e *Enforcer) nextAuditID() string {
+	seq := atomic.AddUint64(&e.auditIDCounter, 1)
 	return fmt.Sprintf("aud-%d-%d", time.Now().UTC().UnixNano(), seq)
 }

@@ -60,8 +60,22 @@ func validateSandboxPath(path string) error {
 }
 
 func GenerateArgs(manifest *plugin.Manifest, binaryPath string) ([]string, error) {
+	// Item 5: Container tier returns a descriptive error instead of silent nil.
+	if manifest.Execution.Tier == plugin.TierContainer {
+		return nil, fmt.Errorf("sandbox for container tier not yet implemented")
+	}
+
 	if manifest.Execution.Tier != plugin.TierProcess {
 		return nil, nil
+	}
+
+	// Reject empty or whitespace-only binaryPath.
+	if strings.TrimSpace(binaryPath) == "" {
+		return nil, fmt.Errorf("binaryPath must not be empty or whitespace-only")
+	}
+	// Validate binaryPath against injection characters (same rules as manifest paths).
+	if err := validateSandboxPath(binaryPath); err != nil {
+		return nil, fmt.Errorf("invalid binaryPath: %w", err)
 	}
 
 	switch targetOS {
@@ -93,6 +107,7 @@ func generateBwrapArgs(manifest *plugin.Manifest, binaryPath string) ([]string, 
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
+		"--unshare-pid",
 	)
 
 	sb := manifest.Execution.Sandbox
@@ -101,7 +116,10 @@ func generateBwrapArgs(manifest *plugin.Manifest, binaryPath string) ([]string, 
 		if err := validateSandboxPath(path); err != nil {
 			return nil, err
 		}
-		expanded := expandPath(path)
+		expanded, err := expandPath(path)
+		if err != nil {
+			return nil, err
+		}
 		if strings.HasSuffix(expanded, "/*") {
 			dir := strings.TrimSuffix(expanded, "/*")
 			args = append(args, "--bind", dir, dir)
@@ -110,11 +128,20 @@ func generateBwrapArgs(manifest *plugin.Manifest, binaryPath string) ([]string, 
 		}
 	}
 
+	// ReadDeny is implemented by mounting a tmpfs over the denied path rather
+	// than using permission-denied semantics. This design choice ensures the
+	// path exists (preventing ENOENT errors that could leak information about
+	// filesystem layout) while making the original content inaccessible. The
+	// tmpfs overlay is empty and writable, which is a stronger guarantee than
+	// a permission bit change that could be circumvented by a privileged process.
 	for _, path := range sb.Filesystem.ReadDeny {
 		if err := validateSandboxPath(path); err != nil {
 			return nil, err
 		}
-		expanded := expandPath(path)
+		expanded, err := expandPath(path)
+		if err != nil {
+			return nil, err
+		}
 		if strings.HasSuffix(expanded, "/*") {
 			dir := strings.TrimSuffix(expanded, "/*")
 			args = append(args, "--tmpfs", dir)
@@ -138,7 +165,31 @@ func generateSandboxExecArgs(manifest *plugin.Manifest, binaryPath string) ([]st
 		return nil, err
 	}
 
-	args := []string{sandboxExecPath, "-p", profile, "--", binaryPath}
+	// Write the Seatbelt profile to a temp file and reference it via -f.
+	// Using -f instead of inline -p avoids shell argument length limits and
+	// reduces risk of argument injection through profile content.
+	//
+	// NOTE: The temp file persists after this function returns because
+	// sandbox-exec needs to read it at process start. The caller is
+	// responsible for removing args[2] (the profile path) after the
+	// sandboxed process has started. Files live in os.TempDir() and
+	// will be cleaned up on reboot if not removed explicitly.
+	f, err := os.CreateTemp("", "sigil-seatbelt-*.sb")
+	if err != nil {
+		return nil, fmt.Errorf("creating seatbelt profile temp file: %w", err)
+	}
+
+	if _, err := f.WriteString(profile); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("writing seatbelt profile: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("closing seatbelt profile temp file: %w", err)
+	}
+
+	args := []string{sandboxExecPath, "-f", f.Name(), "--", binaryPath}
 
 	return args, nil
 }
@@ -166,7 +217,10 @@ func generateSeatbeltProfile(manifest *plugin.Manifest) (string, error) {
 		if err := validateSandboxPath(path); err != nil {
 			return "", err
 		}
-		expanded := expandPath(path)
+		expanded, err := expandPath(path)
+		if err != nil {
+			return "", err
+		}
 		if strings.HasSuffix(expanded, "/*") {
 			dir := strings.TrimSuffix(expanded, "/*")
 			rules = append(rules, fmt.Sprintf(`(allow file-write* (subpath "%s"))`, dir))
@@ -179,7 +233,10 @@ func generateSeatbeltProfile(manifest *plugin.Manifest) (string, error) {
 		if err := validateSandboxPath(path); err != nil {
 			return "", err
 		}
-		expanded := expandPath(path)
+		expanded, err := expandPath(path)
+		if err != nil {
+			return "", err
+		}
 		if strings.HasSuffix(expanded, "/*") {
 			dir := strings.TrimSuffix(expanded, "/*")
 			rules = append(rules, fmt.Sprintf(`(deny file-read* (subpath "%s"))`, dir))
@@ -190,6 +247,12 @@ func generateSeatbeltProfile(manifest *plugin.Manifest) (string, error) {
 
 	if len(sb.Network.Allow) > 0 {
 		// Generate per-entry port-specific rules instead of blanket TCP allow.
+		// LIMITATION: Seatbelt's network-outbound filter does NOT support hostname
+		// filtering. The rule (allow network-outbound (remote tcp "*:443")) allows
+		// connections to ANY host on port 443, not just the manifest-specified host.
+		// This is a platform limitation of SBPL (Sandbox Profile Language).
+		// The manifest's Proxy field anticipates a future userspace proxy solution
+		// that would enforce per-host restrictions at the application layer.
 		for _, entry := range sb.Network.Allow {
 			_, port, err := net.SplitHostPort(entry)
 			if err != nil {
@@ -211,13 +274,25 @@ func generateSeatbeltProfile(manifest *plugin.Manifest) (string, error) {
 	return strings.Join(rules, " "), nil
 }
 
-func expandPath(path string) string {
-	if strings.HasPrefix(path, "~") {
+func expandPath(path string) (string, error) {
+	// Only expand ~/foo syntax (tilde followed by slash).
+	// Do NOT expand ~user/foo syntax (tilde followed by username),
+	// since the manifest schema doesn't document ~user support and
+	// correctly resolving it would require os/user.Lookup.
+	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return path
+			return "", fmt.Errorf("expanding %q: home directory unavailable: %w", path, err)
 		}
-		return filepath.Join(home, strings.TrimPrefix(path, "~"))
+		return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
 	}
-	return path
+	return path, nil
 }
+
+// TODO(seccomp): Implement a basic BPF syscall allow-list for process-tier
+// plugins on Linux. This would restrict the syscall surface beyond what bwrap
+// namespace isolation provides. A minimal allow-list should cover: read, write,
+// openat, close, mmap, mprotect, brk, rt_sigaction, rt_sigprocmask, exit_group,
+// and the gRPC-required network syscalls (socket, connect, sendto, recvfrom).
+// Tracking issue should be created before this is implemented due to the
+// complexity of maintaining per-architecture BPF filter compatibility.

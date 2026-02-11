@@ -4,9 +4,12 @@
 package security_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/security"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMatchCapability(t *testing.T) {
@@ -50,48 +53,98 @@ func TestMatchCapability(t *testing.T) {
 		{name: "invalid capability consecutive dots", pattern: "a.*.b", cap: "a..b", want: false},
 		{name: "invalid capability leading dot", pattern: "a.b", cap: ".a.b", want: false},
 		{name: "invalid capability trailing dot", pattern: "a.b", cap: "a.b.", want: false},
+		{name: "cross-prefix mismatch with wildcard", pattern: "sessions.*", cap: "messages.send", want: false},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := security.MatchCapability(tt.pattern, tt.cap); got != tt.want {
-				t.Fatalf("MatchCapability(%q, %q) = %v, want %v", tt.pattern, tt.cap, got, tt.want)
-			}
+			got, err := security.MatchCapability(tt.pattern, tt.cap)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestMatchCapabilitySegmentBounds(t *testing.T) {
+	t.Parallel()
+
+	// Create a pattern and capability with 33 segments (exceeds 32 limit)
+	segments := make([]string, 33)
+	for i := range segments {
+		segments[i] = "a"
+	}
+	longString := strings.Join(segments, ".")
+
+	t.Run("pattern exceeds segment limit", func(t *testing.T) {
+		t.Parallel()
+		_, err := security.MatchCapability(longString, "a")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds maximum")
+	})
+
+	t.Run("capability exceeds segment limit", func(t *testing.T) {
+		t.Parallel()
+		_, err := security.MatchCapability("a", longString)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds maximum")
+	})
+
+	t.Run("exactly 32 segments is allowed", func(t *testing.T) {
+		t.Parallel()
+		segments32 := make([]string, 32)
+		for i := range segments32 {
+			segments32[i] = "a"
+		}
+		validString := strings.Join(segments32, ".")
+		got, err := security.MatchCapability(validString, validString)
+		require.NoError(t, err)
+		assert.True(t, got)
+	})
 }
 
 func TestCapabilitySetContains(t *testing.T) {
 	t.Parallel()
 
-	set := security.NewCapabilitySet("sessions.read", "sessions.write", "messages.send.*")
-
 	tests := []struct {
 		name string
+		set  security.CapabilitySet
 		cap  string
 		want bool
 	}{
-		{name: "exact capability", cap: "sessions.read", want: true},
-		{name: "wildcard capability", cap: "messages.send.telegram", want: true},
-		{name: "missing capability", cap: "exec.run", want: false},
-		{name: "empty set", cap: "sessions.read", want: false},
+		{
+			name: "exact capability",
+			set:  security.NewCapabilitySet("sessions.read", "sessions.write", "messages.send.*"),
+			cap:  "sessions.read",
+			want: true,
+		},
+		{
+			name: "wildcard capability",
+			set:  security.NewCapabilitySet("sessions.read", "sessions.write", "messages.send.*"),
+			cap:  "messages.send.telegram",
+			want: true,
+		},
+		{
+			name: "missing capability",
+			set:  security.NewCapabilitySet("sessions.read", "sessions.write", "messages.send.*"),
+			cap:  "exec.run",
+			want: false,
+		},
+		{
+			name: "empty set",
+			set:  security.NewCapabilitySet(),
+			cap:  "sessions.read",
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-
-			target := set
-			if tt.name == "empty set" {
-				target = security.NewCapabilitySet()
-			}
-
-			if got := target.Contains(tt.cap); got != tt.want {
-				t.Fatalf("Contains(%q) = %v, want %v", tt.cap, got, tt.want)
-			}
+			got := tt.set.Contains(tt.cap)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -121,9 +174,8 @@ func TestCapabilitySetAllowedBy(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tt.left.AllowedBy(tt.right, tt.cap); got != tt.want {
-				t.Fatalf("AllowedBy(..., %q) = %v, want %v", tt.cap, got, tt.want)
-			}
+			got := tt.left.AllowedBy(tt.right, tt.cap)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

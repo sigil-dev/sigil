@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
+// Package security implements the capability-based access control model.
+// Capability patterns use dot-separated segments with glob support.
+// Only the "*" glob is supported (no "?", "[...]" or other glob metacharacters).
 package security
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -18,6 +22,8 @@ func NewCapabilitySet(patterns ...string) CapabilitySet {
 	return CapabilitySet{patterns: copied}
 }
 
+const maxSegments = 32
+
 // MatchCapability reports whether cap matches pattern.
 // Pattern matching is dot-segment aware:
 //   - A segment exactly "*" matches one or more capability segments.
@@ -25,16 +31,24 @@ func NewCapabilitySet(patterns ...string) CapabilitySet {
 //     zero or more characters in that same segment.
 //
 // Malformed dotted strings (leading/trailing dot or consecutive dots) are rejected.
-func MatchCapability(pattern, cap string) bool {
+// Returns an error if either pattern or cap exceeds 32 dot-separated segments.
+func MatchCapability(pattern, cap string) (bool, error) {
 	if pattern == "" || cap == "" {
-		return false
+		return false, nil
 	}
 	if !isValidDottedString(pattern) || !isValidDottedString(cap) {
-		return false
+		return false, nil
 	}
 
 	patternSegments := strings.Split(pattern, ".")
 	capSegments := strings.Split(cap, ".")
+
+	if len(patternSegments) > maxSegments {
+		return false, fmt.Errorf("pattern exceeds maximum %d segments: got %d", maxSegments, len(patternSegments))
+	}
+	if len(capSegments) > maxSegments {
+		return false, fmt.Errorf("capability exceeds maximum %d segments: got %d", maxSegments, len(capSegments))
+	}
 
 	memo := make(map[[2]int]bool)
 	seen := make(map[[2]int]bool)
@@ -77,13 +91,15 @@ func MatchCapability(pattern, cap string) bool {
 		return memo[key]
 	}
 
-	return match(0, 0)
+	return match(0, 0), nil
 }
 
 // Contains reports whether any capability pattern in the set matches cap.
+// If MatchCapability returns an error, that pattern is skipped.
 func (s CapabilitySet) Contains(cap string) bool {
 	for _, pattern := range s.patterns {
-		if MatchCapability(pattern, cap) {
+		match, err := MatchCapability(pattern, cap)
+		if err == nil && match {
 			return true
 		}
 	}

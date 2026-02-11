@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/plugin/wasm"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,4 +114,25 @@ func TestWasmHost_LoadModule_EmptyName(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantError)
 		})
 	}
+}
+
+func TestWasmModule_CallWithTimeout_MissingFunction(t *testing.T) {
+	host, err := wasm.NewHost()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, host.Close()) }()
+
+	ctx := context.Background()
+	mod, err := host.LoadModule(ctx, "test-mod", loadFixture(t, "add.wasm"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, mod.Close(ctx)) }()
+
+	_, err = mod.CallWithTimeout(ctx, "nonexistent_function")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nonexistent_function")
+	assert.Contains(t, err.Error(), "not exported")
+
+	// Verify it uses the call failure code, not start failure code
+	code := sigilerr.CodeOf(err)
+	assert.Equal(t, sigilerr.CodePluginRuntimeCallFailure, code, "should use call failure code for missing function")
+	assert.NotEqual(t, sigilerr.CodePluginRuntimeStartFailure, code, "should not use start failure code for call-time error")
 }
