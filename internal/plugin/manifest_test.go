@@ -4,6 +4,7 @@
 package plugin_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/plugin"
@@ -106,4 +107,55 @@ func TestExecutionTierValues(t *testing.T) {
 	assert.Equal(t, plugin.ExecutionTier("wasm"), plugin.TierWasm)
 	assert.Equal(t, plugin.ExecutionTier("process"), plugin.TierProcess)
 	assert.Equal(t, plugin.ExecutionTier("container"), plugin.TierContainer)
+}
+
+func TestValidateManifest_SemverVersionField(t *testing.T) {
+	base := plugin.Manifest{
+		Name:      "test",
+		Type:      plugin.TypeTool,
+		Execution: plugin.ExecutionConfig{Tier: plugin.TierProcess},
+	}
+
+	valid := []string{
+		"1.0.0",
+		"0.1.0",
+		"2.3.4-beta.1",
+		"1.0.0+build.123",
+		"10.20.30-alpha.1+meta",
+	}
+	for _, v := range valid {
+		t.Run("valid_"+v, func(t *testing.T) {
+			m := base
+			m.Version = v
+			errs := m.Validate()
+			for _, e := range errs {
+				assert.NotContains(t, e.Error(), "version", "version %q should be valid", v)
+			}
+		})
+	}
+
+	invalid := []string{
+		"latest",
+		"1.0",
+		"v1.0.0",
+		"1",
+		"1.0.0.0",
+		"01.0.0",
+		"1.02.0",
+		"-1.0.0",
+	}
+	for _, v := range invalid {
+		t.Run("invalid_"+v, func(t *testing.T) {
+			m := base
+			m.Version = v
+			errs := m.Validate()
+			found := false
+			for _, e := range errs {
+				if strings.Contains(e.Error(), "version must be valid semver") {
+					found = true
+				}
+			}
+			assert.True(t, found, "version %q should fail semver validation", v)
+		})
+	}
 }

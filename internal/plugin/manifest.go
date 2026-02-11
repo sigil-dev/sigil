@@ -49,6 +49,15 @@ var validExecutionTiers = map[ExecutionTier]bool{
 // capPatternRe matches valid capability pattern characters.
 var capPatternRe = regexp.MustCompile(`^[a-zA-Z0-9.*_\-/]+$`)
 
+// semverRe matches strict semver (no "v" prefix): MAJOR.MINOR.PATCH[-prerelease][+build].
+// Leading zeros on numeric segments are disallowed per semver spec.
+// Matches the same pattern as pkg/plugin/validate.go.
+var semverRe = regexp.MustCompile(
+	`^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)` +
+		`(?:-(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?` +
+		`(?:\+(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`,
+)
+
 // Manifest is the runtime's internal parsed representation of a plugin manifest.
 // It uses simplified types (e.g., Capabilities []string) optimized for runtime
 // enforcement checks. This is distinct from the public SDK Manifest in pkg/plugin.
@@ -123,6 +132,9 @@ func (m *Manifest) Validate() []error {
 	if strings.TrimSpace(m.Version) == "" {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 			"manifest validation: version must not be empty"))
+	} else if !semverRe.MatchString(m.Version) {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation: version must be valid semver (MAJOR.MINOR.PATCH), got %q", m.Version))
 	}
 
 	if !validPluginTypes[m.Type] {
