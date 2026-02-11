@@ -231,7 +231,7 @@ func TestValidate_ModelsDefault(t *testing.T) {
 				require.NotEmpty(t, errs)
 				found := false
 				for _, err := range errs {
-					if assert.ObjectsAreEqual(true, containsStr(err.Error(), "models.default")) {
+					if strings.Contains(err.Error(), "models.default") {
 						found = true
 					}
 				}
@@ -254,7 +254,7 @@ func TestValidate_ModelProviderReference(t *testing.T) {
 		require.NotEmpty(t, errs)
 		found := false
 		for _, err := range errs {
-			if containsStr(err.Error(), "provider") && containsStr(err.Error(), "openai") {
+			if strings.Contains(err.Error(), "provider") && strings.Contains(err.Error(), "openai") {
 				found = true
 			}
 		}
@@ -268,7 +268,7 @@ func TestValidate_ModelProviderReference(t *testing.T) {
 		require.NotEmpty(t, errs)
 		found := false
 		for _, err := range errs {
-			if containsStr(err.Error(), "failover") && containsStr(err.Error(), "openai") {
+			if strings.Contains(err.Error(), "failover") && strings.Contains(err.Error(), "openai") {
 				found = true
 			}
 		}
@@ -448,8 +448,4 @@ storage:
 	_, err = config.Load(cfgPath)
 	require.Error(t, err, "Load should fail with invalid config")
 	assert.Contains(t, err.Error(), "validating config")
-}
-
-func containsStr(s, substr string) bool {
-	return strings.Contains(s, substr)
 }

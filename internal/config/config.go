@@ -110,13 +110,13 @@ func Load(path string) (*Config, error) {
 	if path != "" {
 		v.SetConfigFile(path)
 		if err := v.ReadInConfig(); err != nil {
-			return nil, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "reading config %s: %w", path, err)
+			return nil, sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config %s: %w", path, err)
 		}
 	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "unmarshalling config: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeConfigParseInvalidFormat, "unmarshalling config: %w", err)
 	}
 
 	if errs := cfg.Validate(); len(errs) > 0 {
