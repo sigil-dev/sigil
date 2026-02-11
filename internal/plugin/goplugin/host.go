@@ -6,6 +6,7 @@ package goplugin
 import (
 	"context"
 	"os/exec"
+	"slices"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
@@ -52,12 +53,12 @@ func buildCommand(binaryPath string, sandboxCmd []string) *exec.Cmd {
 		return exec.Command(binaryPath)
 	}
 
-	args := append(sandboxCmd, binaryPath)
+	args := append(slices.Clone(sandboxCmd), binaryPath)
 	return exec.Command(args[0], args[1:]...)
 }
 
 type lifecycleGRPCPlugin struct {
-	plugin.Plugin
+	plugin.NetRPCUnsupportedPlugin
 }
 
 func (p *lifecycleGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
@@ -74,7 +75,7 @@ type lifecycleGRPCServer struct {
 }
 
 type channelGRPCPlugin struct {
-	plugin.Plugin
+	plugin.NetRPCUnsupportedPlugin
 }
 
 func (p *channelGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
@@ -91,7 +92,7 @@ type channelGRPCServer struct {
 }
 
 type toolGRPCPlugin struct {
-	plugin.Plugin
+	plugin.NetRPCUnsupportedPlugin
 }
 
 func (p *toolGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
@@ -108,7 +109,7 @@ type toolGRPCServer struct {
 }
 
 type providerGRPCPlugin struct {
-	plugin.Plugin
+	plugin.NetRPCUnsupportedPlugin
 }
 
 func (p *providerGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {

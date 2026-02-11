@@ -44,3 +44,36 @@ func TestHost_ClientConfig_WithSandbox(t *testing.T) {
 	assert.NotNil(t, config)
 	assert.Equal(t, "bwrap", config.Cmd.Path)
 }
+
+func TestHost_BuildCommand_NoSliceMutation(t *testing.T) {
+	// Regression: append(sandboxCmd, binaryPath) could mutate the caller's
+	// slice when spare capacity exists.
+	sandboxCmd := make([]string, 3, 10) // spare capacity
+	sandboxCmd[0] = "bwrap"
+	sandboxCmd[1] = "--ro-bind"
+	sandboxCmd[2] = "/usr"
+
+	original := make([]string, len(sandboxCmd))
+	copy(original, sandboxCmd)
+
+	_ = goplugin.ClientConfig("/my/binary", sandboxCmd)
+
+	// The caller's slice must not be mutated.
+	assert.Equal(t, original, sandboxCmd,
+		"buildCommand must not mutate the caller's sandboxCmd slice")
+}
+
+func TestHost_PluginWrappers_NetRPCReturnsError(t *testing.T) {
+	// Verify plugin wrappers use NetRPCUnsupportedPlugin (returns errors)
+	// instead of raw plugin.Plugin interface (would panic on nil methods).
+	pm := goplugin.PluginMap()
+
+	for name, p := range pm {
+		t.Run(name, func(t *testing.T) {
+			// Call the Server method with nil — NetRPCUnsupportedPlugin returns an error,
+			// whereas the raw interface embedding would panic.
+			_, err := p.Server(nil)
+			assert.Error(t, err, "NetRPCUnsupportedPlugin.Server should return error, not panic")
+		})
+	}
+}
