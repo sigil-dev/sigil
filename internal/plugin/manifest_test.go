@@ -51,6 +51,8 @@ func TestParseManifest_InvalidType(t *testing.T) {
 name: bad-plugin
 version: 1.0.0
 type: invalid
+execution:
+  tier: process
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
 	assert.Error(t, err)
@@ -61,6 +63,8 @@ func TestParseManifest_MissingName(t *testing.T) {
 	yaml := `
 version: 1.0.0
 type: tool
+execution:
+  tier: process
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
 	assert.Error(t, err)
@@ -130,6 +134,53 @@ func TestExecutionTierValues(t *testing.T) {
 	assert.Equal(t, plugin.ExecutionTier("wasm"), plugin.TierWasm)
 	assert.Equal(t, plugin.ExecutionTier("process"), plugin.TierProcess)
 	assert.Equal(t, plugin.ExecutionTier("container"), plugin.TierContainer)
+}
+
+func TestValidateManifest_MalformedTimeout(t *testing.T) {
+	base := plugin.Manifest{
+		Name:      "timeout-test",
+		Version:   "1.0.0",
+		Type:      plugin.TypeTool,
+		Execution: plugin.ExecutionConfig{Tier: plugin.TierProcess},
+	}
+
+	tests := []struct {
+		name    string
+		timeout string
+		wantErr bool
+	}{
+		{"valid duration", "30s", false},
+		{"valid duration minutes", "5m", false},
+		{"invalid format", "not-a-duration", true},
+		{"invalid format abc", "abc", true},
+		{"negative duration", "-1s", true},
+		{"empty string", "", false}, // empty is OK (optional field)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := base
+			m.Lifecycle = plugin.LifecycleConfig{GracefulShutdownTimeout: tt.timeout}
+			errs := m.Validate()
+
+			if tt.wantErr {
+				require.NotEmpty(t, errs, "expected validation error for timeout %q", tt.timeout)
+				found := false
+				for _, e := range errs {
+					if strings.Contains(e.Error(), "graceful_shutdown_timeout") {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "timeout error not found for %q", tt.timeout)
+			} else {
+				// Filter out errors that are not about timeout
+				for _, e := range errs {
+					assert.NotContains(t, e.Error(), "graceful_shutdown_timeout", "unexpected timeout error for %q", tt.timeout)
+				}
+			}
+		})
+	}
 }
 
 func TestValidateManifest_SemverVersionField(t *testing.T) {

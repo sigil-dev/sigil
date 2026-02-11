@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"gopkg.in/yaml.v3"
@@ -171,6 +172,24 @@ func (m *Manifest) Validate() []error {
 			}
 		}
 	}
+
+	// Validate graceful_shutdown_timeout if present.
+	if m.Lifecycle.GracefulShutdownTimeout != "" {
+		d, err := time.ParseDuration(m.Lifecycle.GracefulShutdownTimeout)
+		if err != nil {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+				"manifest validation: graceful_shutdown_timeout %q is not a valid duration: %v",
+				m.Lifecycle.GracefulShutdownTimeout, err))
+		} else if d < 0 {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+				"manifest validation: graceful_shutdown_timeout must be positive, got %q",
+				m.Lifecycle.GracefulShutdownTimeout))
+		}
+	}
+
+	// TODO(sigil-7ek.3): Add validation for container-tier specific fields when design is finalized.
+	// Fields to track: config_schema, dependencies, storage backends, resource limits, network isolation.
+	// See docs/design/02-plugin-system.md for container execution model.
 
 	return errs
 }
