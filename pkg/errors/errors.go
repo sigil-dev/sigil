@@ -28,9 +28,13 @@ const (
 	CodeConfigParseInvalidFormat   Code = "config.parse.invalid_format"
 	CodeConfigValidateInvalidValue Code = "config.validate.invalid_value"
 
-	CodePluginManifestValidateInvalid Code = "plugin.manifest.validate.invalid"
-	CodePluginCapabilityDenied        Code = "plugin.capability.denied"
-	CodePluginRuntimeStartFailure     Code = "plugin.runtime.start.failure"
+	CodePluginManifestValidateInvalid    Code = "plugin.manifest.validate.invalid"
+	CodePluginCapabilityDenied           Code = "plugin.capability.denied"
+	CodePluginRuntimeStartFailure        Code = "plugin.runtime.start.failure"
+	CodePluginRuntimeCallFailure         Code = "plugin.runtime.call.failure"
+	CodePluginLifecycleTransitionInvalid Code = "plugin.lifecycle.transition.invalid"
+	CodePluginDiscoveryFailure           Code = "plugin.discovery.failure"
+	CodePluginNotFound                   Code = "plugin.not_found"
 
 	CodeProviderRequestInvalid  Code = "provider.request.invalid"
 	CodeProviderResponseInvalid Code = "provider.response.invalid"
