@@ -327,3 +327,46 @@ func TestAgentLoop_ProviderStreamPartialTextThenError(t *testing.T) {
 		assert.NotEqual(t, "assistant", msg.Role, "assistant message should not be persisted after stream error")
 	}
 }
+
+func TestAgentLoop_NoDuplicateUserMessage(t *testing.T) {
+	// This test verifies that the user message appears exactly once in the
+	// provider's message array, not duplicated.
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	capturer := &mockProviderCapturing{}
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouterCapturing(capturer),
+		AuditStore:     newMockAuditStore(),
+	})
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "test message",
+	})
+	require.NoError(t, err)
+
+	messages := capturer.getCapturedMessages()
+	require.NotEmpty(t, messages, "provider should have received messages")
+
+	// Count how many times the user message "test message" appears.
+	userMsgCount := 0
+	for _, msg := range messages {
+		if msg.Role == store.MessageRoleUser && msg.Content == "test message" {
+			userMsgCount++
+		}
+	}
+
+	assert.Equal(t, 1, userMsgCount, "user message should appear exactly once, not duplicated")
+
+	// Verify message order: system → user.
+	assert.Equal(t, store.MessageRoleSystem, messages[0].Role, "first message should be system prompt")
+	assert.Equal(t, store.MessageRoleUser, messages[1].Role, "second message should be user message")
+	assert.Equal(t, "test message", messages[1].Content, "user message content should match")
+}

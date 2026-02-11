@@ -5,6 +5,7 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -126,4 +127,76 @@ func TestMemoryTools_Semantic(t *testing.T) {
 	require.Len(t, results, 2)
 	assert.Equal(t, "vec-cat", results[0].ID, "cat vector should be closest match")
 	assert.Less(t, results[0].Score, results[1].Score, "first result should have lower distance")
+}
+
+func TestMemoryTools_Search_StoreError(t *testing.T) {
+	expectedErr := fmt.Errorf("message store search failed")
+	msgStoreErr := &mockMessageStoreSearchError{searchErr: expectedErr}
+	memStoreErr := &mockMemoryStoreWithError{
+		messages:  msgStoreErr,
+		summaries: &mockSummaryStore{},
+		knowledge: &mockKnowledgeStore{},
+	}
+	vs := newMockVectorStore()
+	mt := agent.NewMemoryTools(memStoreErr, vs)
+
+	ctx := context.Background()
+	results, err := mt.Search(ctx, "ws-1", "test query")
+	require.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+	assert.Nil(t, results)
+}
+
+func TestMemoryTools_Summary_StoreError(t *testing.T) {
+	expectedErr := fmt.Errorf("summary store lookup failed")
+	summStoreErr := &mockSummaryStoreError{getByRangeErr: expectedErr}
+	memStoreErr := &mockMemoryStoreWithError{
+		messages:  &mockMessageStore{},
+		summaries: summStoreErr,
+		knowledge: &mockKnowledgeStore{},
+	}
+	vs := newMockVectorStore()
+	mt := agent.NewMemoryTools(memStoreErr, vs)
+
+	ctx := context.Background()
+	now := time.Now()
+	results, err := mt.Summary(ctx, "ws-1", now.Add(-1*time.Hour), now)
+	require.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+	assert.Nil(t, results)
+}
+
+func TestMemoryTools_Recall_StoreError(t *testing.T) {
+	expectedErr := fmt.Errorf("knowledge store query failed")
+	knowledgeStoreErr := &mockKnowledgeStoreError{findFactsErr: expectedErr}
+	memStoreErr := &mockMemoryStoreWithError{
+		messages:  &mockMessageStore{},
+		summaries: &mockSummaryStore{},
+		knowledge: knowledgeStoreErr,
+	}
+	vs := newMockVectorStore()
+	mt := agent.NewMemoryTools(memStoreErr, vs)
+
+	ctx := context.Background()
+	results, err := mt.Recall(ctx, "ws-1", "alice")
+	require.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+	assert.Nil(t, results)
+}
+
+func TestMemoryTools_Semantic_StoreError(t *testing.T) {
+	ms := newMockMemoryStore()
+	expectedErr := fmt.Errorf("vector store search failed")
+	vs := &mockVectorStoreSearchError{
+		mockVectorStore: mockVectorStore{vectors: make(map[string]mockVector)},
+		searchErr:       expectedErr,
+	}
+	mt := agent.NewMemoryTools(ms, vs)
+
+	ctx := context.Background()
+	query := []float32{0.5, 0.5, 0.0}
+	results, err := mt.Semantic(ctx, "ws-1", query, 10)
+	require.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+	assert.Nil(t, results)
 }

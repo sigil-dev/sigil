@@ -105,3 +105,109 @@ func TestSkillLoader_KeywordMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestSkillLoader_ParseSkill_MissingOpeningDelimiter(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "test-skill")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+
+	content := "name: test\n---\nBody"
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	require.NoError(t, os.WriteFile(skillFile, []byte(content), 0o644))
+
+	_, err := agent.ParseSkillFile(skillFile)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing opening")
+}
+
+func TestSkillLoader_ParseSkill_MissingClosingDelimiter(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "test-skill")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+
+	content := "---\nname: test\nBody without closing delimiter"
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	require.NoError(t, os.WriteFile(skillFile, []byte(content), 0o644))
+
+	_, err := agent.ParseSkillFile(skillFile)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing closing")
+}
+
+func TestSkillLoader_ParseSkill_MalformedYAML(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "test-skill")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+
+	content := "---\n: invalid: yaml: [broken\n---\nBody"
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	require.NoError(t, os.WriteFile(skillFile, []byte(content), 0o644))
+
+	_, err := agent.ParseSkillFile(skillFile)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing frontmatter")
+}
+
+func TestSkillLoader_ParseSkill_EmptyFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "test-skill")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+
+	content := "---\n\n---\nBody with empty frontmatter"
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	require.NoError(t, os.WriteFile(skillFile, []byte(content), 0o644))
+
+	skill, err := agent.ParseSkillFile(skillFile)
+	require.NoError(t, err)
+	assert.Equal(t, "", skill.Name)
+	assert.Equal(t, "", skill.Description)
+	assert.Equal(t, "", skill.License)
+	assert.Equal(t, "Body with empty frontmatter", skill.Content)
+}
+
+func TestSkillLoader_ParseSkill_CRLFLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "test-skill-crlf")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+
+	// CRLF line endings: \r\n instead of \n
+	content := "---\r\nname: test-crlf\r\ndescription: CRLF test\r\nlicense: MIT\r\nmetadata:\r\n  author: test\r\n---\r\nBody with CRLF"
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	require.NoError(t, os.WriteFile(skillFile, []byte(content), 0o644))
+
+	// Note: The current implementation uses "\n" delimiters, not "\r\n".
+	// This test documents the current behavior — CRLF is not yet normalized.
+	// See sigil-8h5.21 for normalization work if needed.
+	_, err := agent.ParseSkillFile(skillFile)
+	require.Error(t, err, "CRLF line endings not yet normalized; currently expected to fail")
+	assert.Contains(t, err.Error(), "missing opening")
+}
+
+func TestSkillLoader_ParseSkill_NoTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "test-skill")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+
+	content := "---\nname: no-newline\ndescription: test\nlicense: MIT\n---\nBody without trailing newline"
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	require.NoError(t, os.WriteFile(skillFile, []byte(content), 0o644))
+
+	skill, err := agent.ParseSkillFile(skillFile)
+	require.NoError(t, err)
+	assert.Equal(t, "no-newline", skill.Name)
+	assert.Equal(t, "Body without trailing newline", skill.Content)
+}
+
+func TestSkillLoader_LoadSkills_EmptyDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	skills, err := agent.LoadSkills(dir)
+	require.NoError(t, err)
+	assert.Empty(t, skills)
+}
+
+func TestSkillLoader_LoadSkills_NonexistentDirectory(t *testing.T) {
+	skills, err := agent.LoadSkills("/nonexistent/path/for/skills")
+	require.Error(t, err)
+	assert.Nil(t, skills)
+}

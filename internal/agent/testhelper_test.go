@@ -26,11 +26,13 @@ import (
 type mockSessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*store.Session
+	messages map[string][]*store.Message // sessionID -> messages
 }
 
 func newMockSessionStore() *mockSessionStore {
 	return &mockSessionStore{
 		sessions: make(map[string]*store.Session),
+		messages: make(map[string][]*store.Message),
 	}
 }
 
@@ -112,12 +114,38 @@ func (m *mockSessionStore) DeleteSession(_ context.Context, id string) error {
 	return nil
 }
 
-func (m *mockSessionStore) AppendMessage(_ context.Context, _ string, _ *store.Message) error {
+func (m *mockSessionStore) AppendMessage(_ context.Context, sessionID string, msg *store.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Store a copy to avoid aliasing.
+	msgCopy := *msg
+	m.messages[sessionID] = append(m.messages[sessionID], &msgCopy)
 	return nil
 }
 
-func (m *mockSessionStore) GetActiveWindow(_ context.Context, _ string, _ int) ([]*store.Message, error) {
-	return nil, nil
+func (m *mockSessionStore) GetActiveWindow(_ context.Context, sessionID string, limit int) ([]*store.Message, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	msgs := m.messages[sessionID]
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+
+	// Return up to limit messages from the end.
+	start := 0
+	if len(msgs) > limit {
+		start = len(msgs) - limit
+	}
+
+	// Return copies to avoid aliasing.
+	result := make([]*store.Message, 0, len(msgs)-start)
+	for _, msg := range msgs[start:] {
+		msgCopy := *msg
+		result = append(result, &msgCopy)
+	}
+	return result, nil
 }
 
 // newMockSessionManager creates a SessionManager backed by an in-memory store.
@@ -152,13 +180,14 @@ func newMockSessionStoreTracking() *mockSessionStoreTracking {
 	return &mockSessionStoreTracking{
 		mockSessionStore: mockSessionStore{
 			sessions: make(map[string]*store.Session),
+			messages: make(map[string][]*store.Message),
 		},
 	}
 }
 
-func (m *mockSessionStoreTracking) AppendMessage(_ context.Context, _ string, _ *store.Message) error {
+func (m *mockSessionStoreTracking) AppendMessage(ctx context.Context, sessionID string, msg *store.Message) error {
 	m.appendCount.Add(1)
-	return nil
+	return m.mockSessionStore.AppendMessage(ctx, sessionID, msg)
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +313,52 @@ func newMockProviderRouterStreamError() *mockProviderRouter {
 // newMockProviderRouterStreamPartialThenError returns a Router with a provider that emits partial text then error.
 func newMockProviderRouterStreamPartialThenError() *mockProviderRouter {
 	return &mockProviderRouter{provider: &mockProviderStreamPartialThenError{}}
+}
+
+// mockProviderCapturing records ChatRequest.Messages for test assertions.
+type mockProviderCapturing struct {
+	mu              sync.Mutex
+	capturedMessages []provider.Message
+}
+
+func (p *mockProviderCapturing) Name() string                { return "mock-capturing" }
+func (p *mockProviderCapturing) Available(_ context.Context) bool { return true }
+
+func (p *mockProviderCapturing) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderCapturing) Chat(_ context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	p.capturedMessages = append([]provider.Message{}, req.Messages...)
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, 3)
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Response "}
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "text."}
+	ch <- provider.ChatEvent{
+		Type:  provider.EventTypeDone,
+		Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (p *mockProviderCapturing) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-capturing"}, nil
+}
+
+func (p *mockProviderCapturing) Close() error { return nil }
+
+func (p *mockProviderCapturing) getCapturedMessages() []provider.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]provider.Message{}, p.capturedMessages...)
+}
+
+// newMockProviderRouterCapturing returns a Router with a capturing provider.
+func newMockProviderRouterCapturing(capturer *mockProviderCapturing) *mockProviderRouter {
+	return &mockProviderRouter{provider: capturer}
 }
 
 // ---------------------------------------------------------------------------
@@ -586,6 +661,80 @@ func (m *mockVectorStore) Delete(_ context.Context, ids []string) error {
 }
 
 func (m *mockVectorStore) Close() error { return nil }
+
+// --- Error-returning mock variants ---
+
+// mockMessageStoreError returns an error from Append.
+type mockMessageStoreError struct {
+	mockMessageStore
+	appendErr error
+}
+
+func (m *mockMessageStoreError) Append(_ context.Context, _ string, _ *store.Message) error {
+	return m.appendErr
+}
+
+// mockMessageStoreSearchError returns an error from Search.
+type mockMessageStoreSearchError struct {
+	mockMessageStore
+	searchErr error
+}
+
+func (m *mockMessageStoreSearchError) Search(_ context.Context, _ string, _ string, _ store.SearchOpts) ([]*store.Message, error) {
+	return nil, m.searchErr
+}
+
+// mockSummaryStoreError returns an error from GetByRange.
+type mockSummaryStoreError struct {
+	mockSummaryStore
+	getByRangeErr error
+}
+
+func (m *mockSummaryStoreError) GetByRange(_ context.Context, _ string, _, _ time.Time) ([]*store.Summary, error) {
+	return nil, m.getByRangeErr
+}
+
+// mockKnowledgeStoreError returns an error from FindFacts.
+type mockKnowledgeStoreError struct {
+	mockKnowledgeStore
+	findFactsErr error
+}
+
+func (m *mockKnowledgeStoreError) FindFacts(_ context.Context, _ string, _ store.FactQuery) ([]*store.Fact, error) {
+	return nil, m.findFactsErr
+}
+
+// mockVectorStoreError returns an error from Store.
+type mockVectorStoreError struct {
+	mockVectorStore
+	storeErr error
+}
+
+func (m *mockVectorStoreError) Store(_ context.Context, _ string, _ []float32, _ map[string]any) error {
+	return m.storeErr
+}
+
+// mockVectorStoreSearchError returns an error from Search.
+type mockVectorStoreSearchError struct {
+	mockVectorStore
+	searchErr error
+}
+
+func (m *mockVectorStoreSearchError) Search(_ context.Context, _ []float32, _ int, _ map[string]any) ([]store.VectorResult, error) {
+	return nil, m.searchErr
+}
+
+// mockMemoryStoreWithError wraps error-returning stores.
+type mockMemoryStoreWithError struct {
+	messages  store.MessageStore
+	summaries store.SummaryStore
+	knowledge store.KnowledgeStore
+}
+
+func (m *mockMemoryStoreWithError) Messages() store.MessageStore    { return m.messages }
+func (m *mockMemoryStoreWithError) Summaries() store.SummaryStore   { return m.summaries }
+func (m *mockMemoryStoreWithError) Knowledge() store.KnowledgeStore { return m.knowledge }
+func (m *mockMemoryStoreWithError) Close() error                    { return nil }
 
 // cosineDistance returns 1 - cosine_similarity. Lower = more similar.
 func cosineDistance(a, b []float32) float64 {

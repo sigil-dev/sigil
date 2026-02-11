@@ -5,7 +5,9 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,6 +136,7 @@ func TestToolDispatcher_ToolBudgetExceeded(t *testing.T) {
 		SessionID:       "sess-1",
 		WorkspaceID:     "ws-1",
 		PluginName:      "test-plugin",
+		TurnID:          "turn-1",
 		WorkspaceAllow:  wildcardCaps(),
 		UserPermissions: wildcardCaps(),
 	}
@@ -153,6 +156,207 @@ func TestToolDispatcher_ToolBudgetExceeded(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "budget")
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentToolBudgetExceeded))
+}
+
+func TestToolDispatcher_BudgetPerTurnIsolation(t *testing.T) {
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcer(),
+		PluginManager: newMockPluginManager(),
+		AuditStore:    newMockAuditStore(),
+	})
+
+	ctx := context.Background()
+	const maxCalls = 5
+
+	// Create request for turn-1.
+	reqTurn1 := agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		TurnID:          "turn-1",
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	}
+
+	// Exhaust budget on turn-1.
+	for i := 0; i < maxCalls; i++ {
+		result, err := d.ExecuteForTurn(ctx, reqTurn1, maxCalls)
+		require.NoError(t, err, "turn-1 call %d should succeed", i+1)
+		require.NotNil(t, result)
+	}
+
+	// Next call on turn-1 should fail.
+	result, err := d.ExecuteForTurn(ctx, reqTurn1, maxCalls)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentToolBudgetExceeded))
+
+	// Create request for turn-2 with same session/workspace.
+	reqTurn2 := agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1", // Same session
+		WorkspaceID:     "ws-1",   // Same workspace
+		PluginName:      "test-plugin",
+		TurnID:          "turn-2", // Different turn
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	}
+
+	// Turn-2 should have independent budget — all calls should succeed.
+	for i := 0; i < maxCalls; i++ {
+		result, err := d.ExecuteForTurn(ctx, reqTurn2, maxCalls)
+		require.NoError(t, err, "turn-2 call %d should succeed", i+1)
+		require.NotNil(t, result)
+	}
+
+	// Next call on turn-2 should fail.
+	result, err = d.ExecuteForTurn(ctx, reqTurn2, maxCalls)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentToolBudgetExceeded))
+}
+
+func TestToolDispatcher_ConcurrentMultiTurnBudget(t *testing.T) {
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcer(),
+		PluginManager: newMockPluginManager(),
+		AuditStore:    newMockAuditStore(),
+	})
+
+	ctx := context.Background()
+	const maxCalls = 10
+	const numTurns = 5
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numTurns*maxCalls)
+
+	// Launch concurrent turns.
+	for turnNum := 0; turnNum < numTurns; turnNum++ {
+		wg.Add(1)
+		go func(turnID int) {
+			defer wg.Done()
+
+			req := agent.ToolCallRequest{
+				ToolName:        "search",
+				Arguments:       `{}`,
+				SessionID:       fmt.Sprintf("sess-%d", turnID),
+				WorkspaceID:     "ws-1",
+				PluginName:      "test-plugin",
+				TurnID:          fmt.Sprintf("turn-%d", turnID),
+				WorkspaceAllow:  wildcardCaps(),
+				UserPermissions: wildcardCaps(),
+			}
+
+			// Execute maxCalls times for this turn.
+			for i := 0; i < maxCalls; i++ {
+				_, err := d.ExecuteForTurn(ctx, req, maxCalls)
+				if err != nil {
+					errors <- fmt.Errorf("turn-%d call %d failed: %w", turnID, i+1, err)
+					return
+				}
+			}
+
+			// The next call should fail due to budget.
+			_, err := d.ExecuteForTurn(ctx, req, maxCalls)
+			if err == nil {
+				errors <- fmt.Errorf("turn-%d: expected budget exceeded error", turnID)
+			} else if !sigilerr.HasCode(err, sigilerr.CodeAgentToolBudgetExceeded) {
+				errors <- fmt.Errorf("turn-%d: wrong error code: %w", turnID, err)
+			}
+		}(turnNum)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for any errors.
+	for err := range errors {
+		t.Error(err)
+	}
+}
+
+func TestToolDispatcher_ClearTurn(t *testing.T) {
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcer(),
+		PluginManager: newMockPluginManager(),
+		AuditStore:    newMockAuditStore(),
+	})
+
+	ctx := context.Background()
+	const maxCalls = 3
+
+	req := agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		TurnID:          "turn-1",
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	}
+
+	var result *agent.ToolResult
+	var err error
+
+	// Exhaust budget.
+	for i := 0; i < maxCalls; i++ {
+		result, err = d.ExecuteForTurn(ctx, req, maxCalls)
+		require.NoError(t, err, "call %d should succeed", i+1)
+		require.NotNil(t, result)
+	}
+
+	// Next call should fail.
+	result, err = d.ExecuteForTurn(ctx, req, maxCalls)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentToolBudgetExceeded))
+
+	// Clear the turn budget.
+	d.ClearTurn("turn-1")
+
+	// Same turn ID should now have a fresh budget.
+	for i := 0; i < maxCalls; i++ {
+		result, err = d.ExecuteForTurn(ctx, req, maxCalls)
+		require.NoError(t, err, "call %d after clear should succeed", i+1)
+		require.NotNil(t, result)
+	}
+
+	// Next call should fail again.
+	result, err = d.ExecuteForTurn(ctx, req, maxCalls)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentToolBudgetExceeded))
+}
+
+func TestToolDispatcher_EmptyTurnIDRejected(t *testing.T) {
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcer(),
+		PluginManager: newMockPluginManager(),
+		AuditStore:    newMockAuditStore(),
+	})
+
+	ctx := context.Background()
+
+	req := agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		TurnID:          "", // Empty TurnID
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	}
+
+	result, err := d.ExecuteForTurn(ctx, req, 10)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "TurnID is required")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopInvalidInput))
 }
 
 func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {

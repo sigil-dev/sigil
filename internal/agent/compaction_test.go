@@ -5,6 +5,7 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/agent"
@@ -57,6 +58,74 @@ func TestCompaction_RollMessage(t *testing.T) {
 	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.NoError(t, err)
 
+	count, err := ms.Messages().Count(ctx, "ws-1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
+	expectedErr := fmt.Errorf("memory store append failed")
+	msgStoreErr := &mockMessageStoreError{appendErr: expectedErr}
+	memStoreErr := &mockMemoryStoreWithError{
+		messages:  msgStoreErr,
+		summaries: &mockSummaryStore{},
+		knowledge: &mockKnowledgeStore{},
+	}
+	vs := newMockVectorStore()
+	ss := newMockSessionStore()
+
+	c := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:  memStoreErr,
+		VectorStore:  vs,
+		SessionStore: ss,
+		BatchSize:    50,
+		WindowSize:   20,
+	})
+
+	ctx := context.Background()
+	msg := &store.Message{
+		ID:      "msg-err-1",
+		Role:    store.MessageRoleUser,
+		Content: "Test message",
+	}
+
+	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
+	require.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+
+	// Verify VectorStore.Store was NOT called
+	assert.Empty(t, vs.vectors, "VectorStore should not have been called after message append error")
+}
+
+func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
+	ms := newMockMemoryStore()
+	expectedErr := fmt.Errorf("vector store write failed")
+	vs := &mockVectorStoreError{
+		mockVectorStore: mockVectorStore{vectors: make(map[string]mockVector)},
+		storeErr:        expectedErr,
+	}
+	ss := newMockSessionStore()
+
+	c := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:  ms,
+		VectorStore:  vs,
+		SessionStore: ss,
+		BatchSize:    50,
+		WindowSize:   20,
+	})
+
+	ctx := context.Background()
+	msg := &store.Message{
+		ID:      "msg-vec-err-1",
+		Role:    store.MessageRoleUser,
+		Content: "Test message",
+	}
+
+	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
+	require.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+
+	// Verify message WAS appended to memory store (before vector store error)
 	count, err := ms.Messages().Count(ctx, "ws-1")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +30,7 @@ type ToolCallRequest struct {
 	SessionID   string
 	WorkspaceID string
 	PluginName  string
+	TurnID      string // Unique identifier for budget scoping
 
 	// WorkspaceAllow is the workspace-scoped capability allowlist.
 	// The enforcer intersects plugin capabilities with this set;
@@ -65,6 +67,11 @@ type ToolDispatcherConfig struct {
 	DefaultTimeout time.Duration
 }
 
+// turnBudget tracks call count for a single turn.
+type turnBudget struct {
+	count atomic.Int64
+}
+
 // ToolDispatcher dispatches tool calls with security checks, timeouts, and budgets.
 type ToolDispatcher struct {
 	enforcer       *security.Enforcer
@@ -72,8 +79,8 @@ type ToolDispatcher struct {
 	auditStore     store.AuditStore
 	defaultTimeout time.Duration
 
-	// turnCallCount tracks calls within a turn for budget enforcement.
-	turnCallCount atomic.Int64
+	// turnBudgets tracks per-turn call counts keyed by TurnID.
+	turnBudgets sync.Map // map[string]*turnBudget
 }
 
 // NewToolDispatcher creates a ToolDispatcher with the given configuration.
@@ -86,10 +93,10 @@ func NewToolDispatcher(cfg ToolDispatcherConfig) *ToolDispatcher {
 	}
 }
 
-// ResetTurnBudget resets the per-turn call counter. Call this at the start of
-// each ProcessMessage invocation.
-func (d *ToolDispatcher) ResetTurnBudget() {
-	d.turnCallCount.Store(0)
+// ClearTurn removes the budget entry for the given turn ID, freeing memory.
+// Call this after a turn completes.
+func (d *ToolDispatcher) ClearTurn(turnID string) {
+	d.turnBudgets.Delete(turnID)
 }
 
 // Execute dispatches a single tool call with capability checks, timeout, and audit logging.
@@ -168,10 +175,22 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*Too
 	return result, nil
 }
 
-// ExecuteForTurn wraps Execute with per-turn budget tracking. The budget counter
-// is shared across calls; call ResetTurnBudget at the start of each turn.
+// ExecuteForTurn wraps Execute with per-turn budget tracking. Each unique TurnID
+// gets its own independent budget counter.
 func (d *ToolDispatcher) ExecuteForTurn(ctx context.Context, req ToolCallRequest, maxCalls int) (*ToolResult, error) {
-	count := d.turnCallCount.Add(1)
+	if req.TurnID == "" {
+		return nil, sigilerr.New(
+			sigilerr.CodeAgentLoopInvalidInput,
+			"TurnID is required for budget tracking",
+		)
+	}
+
+	// Load or create budget tracker for this turn. LoadOrStore guarantees the
+	// value is *turnBudget because we only ever store values of that type.
+	budget, _ := d.turnBudgets.LoadOrStore(req.TurnID, &turnBudget{})
+	tb := budget.(*turnBudget)
+
+	count := tb.count.Add(1)
 	if int(count) > maxCalls {
 		return nil, sigilerr.New(
 			sigilerr.CodeAgentToolBudgetExceeded,

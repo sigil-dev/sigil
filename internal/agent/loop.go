@@ -250,7 +250,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	}
 
 	// Build the message array for the LLM:
-	// system prompt → active window history → new user message.
+	// system prompt → active window history (which already includes the user message we just appended).
 	messages := []provider.Message{
 		{Role: store.MessageRoleSystem, Content: "You are a helpful assistant."},
 	}
@@ -262,10 +262,6 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 			ToolName:   m.ToolName,
 		})
 	}
-	messages = append(messages, provider.Message{
-		Role:    store.MessageRoleUser,
-		Content: msg.Content,
-	})
 
 	return session, messages, nil
 }
