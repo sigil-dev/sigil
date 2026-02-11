@@ -7,8 +7,11 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sigil-dev/sigil/internal/agent"
+	"github.com/sigil-dev/sigil/internal/provider"
+	"github.com/sigil-dev/sigil/internal/security"
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -369,4 +372,246 @@ func TestAgentLoop_NoDuplicateUserMessage(t *testing.T) {
 	assert.Equal(t, store.MessageRoleSystem, messages[0].Role, "first message should be system prompt")
 	assert.Equal(t, store.MessageRoleUser, messages[1].Role, "second message should be user message")
 	assert.Equal(t, "test message", messages[1].Content, "user message content should match")
+}
+
+// ---------------------------------------------------------------------------
+// Tool dispatch mock providers
+// ---------------------------------------------------------------------------
+
+// mockProviderToolCall emits a tool call on the first Chat() call and
+// a text response on subsequent calls. Thread-safe via mutex.
+type mockProviderToolCall struct {
+	mu       sync.Mutex
+	callNum  int
+	toolCall *provider.ToolCall
+}
+
+func (p *mockProviderToolCall) Name() string                         { return "mock-tool-call" }
+func (p *mockProviderToolCall) Available(_ context.Context) bool     { return true }
+func (p *mockProviderToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-tool-call"}, nil
+}
+func (p *mockProviderToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderToolCall) Close() error { return nil }
+
+func (p *mockProviderToolCall) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	call := p.callNum
+	p.callNum++
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, 4)
+	if call == 0 {
+		// First call: emit a tool call event.
+		ch <- provider.ChatEvent{
+			Type:     provider.EventTypeToolCall,
+			ToolCall: p.toolCall,
+		}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 10, OutputTokens: 2},
+		}
+	} else {
+		// Subsequent calls: emit text response.
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Tool result processed."}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 20, OutputTokens: 8},
+		}
+	}
+	close(ch)
+	return ch, nil
+}
+
+// ---------------------------------------------------------------------------
+// Tool dispatch tests
+// ---------------------------------------------------------------------------
+
+func TestAgentLoop_ToolCallDispatch(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-1",
+			Name:      "get_weather",
+			Arguments: `{"city":"London"}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny, 22C"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "What is the weather in London?",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// The second LLM call should produce the final text.
+	assert.Equal(t, "Tool result processed.", out.Content)
+	assert.NotNil(t, out.Usage)
+	assert.Equal(t, 20, out.Usage.InputTokens, "usage should come from the final LLM call")
+
+	// Verify the provider was called twice (tool call, then text response).
+	toolCallProvider.mu.Lock()
+	callCount := toolCallProvider.callNum
+	toolCallProvider.mu.Unlock()
+	assert.Equal(t, 2, callCount, "provider should be called twice: initial + after tool result")
+}
+
+func TestAgentLoop_ToolCallDenied(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-denied",
+			Name:      "dangerous_tool",
+			Arguments: `{}`,
+		},
+	}
+
+	// Enforcer that denies all capabilities for "builtin" plugin.
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet(), security.NewCapabilitySet())
+
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManager(),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "Use the dangerous tool",
+	})
+	require.NoError(t, err, "denied tool should not fail the entire turn")
+	require.NotNil(t, out)
+
+	// The LLM should have received the error as tool result and produced text.
+	assert.Equal(t, "Tool result processed.", out.Content)
+
+	// Provider should be called twice: initial (tool call) + re-call with error result.
+	toolCallProvider.mu.Lock()
+	callCount := toolCallProvider.callNum
+	toolCallProvider.mu.Unlock()
+	assert.Equal(t, 2, callCount, "provider should be called twice even when tool is denied")
+}
+
+func TestAgentLoop_ToolCallNilDispatcher(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Provider that emits a tool call — but with nil ToolDispatcher,
+	// the tool calls should be ignored and text returned as-is.
+	toolCallProviderWithText := &mockProviderToolCallWithText{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-ignored",
+			Name:      "some_tool",
+			Arguments: `{}`,
+		},
+		textContent: "I wanted to use a tool but will answer directly.",
+	}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProviderWithText},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: nil, // explicitly nil
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "Test nil dispatcher",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, "I wanted to use a tool but will answer directly.", out.Content)
+	assert.NotNil(t, out.Usage)
+
+	// Provider should only be called once — no tool loop.
+	toolCallProviderWithText.mu.Lock()
+	callCount := toolCallProviderWithText.callNum
+	toolCallProviderWithText.mu.Unlock()
+	assert.Equal(t, 1, callCount, "provider should only be called once when ToolDispatcher is nil")
+}
+
+// mockProviderToolCallWithText emits both a tool call and text content
+// on the first (and only) call. Used to test nil-dispatcher backward compat.
+type mockProviderToolCallWithText struct {
+	mu          sync.Mutex
+	callNum     int
+	toolCall    *provider.ToolCall
+	textContent string
+}
+
+func (p *mockProviderToolCallWithText) Name() string                         { return "mock-tool-text" }
+func (p *mockProviderToolCallWithText) Available(_ context.Context) bool     { return true }
+func (p *mockProviderToolCallWithText) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-tool-text"}, nil
+}
+func (p *mockProviderToolCallWithText) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderToolCallWithText) Close() error { return nil }
+
+func (p *mockProviderToolCallWithText) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	p.callNum++
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, 4)
+	ch <- provider.ChatEvent{
+		Type:     provider.EventTypeToolCall,
+		ToolCall: p.toolCall,
+	}
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: p.textContent}
+	ch <- provider.ChatEvent{
+		Type:  provider.EventTypeDone,
+		Usage: &provider.Usage{InputTokens: 15, OutputTokens: 10},
+	}
+	close(ch)
+	return ch, nil
 }

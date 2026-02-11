@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -14,6 +15,14 @@ import (
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
+
+// defaultMaxToolCallsPerTurn is the default maximum number of tool calls
+// allowed in a single turn when MaxToolCallsPerTurn is not configured.
+const defaultMaxToolCallsPerTurn = 10
+
+// maxToolLoopIterations is the maximum number of tool-loop iterations
+// (LLM call → tool dispatch → re-call) before the loop is terminated.
+const maxToolLoopIterations = 5
 
 // InboundMessage is the input to the agent loop.
 type InboundMessage struct {
@@ -42,30 +51,41 @@ type LoopHooks struct {
 
 // LoopConfig holds dependencies for the Loop.
 type LoopConfig struct {
-	SessionManager *SessionManager
-	Enforcer       *security.Enforcer
-	ProviderRouter provider.Router
-	AuditStore     store.AuditStore
-	Hooks          *LoopHooks
+	SessionManager     *SessionManager
+	Enforcer           *security.Enforcer
+	ProviderRouter     provider.Router
+	AuditStore         store.AuditStore
+	ToolDispatcher     *ToolDispatcher
+	MaxToolCallsPerTurn int
+	Hooks              *LoopHooks
 }
 
 // Loop is the agent's core processing pipeline.
 type Loop struct {
-	sessions       *SessionManager
-	enforcer       *security.Enforcer
-	providerRouter provider.Router
-	auditStore     store.AuditStore
-	hooks          *LoopHooks
+	sessions            *SessionManager
+	enforcer            *security.Enforcer
+	providerRouter      provider.Router
+	auditStore          store.AuditStore
+	toolDispatcher      *ToolDispatcher
+	maxToolCallsPerTurn int
+	hooks               *LoopHooks
 }
 
 // NewLoop creates a Loop with the given dependencies.
 func NewLoop(cfg LoopConfig) *Loop {
+	maxCalls := cfg.MaxToolCallsPerTurn
+	if maxCalls <= 0 {
+		maxCalls = defaultMaxToolCallsPerTurn
+	}
+
 	return &Loop{
-		sessions:       cfg.SessionManager,
-		enforcer:       cfg.Enforcer,
-		providerRouter: cfg.ProviderRouter,
-		auditStore:     cfg.AuditStore,
-		hooks:          cfg.Hooks,
+		sessions:            cfg.SessionManager,
+		enforcer:            cfg.Enforcer,
+		providerRouter:      cfg.ProviderRouter,
+		auditStore:          cfg.AuditStore,
+		toolDispatcher:      cfg.ToolDispatcher,
+		maxToolCallsPerTurn: maxCalls,
+		hooks:               cfg.Hooks,
 	}
 }
 
@@ -93,12 +113,24 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	l.fireHook(l.hooks, hookCallLLM)
 
 	// Step 4: PROCESS — buffer text deltas and collect tool calls.
-	text, usage, streamErr := l.processEvents(eventCh)
+	text, toolCalls, usage, streamErr := l.processEvents(eventCh)
 	l.fireHook(l.hooks, hookProcess)
 
 	// If the stream emitted a fatal error, discard partial output and fail the turn.
 	if streamErr != nil {
 		return nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error: session %s", msg.SessionID)
+	}
+
+	// Step 4b: TOOL LOOP — dispatch tool calls and re-call the LLM.
+	if l.toolDispatcher != nil && len(toolCalls) > 0 {
+		var loopText string
+		var loopUsage *provider.Usage
+		loopText, loopUsage, err = l.runToolLoop(ctx, msg, session, messages, text, toolCalls, usage)
+		if err != nil {
+			return nil, err
+		}
+		text = loopText
+		usage = loopUsage
 	}
 
 	// Step 5: RESPOND — build outbound message, persist assistant message.
@@ -295,8 +327,9 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 	return eventCh, nil
 }
 
-func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, *provider.Usage, error) {
+func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*provider.ToolCall, *provider.Usage, error) {
 	var buf strings.Builder
+	var toolCalls []*provider.ToolCall
 	var usage *provider.Usage
 	var streamErr error
 
@@ -311,14 +344,126 @@ func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, *provid
 				usage = ev.Usage
 			}
 		case provider.EventTypeToolCall:
-			// Tool dispatch is Task 4 — collect but don't process.
+			if ev.ToolCall != nil {
+				toolCalls = append(toolCalls, ev.ToolCall)
+			}
 		case provider.EventTypeError:
 			// Capture fatal stream errors. Partial text is discarded when error occurs.
 			streamErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, ev.Error)
 		}
 	}
 
-	return buf.String(), usage, streamErr
+	return buf.String(), toolCalls, usage, streamErr
+}
+
+// runToolLoop executes the bounded inner tool loop: dispatch tool calls,
+// append results to message history, re-call the LLM, and repeat if
+// more tool calls are emitted. Bounded by maxToolLoopIterations.
+func (l *Loop) runToolLoop(
+	ctx context.Context,
+	msg InboundMessage,
+	session *store.Session,
+	messages []provider.Message,
+	initialText string,
+	toolCalls []*provider.ToolCall,
+	initialUsage *provider.Usage,
+) (string, *provider.Usage, error) {
+	turnID := uuid.New().String()
+	defer l.toolDispatcher.ClearTurn(turnID)
+
+	currentMessages := make([]provider.Message, len(messages))
+	copy(currentMessages, messages)
+	currentToolCalls := toolCalls
+	text := initialText
+	usage := initialUsage
+
+	workspaceAllow := security.NewCapabilitySet("tool:*")
+	userPerms := security.NewCapabilitySet("tool:*")
+
+	for iteration := 0; iteration < maxToolLoopIterations; iteration++ {
+		// If the LLM emitted text alongside tool calls, persist it as an
+		// assistant message so the conversation history stays coherent.
+		if text != "" {
+			assistantMsg := &store.Message{
+				ID:        uuid.New().String(),
+				SessionID: msg.SessionID,
+				Role:      store.MessageRoleAssistant,
+				Content:   text,
+				CreatedAt: time.Now(),
+			}
+			if err := l.sessions.AppendMessage(ctx, msg.SessionID, assistantMsg); err != nil {
+				return "", nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "persisting assistant message: session %s", msg.SessionID)
+			}
+			currentMessages = append(currentMessages, provider.Message{
+				Role:    store.MessageRoleAssistant,
+				Content: text,
+			})
+		}
+
+		// Dispatch each tool call and collect results.
+		for _, tc := range currentToolCalls {
+			req := ToolCallRequest{
+				ToolName:        tc.Name,
+				Arguments:       tc.Arguments,
+				SessionID:       msg.SessionID,
+				WorkspaceID:     msg.WorkspaceID,
+				PluginName:      "builtin",
+				TurnID:          turnID,
+				WorkspaceAllow:  workspaceAllow,
+				UserPermissions: userPerms,
+			}
+
+			result, err := l.toolDispatcher.ExecuteForTurn(ctx, req, l.maxToolCallsPerTurn)
+
+			var resultContent string
+			if err != nil {
+				// On dispatch failure, send the error as the tool result
+				// so the LLM can see it and decide how to proceed.
+				resultContent = fmt.Sprintf("error: %s", err.Error())
+			} else {
+				resultContent = result.Content
+			}
+
+			// Persist tool result message.
+			toolMsg := &store.Message{
+				ID:         uuid.New().String(),
+				SessionID:  msg.SessionID,
+				Role:       store.MessageRoleTool,
+				Content:    resultContent,
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+				CreatedAt:  time.Now(),
+			}
+			if appendErr := l.sessions.AppendMessage(ctx, msg.SessionID, toolMsg); appendErr != nil {
+				return "", nil, sigilerr.Wrapf(appendErr, sigilerr.CodeAgentLoopFailure, "persisting tool result: session %s", msg.SessionID)
+			}
+
+			currentMessages = append(currentMessages, provider.Message{
+				Role:       store.MessageRoleTool,
+				Content:    resultContent,
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+			})
+		}
+
+		// Re-call the LLM with updated message history.
+		eventCh, err := l.callLLM(ctx, msg.WorkspaceID, session, currentMessages)
+		if err != nil {
+			return "", nil, err
+		}
+
+		text, currentToolCalls, usage, err = l.processEvents(eventCh)
+		if err != nil {
+			return "", nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "stream error in tool loop: session %s", msg.SessionID)
+		}
+
+		// If no more tool calls, the loop is done.
+		if len(currentToolCalls) == 0 {
+			break
+		}
+	}
+
+	return text, usage, nil
 }
 
 func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {
