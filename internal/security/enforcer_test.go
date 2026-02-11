@@ -298,3 +298,141 @@ func TestEnforcer_AllowWhenAuditAppendFailsReturnsStoreFailure(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeStoreDatabaseFailure))
 	assert.Empty(t, audit.snapshot())
 }
+
+// --- sigil-anm.11: Missing spec test cases ---
+
+func TestEnforcer_AllowThreeWayIntersection(t *testing.T) {
+	t.Parallel()
+
+	// Validates that enforcement correctly computes the intersection of:
+	// plugin capabilities, workspace allow, and user permissions.
+	// Capability "sessions.read" must be in ALL three sets to be allowed.
+	audit := &mockAuditStore{}
+	enforcer := security.NewEnforcer(audit)
+	enforcer.RegisterPlugin("multi-cap", security.NewCapabilitySet(
+		"sessions.read", "messages.send", "exec.run",
+	), security.NewCapabilitySet())
+
+	ctx := context.Background()
+
+	// All three overlap on sessions.read → allowed
+	err := enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "multi-cap",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("sessions.*", "messages.*"),
+		UserPermissions: security.NewCapabilitySet("sessions.read", "files.read"),
+	})
+	require.NoError(t, err)
+
+	// messages.send is in plugin + workspace but NOT in user perms → denied
+	err = enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "multi-cap",
+		Capability:      "messages.send",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("sessions.*", "messages.*"),
+		UserPermissions: security.NewCapabilitySet("sessions.read", "files.read"),
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied))
+
+	// exec.run is in plugin but NOT in workspace → denied
+	err = enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "multi-cap",
+		Capability:      "exec.run",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("sessions.*", "messages.*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied))
+
+	// Verify all 3 decisions were audited
+	entries := audit.snapshot()
+	require.Len(t, entries, 3)
+	assert.Equal(t, "allowed", entries[0].Result)
+	assert.Equal(t, "denied", entries[1].Result)
+	assert.Equal(t, "denied", entries[2].Result)
+}
+
+func TestEnforcer_UserWithNoPermissions(t *testing.T) {
+	t.Parallel()
+
+	// Security-critical: empty permission set must deny ALL operations (fail-closed).
+	audit := &mockAuditStore{}
+	enforcer := security.NewEnforcer(audit)
+	enforcer.RegisterPlugin("telegram", security.NewCapabilitySet(
+		"sessions.read",
+	), security.NewCapabilitySet())
+
+	err := enforcer.Check(context.Background(), security.CheckRequest{
+		Plugin:          "telegram",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet(), // empty = no permissions
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied))
+
+	entries := audit.snapshot()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "denied", entries[0].Result)
+	assert.Equal(t, "user_permission_missing", entries[0].Details["reason"])
+}
+
+func TestEnforcer_AuditLogging(t *testing.T) {
+	t.Parallel()
+
+	// Verifies that enforcement decisions are audit-logged with correct fields.
+	audit := &mockAuditStore{}
+	enforcer := security.NewEnforcer(audit)
+	enforcer.RegisterPlugin("telegram", security.NewCapabilitySet(
+		"sessions.read",
+	), security.NewCapabilitySet())
+
+	ctx := context.Background()
+
+	// Allowed check
+	require.NoError(t, enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "telegram",
+		Capability:      "sessions.read",
+		WorkspaceID:     "ws-audit",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	}))
+
+	// Denied check
+	_ = enforcer.Check(ctx, security.CheckRequest{
+		Plugin:          "telegram",
+		Capability:      "exec.run",
+		WorkspaceID:     "ws-audit",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	})
+
+	entries := audit.snapshot()
+	require.Len(t, entries, 2)
+
+	// Verify allowed entry structure
+	allowed := entries[0]
+	assert.Equal(t, "capability_check", allowed.Action)
+	assert.Equal(t, "telegram", allowed.Actor)
+	assert.Equal(t, "telegram", allowed.Plugin)
+	assert.Equal(t, "ws-audit", allowed.WorkspaceID)
+	assert.Equal(t, "allowed", allowed.Result)
+	assert.NotEmpty(t, allowed.ID)
+	assert.False(t, allowed.Timestamp.IsZero())
+	assert.Equal(t, "sessions.read", allowed.Details["capability"])
+	assert.Equal(t, true, allowed.Details["plugin_allow"])
+	assert.Equal(t, false, allowed.Details["plugin_deny"])
+	assert.Equal(t, true, allowed.Details["workspace_allow"])
+	assert.Equal(t, true, allowed.Details["user_allow"])
+
+	// Verify denied entry structure
+	denied := entries[1]
+	assert.Equal(t, "denied", denied.Result)
+	assert.Equal(t, "plugin_allow_missing", denied.Details["reason"])
+	assert.NotEmpty(t, denied.ID)
+	assert.NotEqual(t, allowed.ID, denied.ID)
+}
