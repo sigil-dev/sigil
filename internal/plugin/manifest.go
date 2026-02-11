@@ -72,12 +72,20 @@ type ExecutionConfig struct {
 
 // SandboxConfig defines sandbox restrictions for process-tier plugins.
 type SandboxConfig struct {
-	Network NetworkConfig `yaml:"network,omitempty"`
+	Filesystem FilesystemSandbox `yaml:"filesystem,omitempty"`
+	Network    NetworkSandbox    `yaml:"network,omitempty"`
 }
 
-// NetworkConfig defines network access rules.
-type NetworkConfig struct {
+// FilesystemSandbox defines filesystem access rules for sandboxed plugins.
+type FilesystemSandbox struct {
+	WriteAllow []string `yaml:"write_allow,omitempty"`
+	ReadDeny   []string `yaml:"read_deny,omitempty"`
+}
+
+// NetworkSandbox defines network access rules for sandboxed plugins.
+type NetworkSandbox struct {
 	Allow []string `yaml:"allow,omitempty"`
+	Proxy bool     `yaml:"proxy,omitempty"`
 }
 
 // LifecycleConfig defines plugin lifecycle behavior.
