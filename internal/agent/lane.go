@@ -131,6 +131,9 @@ func (l *Lane) Submit(ctx context.Context, fn func(context.Context) error) error
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-l.closing:
+		return errors.New(errors.CodeAgentSessionInactive,
+			"lane closed while waiting for result")
 	case err := <-result:
 		return err
 	}

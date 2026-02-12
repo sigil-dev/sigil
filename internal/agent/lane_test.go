@@ -213,6 +213,51 @@ func TestLane_ConcurrentSubmitAndClose(t *testing.T) {
 	}
 }
 
+func TestLane_SubmitDoesNotHangWhenCloseRaces(t *testing.T) {
+	// Verify that Submit returns an error (not hangs forever) when Close()
+	// fires after the work item is enqueued but before the worker processes it.
+	for i := 0; i < 50; i++ {
+		lane := agent.NewLane("session-race-hang")
+
+		// Block the worker so our next Submit sits in the queue.
+		blocked := make(chan struct{})
+		go func() {
+			_ = lane.Submit(context.Background(), func(_ context.Context) error {
+				<-blocked
+				return nil
+			})
+		}()
+
+		// Give the blocking task time to be picked up by the worker.
+		time.Sleep(1 * time.Millisecond)
+
+		// Submit a second task — it will sit in the queue.
+		done := make(chan error, 1)
+		go func() {
+			done <- lane.Submit(context.Background(), func(_ context.Context) error {
+				return nil
+			})
+		}()
+
+		// Give the second submit time to enqueue.
+		time.Sleep(1 * time.Millisecond)
+
+		// Close the lane while the second task is queued but unprocessed.
+		// Unblock the first task so the worker can drain and exit.
+		close(blocked)
+		lane.Close()
+
+		// The second Submit must return within a reasonable time, not hang.
+		select {
+		case err := <-done:
+			// Either nil (worker drained it) or an error (lane closed) — both ok.
+			_ = err
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: Submit hung after Close", i)
+		}
+	}
+}
+
 func TestLane_WorkerPanicRecovery(t *testing.T) {
 	lane := agent.NewLane("session-panic")
 	defer lane.Close()

@@ -695,10 +695,12 @@ func TestAgentLoop_ToolCallDispatch(t *testing.T) {
 	})
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
-		SessionID:   session.ID,
-		WorkspaceID: "ws-1",
-		UserID:      "user-1",
-		Content:     "What is the weather in London?",
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather in London?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
+		UserPermissions: security.NewCapabilitySet("tool:*"),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, out)
@@ -749,10 +751,12 @@ func TestAgentLoop_ToolCallDenied(t *testing.T) {
 	})
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
-		SessionID:   session.ID,
-		WorkspaceID: "ws-1",
-		UserID:      "user-1",
-		Content:     "Use the dangerous tool",
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "Use the dangerous tool",
+		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
+		UserPermissions: security.NewCapabilitySet("tool:*"),
 	})
 	require.NoError(t, err, "denied tool should not fail the entire turn")
 	require.NotNil(t, out)

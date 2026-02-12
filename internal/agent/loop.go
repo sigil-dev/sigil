@@ -24,12 +24,27 @@ const defaultMaxToolCallsPerTurn = 10
 // (LLM call → tool dispatch → re-call) before the loop is terminated.
 const maxToolLoopIterations = 5
 
+// builtinPluginName is the plugin name used for built-in tools.
+// Phase 3 only supports built-in tools; Phase 4 will introduce plugin routing
+// where tool calls are dispatched to the appropriate plugin based on tool origin.
+const builtinPluginName = "builtin"
+
 // InboundMessage is the input to the agent loop.
 type InboundMessage struct {
 	SessionID   string
 	WorkspaceID string
 	UserID      string
 	Content     string
+
+	// WorkspaceAllow is the set of capabilities granted to the workspace.
+	// Used by the tool loop to enforce workspace-level capability policy.
+	// A zero-value (empty) set causes the enforcer to deny all tool calls (fail-closed).
+	WorkspaceAllow security.CapabilitySet
+
+	// UserPermissions is the set of capabilities granted to the user.
+	// Used by the tool loop to enforce user-level capability policy.
+	// A zero-value (empty) set causes the enforcer to deny all tool calls (fail-closed).
+	UserPermissions security.CapabilitySet
 }
 
 // OutboundMessage is the output from the agent loop.
@@ -377,10 +392,7 @@ func (l *Loop) runToolLoop(
 	text := initialText
 	usage := initialUsage
 
-	workspaceAllow := security.NewCapabilitySet("tool:*")
-	userPerms := security.NewCapabilitySet("tool:*")
-
-	for iteration := 0; iteration < maxToolLoopIterations; iteration++ {
+	for range maxToolLoopIterations {
 		// If the LLM emitted text alongside tool calls, persist it as an
 		// assistant message so the conversation history stays coherent.
 		if text != "" {
@@ -407,10 +419,10 @@ func (l *Loop) runToolLoop(
 				Arguments:       tc.Arguments,
 				SessionID:       msg.SessionID,
 				WorkspaceID:     msg.WorkspaceID,
-				PluginName:      "builtin",
+				PluginName:      builtinPluginName,
 				TurnID:          turnID,
-				WorkspaceAllow:  workspaceAllow,
-				UserPermissions: userPerms,
+				WorkspaceAllow:  msg.WorkspaceAllow,
+				UserPermissions: msg.UserPermissions,
 			}
 
 			result, err := l.toolDispatcher.ExecuteForTurn(ctx, req, l.maxToolCallsPerTurn)
