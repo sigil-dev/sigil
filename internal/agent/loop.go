@@ -25,8 +25,12 @@ const defaultMaxToolCallsPerTurn = 10
 const maxToolLoopIterations = 5
 
 // builtinPluginName is the plugin name used for built-in tools.
-// Phase 3 only supports built-in tools; Phase 4 will introduce plugin routing
-// where tool calls are dispatched to the appropriate plugin based on tool origin.
+// Phase 3 only supports built-in tools. runToolLoop hard-codes this
+// value for every ToolCallRequest, which is correct as long as no
+// external plugin tools are registered. When plugin-originated tools
+// are introduced (Phase 4+), the loop must resolve PluginName from
+// the tool registry so capability checks and audit attribution
+// reference the correct plugin identity.
 const builtinPluginName = "builtin"
 
 // InboundMessage is the input to the agent loop.

@@ -248,10 +248,11 @@ func TestLane_SubmitDoesNotHangWhenCloseRaces(t *testing.T) {
 		lane.Close()
 
 		// The second Submit must return within a reasonable time, not hang.
+		// Since Submit now waits for the result after enqueue (no early
+		// return on l.closing), the drained work should complete successfully.
 		select {
 		case err := <-done:
-			// Either nil (worker drained it) or an error (lane closed) — both ok.
-			_ = err
+			assert.NoError(t, err, "iteration %d: enqueued work should complete via drain", i)
 		case <-time.After(2 * time.Second):
 			t.Fatalf("iteration %d: Submit hung after Close", i)
 		}

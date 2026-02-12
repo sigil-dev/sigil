@@ -128,12 +128,13 @@ func (l *Lane) Submit(ctx context.Context, fn func(context.Context) error) error
 	case l.queue <- w:
 	}
 
+	// Once enqueued, always wait for the result. The worker drains all
+	// queued items during Close, so the result will always be delivered.
+	// Returning early on l.closing would leave the work still executing,
+	// which could cause duplicate side effects if the caller retries.
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-l.closing:
-		return errors.New(errors.CodeAgentSessionInactive,
-			"lane closed while waiting for result")
 	case err := <-result:
 		return err
 	}
