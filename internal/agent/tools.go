@@ -18,6 +18,43 @@ import (
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
+// ToolRegistry maps tool names to the plugin that provides them.
+// The agent loop uses this to resolve PluginName for capability enforcement.
+type ToolRegistry interface {
+	// LookupPlugin returns the plugin name that provides the given tool.
+	// Returns ("builtin", true) for built-in tools.
+	// Returns ("", false) if the tool is not registered.
+	LookupPlugin(toolName string) (pluginName string, ok bool)
+}
+
+// SimpleToolRegistry is a thread-safe in-memory implementation of ToolRegistry.
+type SimpleToolRegistry struct {
+	mu    sync.RWMutex
+	tools map[string]string // toolName → pluginName
+}
+
+// NewToolRegistry creates an empty SimpleToolRegistry.
+func NewToolRegistry() *SimpleToolRegistry {
+	return &SimpleToolRegistry{
+		tools: make(map[string]string),
+	}
+}
+
+// Register maps a tool name to the plugin that provides it.
+func (r *SimpleToolRegistry) Register(toolName, pluginName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools[toolName] = pluginName
+}
+
+// LookupPlugin returns the plugin name for the given tool.
+func (r *SimpleToolRegistry) LookupPlugin(toolName string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	name, ok := r.tools[toolName]
+	return name, ok
+}
+
 // PluginExecutor is the interface for executing tool calls via plugins.
 type PluginExecutor interface {
 	ExecuteTool(ctx context.Context, pluginName, toolName, arguments string) (string, error)

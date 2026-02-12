@@ -48,6 +48,9 @@ const (
 	CodeAgentToolBudgetExceeded      Code = "agent.tool.budget_exceeded"
 	CodeAgentToolTimeout             Code = "agent.tool.timeout"
 
+	CodeWorkspaceOpenFailure      Code = "workspace.open.failure"
+	CodeWorkspaceMembershipDenied Code = "workspace.membership.denied"
+
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
 	CodeServerInternalFailure  Code = "server.internal.failure"

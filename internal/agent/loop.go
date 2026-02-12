@@ -24,13 +24,10 @@ const defaultMaxToolCallsPerTurn = 10
 // (LLM call → tool dispatch → re-call) before the loop is terminated.
 const maxToolLoopIterations = 5
 
-// builtinPluginName is the plugin name used for built-in tools.
-// Phase 3 only supports built-in tools. runToolLoop hard-codes this
-// value for every ToolCallRequest, which is correct as long as no
-// external plugin tools are registered. When plugin-originated tools
-// are introduced (Phase 4+), the loop must resolve PluginName from
-// the tool registry so capability checks and audit attribution
-// reference the correct plugin identity.
+// builtinPluginName is the default plugin name used for tools that are
+// not registered in a ToolRegistry. When a ToolRegistry is configured,
+// runToolLoop resolves the plugin name from the registry; tools not
+// found in the registry fall back to this value.
 const builtinPluginName = "builtin"
 
 // InboundMessage is the input to the agent loop.
@@ -70,13 +67,14 @@ type LoopHooks struct {
 
 // LoopConfig holds dependencies for the Loop.
 type LoopConfig struct {
-	SessionManager     *SessionManager
-	Enforcer           *security.Enforcer
-	ProviderRouter     provider.Router
-	AuditStore         store.AuditStore
-	ToolDispatcher     *ToolDispatcher
+	SessionManager      *SessionManager
+	Enforcer            *security.Enforcer
+	ProviderRouter      provider.Router
+	AuditStore          store.AuditStore
+	ToolDispatcher      *ToolDispatcher
+	ToolRegistry        ToolRegistry
 	MaxToolCallsPerTurn int
-	Hooks              *LoopHooks
+	Hooks               *LoopHooks
 }
 
 // Loop is the agent's core processing pipeline.
@@ -86,6 +84,7 @@ type Loop struct {
 	providerRouter      provider.Router
 	auditStore          store.AuditStore
 	toolDispatcher      *ToolDispatcher
+	toolRegistry        ToolRegistry
 	maxToolCallsPerTurn int
 	hooks               *LoopHooks
 }
@@ -103,6 +102,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		providerRouter:      cfg.ProviderRouter,
 		auditStore:          cfg.AuditStore,
 		toolDispatcher:      cfg.ToolDispatcher,
+		toolRegistry:        cfg.ToolRegistry,
 		maxToolCallsPerTurn: maxCalls,
 		hooks:               cfg.Hooks,
 	}
@@ -418,12 +418,19 @@ func (l *Loop) runToolLoop(
 
 		// Dispatch each tool call and collect results.
 		for _, tc := range currentToolCalls {
+			pluginName := builtinPluginName
+			if l.toolRegistry != nil {
+				if name, ok := l.toolRegistry.LookupPlugin(tc.Name); ok {
+					pluginName = name
+				}
+			}
+
 			req := ToolCallRequest{
 				ToolName:        tc.Name,
 				Arguments:       tc.Arguments,
 				SessionID:       msg.SessionID,
 				WorkspaceID:     msg.WorkspaceID,
-				PluginName:      builtinPluginName,
+				PluginName:      pluginName,
 				TurnID:          turnID,
 				WorkspaceAllow:  msg.WorkspaceAllow,
 				UserPermissions: msg.UserPermissions,
