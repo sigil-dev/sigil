@@ -28,9 +28,10 @@ type Config struct {
 
 // Server wraps a chi router with huma API and HTTP server.
 type Server struct {
-	router chi.Router
-	api    huma.API
-	cfg    Config
+	router        chi.Router
+	api           huma.API
+	cfg           Config
+	streamHandler StreamHandler
 }
 
 // New creates a Server with chi router, huma API, health endpoint, and CORS.
@@ -68,11 +69,16 @@ func New(cfg Config) (*Server, error) {
 		return &HealthResponse{Body: HealthBody{Status: "ok"}}, nil
 	})
 
-	return &Server{
+	srv := &Server{
 		router: r,
 		api:    api,
 		cfg:    cfg,
-	}, nil
+	}
+
+	// Register SSE route (returns 503 until a StreamHandler is set).
+	srv.registerSSERoute()
+
+	return srv, nil
 }
 
 // Handler returns the underlying http.Handler for testing.
