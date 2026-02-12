@@ -64,6 +64,7 @@ tasks:
       - task: lint:go
       - task: lint:markdown
       - task: lint:yaml
+      # TODO: restore when UI exists
       - task: ui:check
   lint:go:
     desc: Lint Go code
