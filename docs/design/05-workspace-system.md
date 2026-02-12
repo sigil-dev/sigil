@@ -51,7 +51,7 @@ Message arrives from Telegram group "homelab"
 | **Scoped skills**   | Workspace-specific system prompt extensions.                                                          |
 | **Multi-member**    | Workspaces can have multiple users with shared context.                                               |
 | **Multi-binding**   | A workspace can bind to multiple channels.                                                            |
-| **Channel binding** | A channel (group/DM) maps to exactly one workspace. Unbound channels route to "personal".             |
+| **Channel binding** | A channel (group/DM) maps to exactly one workspace. Unbound channels route to a user-scoped `personal:<userID>` workspace. |
 
 ## Configuration
 

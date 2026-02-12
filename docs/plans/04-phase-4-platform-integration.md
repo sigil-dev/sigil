@@ -1048,7 +1048,7 @@ After completing all 7 tasks, verify:
 - [ ] `task test` — all tests pass (including Phase 1–3 tests)
 - [ ] `task lint` — zero lint errors
 - [ ] Workspace manager routes messages to correct workspace by channel binding
-- [ ] Unbound channels route to "personal" workspace
+- [ ] Unbound channels route to user-scoped `personal:<userID>` workspace
 - [ ] Membership checks deny non-members
 - [ ] Tool allowlists are enforced per workspace
 - [ ] Identity resolver maps platform users to canonical IDs across channels

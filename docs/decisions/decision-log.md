@@ -471,3 +471,20 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** Most provider failures manifest immediately (auth, rate limit, 503). Mid-stream failures (network drop, timeout) are rare and would require fundamentally different architecture — buffering all events, managing partial output state, and replaying the full conversation. The complexity cost doesn't justify the edge case coverage at this stage.
 
 **Ref:** PR #12 review finding 4, bead `sigil-dxw`
+
+---
+
+## D037: User-Scoped Personal Workspace Fallback
+
+**Question:** Should unbound channels route to a shared `"personal"` workspace or a user-scoped `"personal:<userID>"` workspace?
+
+**Options considered:**
+
+- Shared `"personal"` workspace (original spec) — all users share the same fallback workspace. Simple but leaks context between users and provides no isolation.
+- User-scoped `"personal:<userID>"` (chosen) — each user gets their own isolated fallback workspace with implied membership.
+
+**Decision:** Unbound channels route to `personal:<userID>`. Design docs and plan updated to match.
+
+**Rationale:** A shared personal workspace is a security and privacy concern — users would see each other's conversation history and tool outputs. User-scoped workspaces provide proper isolation with minimal additional complexity. Membership is implied since the workspace belongs to the user.
+
+**Ref:** PR #12 review round 5 finding 4, bead `sigil-0cs`

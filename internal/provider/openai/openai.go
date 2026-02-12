@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	openaisdk "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -274,9 +276,11 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 				}
 			}
 
-			// When finish_reason is "tool_calls", emit accumulated tool calls.
+			// When finish_reason is "tool_calls", emit accumulated tool calls
+			// in deterministic index order to preserve model-intended sequencing.
 			if choice.FinishReason == "tool_calls" {
-				for idx, acc := range toolCalls {
+				for _, idx := range slices.Sorted(maps.Keys(toolCalls)) {
+					acc := toolCalls[idx]
 					if !json.Valid([]byte(acc.partialArgs)) {
 						p.health.RecordFailure()
 						ch <- provider.ChatEvent{
@@ -320,8 +324,9 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 		return
 	}
 
-	// Emit any remaining tool calls that weren't flushed by a finish_reason.
-	for idx, acc := range toolCalls {
+	// Emit any remaining tool calls in deterministic index order.
+	for _, idx := range slices.Sorted(maps.Keys(toolCalls)) {
+		acc := toolCalls[idx]
 		if !json.Valid([]byte(acc.partialArgs)) {
 			p.health.RecordFailure()
 			ch <- provider.ChatEvent{
