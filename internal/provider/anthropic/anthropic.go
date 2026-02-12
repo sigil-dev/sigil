@@ -23,6 +23,7 @@ type Config struct {
 type Provider struct {
 	client anthropicsdk.Client
 	config Config
+	health *provider.HealthTracker
 }
 
 // New creates a new Anthropic provider. Returns an error if the API key is missing.
@@ -39,13 +40,17 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	client := anthropicsdk.NewClient(opts...)
-	return &Provider{client: client, config: cfg}, nil
+	return &Provider{
+		client: client,
+		config: cfg,
+		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+	}, nil
 }
 
 func (p *Provider) Name() string { return "anthropic" }
 
 func (p *Provider) Available(_ context.Context) bool {
-	return true
+	return p.health.IsHealthy()
 }
 
 // knownModels returns the hardcoded set of known Anthropic models.
@@ -195,17 +200,38 @@ func convertMessages(msgs []provider.Message) ([]anthropicsdk.MessageParam, erro
 func convertTools(tools []provider.ToolDefinition) []anthropicsdk.ToolUnionParam {
 	result := make([]anthropicsdk.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
+		schema := extractSchema(t.InputSchema)
 		result = append(result, anthropicsdk.ToolUnionParam{
 			OfTool: &anthropicsdk.ToolParam{
 				Name:        t.Name,
 				Description: anthropicsdk.Opt(t.Description),
-				InputSchema: anthropicsdk.ToolInputSchemaParam{
-					Properties: t.InputSchema,
-				},
+				InputSchema: schema,
 			},
 		})
 	}
 	return result
+}
+
+// extractSchema maps a provider.ToolDefinition.InputSchema (a full JSON Schema
+// object with keys like "type", "properties", "required") into the Anthropic SDK's
+// ToolInputSchemaParam, which expects Properties and Required as separate fields.
+func extractSchema(raw map[string]any) anthropicsdk.ToolInputSchemaParam {
+	schema := anthropicsdk.ToolInputSchemaParam{}
+	if props, ok := raw["properties"]; ok {
+		schema.Properties = props
+	}
+	if req, ok := raw["required"]; ok {
+		if arr, ok := req.([]any); ok {
+			strs := make([]string, 0, len(arr))
+			for _, v := range arr {
+				if s, ok := v.(string); ok {
+					strs = append(strs, s)
+				}
+			}
+			schema.Required = strs
+		}
+	}
+	return schema
 }
 
 // streamChat runs the streaming loop, converting SDK events into provider.ChatEvent values.
@@ -285,12 +311,14 @@ func (p *Provider) streamChat(ctx context.Context, params anthropicsdk.MessageNe
 			}
 
 		case "message_stop":
+			p.health.RecordSuccess()
 			ch <- provider.ChatEvent{Type: provider.EventTypeDone}
 			return
 		}
 	}
 
 	if err := stream.Err(); err != nil {
+		p.health.RecordFailure()
 		ch <- provider.ChatEvent{
 			Type:  provider.EventTypeError,
 			Error: err.Error(),
@@ -299,5 +327,6 @@ func (p *Provider) streamChat(ctx context.Context, params anthropicsdk.MessageNe
 	}
 
 	// If we exit the loop without a message_stop, still send done.
+	p.health.RecordSuccess()
 	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
 }

@@ -5,11 +5,13 @@ package identity_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/identity"
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +38,7 @@ func (m *mockUserStore) GetByExternalID(_ context.Context, provider, externalID 
 	if u, ok := m.users[key]; ok {
 		return u, nil
 	}
-	return nil, fmt.Errorf("user not found for %s", key)
+	return nil, fmt.Errorf("user not found for %s: %w", key, store.ErrNotFound)
 }
 
 func (m *mockUserStore) Create(context.Context, *store.User) error                   { return nil }
@@ -93,6 +95,23 @@ func TestResolver_UnknownUser(t *testing.T) {
 	_, err := r.Resolve(context.Background(), "telegram", "nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "user not found")
+	assert.True(t, sigilerr.HasCode(err, identity.CodeIdentityUserNotFound))
+}
+
+// mockErrorUserStore is a UserStore that always returns a backend error.
+type mockErrorUserStore struct{ mockUserStore }
+
+func (m *mockErrorUserStore) GetByExternalID(_ context.Context, _, _ string) (*store.User, error) {
+	return nil, errors.New("connection refused")
+}
+
+func TestResolver_BackendFailure(t *testing.T) {
+	r := identity.NewResolver(&mockErrorUserStore{}, &mockPairingStore{})
+
+	_, err := r.Resolve(context.Background(), "telegram", "tg-alice")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, identity.CodeIdentityBackendFailure))
+	assert.False(t, sigilerr.HasCode(err, identity.CodeIdentityUserNotFound))
 }
 
 func TestResolver_ResolvePlatformUser_MultiplePlatforms(t *testing.T) {

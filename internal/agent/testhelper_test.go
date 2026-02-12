@@ -315,10 +315,11 @@ func newMockProviderRouterStreamPartialThenError() *mockProviderRouter {
 	return &mockProviderRouter{provider: &mockProviderStreamPartialThenError{}}
 }
 
-// mockProviderCapturing records ChatRequest.Messages for test assertions.
+// mockProviderCapturing records ChatRequest fields for test assertions.
 type mockProviderCapturing struct {
-	mu               sync.Mutex
-	capturedMessages []provider.Message
+	mu                   sync.Mutex
+	capturedMessages     []provider.Message
+	capturedSystemPrompt string
 }
 
 func (p *mockProviderCapturing) Name() string                     { return "mock-capturing" }
@@ -331,6 +332,7 @@ func (p *mockProviderCapturing) ListModels(_ context.Context) ([]provider.ModelI
 func (p *mockProviderCapturing) Chat(_ context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	p.mu.Lock()
 	p.capturedMessages = append([]provider.Message{}, req.Messages...)
+	p.capturedSystemPrompt = req.SystemPrompt
 	p.mu.Unlock()
 
 	ch := make(chan provider.ChatEvent, 3)

@@ -28,6 +28,7 @@ type Config struct {
 type Provider struct {
 	client openaisdk.Client
 	config Config
+	health *provider.HealthTracker
 }
 
 // New creates a new OpenRouter provider. Returns an error if the API key is missing.
@@ -45,13 +46,17 @@ func New(cfg Config) (*Provider, error) {
 		option.WithAPIKey(cfg.APIKey),
 		option.WithBaseURL(base),
 	)
-	return &Provider{client: client, config: cfg}, nil
+	return &Provider{
+		client: client,
+		config: cfg,
+		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+	}, nil
 }
 
 func (p *Provider) Name() string { return "openrouter" }
 
 func (p *Provider) Available(_ context.Context) bool {
-	return true
+	return p.health.IsHealthy()
 }
 
 // knownModels returns a curated set of popular models available via OpenRouter.
@@ -290,6 +295,7 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 	}
 
 	if err := stream.Err(); err != nil {
+		p.health.RecordFailure()
 		ch <- provider.ChatEvent{
 			Type:  provider.EventTypeError,
 			Error: err.Error(),
@@ -313,5 +319,6 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 		delete(toolCalls, idx)
 	}
 
+	p.health.RecordSuccess()
 	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
 }

@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
@@ -26,10 +27,19 @@ func NewResolver(users store.UserStore, pairings store.PairingStore) *Resolver {
 func (r *Resolver) Resolve(ctx context.Context, channelType, platformUserID string) (*store.User, error) {
 	user, err := r.users.GetByExternalID(ctx, channelType, platformUserID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, sigilerr.Wrap(
+				err,
+				CodeIdentityUserNotFound,
+				"user not found",
+				sigilerr.Field("platform", channelType),
+				sigilerr.Field("platform_user_id", platformUserID),
+			)
+		}
 		return nil, sigilerr.Wrap(
 			err,
-			CodeIdentityUserNotFound,
-			"user not found",
+			CodeIdentityBackendFailure,
+			"identity lookup failed",
 			sigilerr.Field("platform", channelType),
 			sigilerr.Field("platform_user_id", platformUserID),
 		)
@@ -39,3 +49,6 @@ func (r *Resolver) Resolve(ctx context.Context, channelType, platformUserID stri
 
 // CodeIdentityUserNotFound indicates that no user matches the given platform identity.
 const CodeIdentityUserNotFound sigilerr.Code = "identity.user.not_found"
+
+// CodeIdentityBackendFailure indicates an infrastructure error during identity lookup.
+const CodeIdentityBackendFailure sigilerr.Code = "identity.backend.failure"

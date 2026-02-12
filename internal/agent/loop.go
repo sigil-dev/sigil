@@ -30,6 +30,11 @@ const maxToolLoopIterations = 5
 // found in the registry fall back to this value.
 const builtinPluginName = "builtin"
 
+// defaultSystemPrompt is the baseline system instruction sent to the LLM via
+// ChatRequest.SystemPrompt. Providers use their native mechanism to inject it
+// (e.g. Anthropic's system param, Google's SystemInstruction, OpenAI's system role).
+const defaultSystemPrompt = "You are a helpful assistant."
+
 // InboundMessage is the input to the agent loop.
 type InboundMessage struct {
 	SessionID   string
@@ -301,10 +306,10 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	}
 
 	// Build the message array for the LLM:
-	// system prompt → active window history (which already includes the user message we just appended).
-	messages := []provider.Message{
-		{Role: store.MessageRoleSystem, Content: "You are a helpful assistant."},
-	}
+	// active window history (which already includes the user message we just appended).
+	// The system prompt is set separately via ChatRequest.SystemPrompt so that all
+	// providers (Anthropic, Google, OpenAI) handle it through their native mechanism.
+	var messages []provider.Message
 	for _, m := range history {
 		messages = append(messages, provider.Message{
 			Role:       m.Role,
@@ -333,9 +338,10 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 	}
 
 	req := provider.ChatRequest{
-		Model:    resolvedModel,
-		Messages: messages,
-		Options:  provider.ChatOptions{Stream: true},
+		Model:        resolvedModel,
+		Messages:     messages,
+		SystemPrompt: defaultSystemPrompt,
+		Options:      provider.ChatOptions{Stream: true},
 	}
 
 	eventCh, err := prov.Chat(ctx, req)

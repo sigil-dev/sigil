@@ -368,10 +368,16 @@ func TestAgentLoop_NoDuplicateUserMessage(t *testing.T) {
 
 	assert.Equal(t, 1, userMsgCount, "user message should appear exactly once, not duplicated")
 
-	// Verify message order: system → user.
-	assert.Equal(t, store.MessageRoleSystem, messages[0].Role, "first message should be system prompt")
-	assert.Equal(t, store.MessageRoleUser, messages[1].Role, "second message should be user message")
-	assert.Equal(t, "test message", messages[1].Content, "user message content should match")
+	// System prompt should be sent via ChatRequest.SystemPrompt, not as a message.
+	assert.NotEmpty(t, capturer.capturedSystemPrompt, "system prompt should be set")
+	assert.Equal(t, "You are a helpful assistant.", capturer.capturedSystemPrompt)
+
+	// Messages should not contain a system role message; first message should be user.
+	for _, msg := range messages {
+		assert.NotEqual(t, store.MessageRoleSystem, msg.Role, "system prompt should not be in messages array")
+	}
+	assert.Equal(t, store.MessageRoleUser, messages[0].Role, "first message should be user message")
+	assert.Equal(t, "test message", messages[0].Content, "user message content should match")
 }
 
 // ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ type Config struct {
 type Provider struct {
 	client *genai.Client
 	config Config
+	health *provider.HealthTracker
 }
 
 // New creates a new Google provider. Returns an error if the API key is missing.
@@ -39,13 +40,17 @@ func New(cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("google: creating client: %w", err)
 	}
 
-	return &Provider{client: client, config: cfg}, nil
+	return &Provider{
+		client: client,
+		config: cfg,
+		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+	}, nil
 }
 
 func (p *Provider) Name() string { return "google" }
 
 func (p *Provider) Available(_ context.Context) bool {
-	return true
+	return p.health.IsHealthy()
 }
 
 // knownModels returns the hardcoded set of known Google Gemini models.
@@ -224,6 +229,7 @@ func (p *Provider) streamChat(
 ) {
 	for result, err := range p.client.Models.GenerateContentStream(ctx, model, contents, config) {
 		if err != nil {
+			p.health.RecordFailure()
 			ch <- provider.ChatEvent{
 				Type:  provider.EventTypeError,
 				Error: err.Error(),
@@ -270,5 +276,6 @@ func (p *Provider) streamChat(
 		}
 	}
 
+	p.health.RecordSuccess()
 	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
 }
