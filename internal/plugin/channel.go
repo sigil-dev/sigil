@@ -109,8 +109,8 @@ func (r *ChannelRouter) Send(ctx context.Context, msg OutboundMessage) error {
 // channel based on the channel's pairing mode. For open-mode channels,
 // authorization always succeeds (no pairing required). For closed and
 // allowlist modes, an active pairing scoped to the specific channel instance
-// (channelType + channelID) is required.
-func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, channelID, userID string) error {
+// (channelType + channelID) and workspace is required.
+func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, channelID, userID, workspaceID string) error {
 	r.mu.RLock()
 	reg, ok := r.channels[channelType]
 	r.mu.RUnlock()
@@ -147,7 +147,7 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 	}
 
 	// For non-open modes (allowlist passes above), verify active pairing
-	// scoped to the specific channel instance.
+	// scoped to the specific channel instance and workspace.
 	if r.pairings == nil {
 		return sigilerr.New(CodeChannelPairingRequired,
 			"pairing store not configured",
@@ -165,7 +165,8 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 	}
 
 	for _, p := range pairings {
-		if p.ChannelType == channelType && p.ChannelID == channelID && p.Status == store.PairingStatusActive {
+		if p.ChannelType == channelType && p.ChannelID == channelID &&
+			p.WorkspaceID == workspaceID && p.Status == store.PairingStatusActive {
 			return nil
 		}
 	}
@@ -174,6 +175,7 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 		"no active pairing for channel",
 		sigilerr.Field("channel_type", channelType),
 		sigilerr.Field("channel_id", channelID),
+		sigilerr.Field("workspace_id", workspaceID),
 		sigilerr.Field("user_id", userID),
 	)
 }

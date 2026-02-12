@@ -917,7 +917,7 @@ func TestToolRegistry_LookupPlugin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := agent.NewToolRegistry()
 			for tool, plugin := range tt.registrations {
-				reg.Register(tool, plugin)
+				reg.Register(tool, plugin, provider.ToolDefinition{Name: tool})
 			}
 
 			gotPlugin, gotOK := reg.LookupPlugin(tt.lookupTool)
@@ -930,7 +930,7 @@ func TestToolRegistry_LookupPlugin(t *testing.T) {
 func TestToolDispatcher_ResolvesPluginFromRegistry(t *testing.T) {
 	// Register "get_weather" under "weather-plugin".
 	registry := agent.NewToolRegistry()
-	registry.Register("get_weather", "weather-plugin")
+	registry.Register("get_weather", "weather-plugin", provider.ToolDefinition{Name: "get_weather"})
 
 	// Create a capturing plugin executor that records the plugin name.
 	capturer := &mockPluginExecutorCapturing{}
@@ -988,7 +988,7 @@ func TestToolDispatcher_ResolvesPluginFromRegistry(t *testing.T) {
 func TestToolDispatcher_FallsBackToBuiltin(t *testing.T) {
 	// Registry exists but does NOT contain "get_weather".
 	registry := agent.NewToolRegistry()
-	registry.Register("some_other_tool", "other-plugin")
+	registry.Register("some_other_tool", "other-plugin", provider.ToolDefinition{Name: "some_other_tool"})
 
 	// Create a capturing plugin executor that records the plugin name.
 	capturer := &mockPluginExecutorCapturing{}

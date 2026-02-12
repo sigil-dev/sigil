@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 
@@ -102,11 +103,14 @@ func (r *Registry) MaxAttempts() int {
 // It implements the Router interface. When modelName is empty the
 // default (or workspace override) is used.
 func (r *Registry) Route(ctx context.Context, workspaceID, modelName string) (Provider, string, error) {
-	return r.RouteWithBudget(ctx, workspaceID, modelName, nil)
+	return r.RouteWithBudget(ctx, workspaceID, modelName, nil, nil)
 }
 
 // RouteWithBudget is like Route but also enforces token budget constraints.
-func (r *Registry) RouteWithBudget(ctx context.Context, workspaceID, modelName string, budget *Budget) (Provider, string, error) {
+// The exclude list contains provider names to skip (already-tried providers
+// in the current failover sequence), ensuring failover progresses even for
+// providers that don't implement HealthReporter.
+func (r *Registry) RouteWithBudget(ctx context.Context, workspaceID, modelName string, budget *Budget, exclude []string) (Provider, string, error) {
 	// 1. Check budget.
 	if budget != nil && budget.MaxSessionTokens > 0 && budget.UsedSessionTokens >= budget.MaxSessionTokens {
 		return nil, "", sigilerr.New(
@@ -130,15 +134,22 @@ func (r *Registry) RouteWithBudget(ctx context.Context, workspaceID, modelName s
 		)
 	}
 
-	// 3. Try the primary ref.
-	p, model, err := r.tryRef(ctx, ref)
-	if err == nil {
-		return p, model, nil
+	// 3. Try the primary ref (skip if provider is in exclude list).
+	provName, _ := parseRef(ref)
+	if !slices.Contains(exclude, provName) {
+		p, model, err := r.tryRef(ctx, ref)
+		if err == nil {
+			return p, model, nil
+		}
 	}
 
-	// 4. Walk failover chain.
+	// 4. Walk failover chain (skip excluded providers).
 	for _, fallback := range r.failover {
-		p, model, err = r.tryRef(ctx, fallback)
+		fbProv, _ := parseRef(fallback)
+		if slices.Contains(exclude, fbProv) {
+			continue
+		}
+		p, model, err := r.tryRef(ctx, fallback)
 		if err == nil {
 			return p, model, nil
 		}

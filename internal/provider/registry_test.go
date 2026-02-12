@@ -143,7 +143,7 @@ func TestRegistry_BudgetEnforcement(t *testing.T) {
 		MaxSessionTokens:  1000,
 		UsedSessionTokens: 1500,
 	}
-	_, _, err := reg.RouteWithBudget(ctx, "", "", budget)
+	_, _, err := reg.RouteWithBudget(ctx, "", "", budget, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "budget")
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded))

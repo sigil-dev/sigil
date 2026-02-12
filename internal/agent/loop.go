@@ -342,8 +342,9 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 
 	maxAttempts := l.providerRouter.MaxAttempts()
 	var lastErr error
+	var triedProviders []string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		prov, resolvedModel, err := l.providerRouter.RouteWithBudget(ctx, workspaceID, modelName, budget)
+		prov, resolvedModel, err := l.providerRouter.RouteWithBudget(ctx, workspaceID, modelName, budget, triedProviders)
 		if err != nil {
 			// Propagate specific routing errors directly instead of masking
 			// them as "all providers unavailable".
@@ -356,11 +357,16 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 			break
 		}
 
+		triedProviders = append(triedProviders, prov.Name())
+
 		req := provider.ChatRequest{
 			Model:        resolvedModel,
 			Messages:     messages,
 			SystemPrompt: defaultSystemPrompt,
 			Options:      provider.ChatOptions{Stream: true},
+		}
+		if l.toolRegistry != nil {
+			req.Tools = l.toolRegistry.GetToolDefinitions()
 		}
 
 		eventCh, err := prov.Chat(ctx, req)

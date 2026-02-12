@@ -1006,7 +1006,7 @@ func (r *mockProviderRouterGenericError) Route(_ context.Context, _, _ string) (
 	return nil, "", assert.AnError
 }
 
-func (r *mockProviderRouterGenericError) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
+func (r *mockProviderRouterGenericError) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
 	return nil, "", assert.AnError
 }
 
@@ -1154,7 +1154,7 @@ func (r *mockProviderRouterWithAttempts) Route(_ context.Context, _, _ string) (
 	return &mockProviderChatError{}, "mock-model", nil
 }
 
-func (r *mockProviderRouterWithAttempts) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
+func (r *mockProviderRouterWithAttempts) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
 	r.mu.Lock()
 	r.calls++
 	r.mu.Unlock()

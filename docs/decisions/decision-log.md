@@ -562,3 +562,43 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** In-stream errors already triggered `RecordFailure()` (via the streaming goroutine), but pre-stream errors bypassed it because the goroutine never started. This caused failover retries to keep selecting the same broken primary provider. The optional interface pattern preserves backward compatibility while closing the health tracking gap.
 
 **Ref:** PR #12 review round 7 finding 2
+
+## D044: Tool Definitions Sent to Providers
+
+**Question:** How should the agent loop provide tool schemas (names, parameters) to LLM providers for function-calling?
+
+**Decision:** `ToolRegistry` extended with `GetToolDefinitions() []provider.ToolDefinition`. Each `Register()` call now accepts a `provider.ToolDefinition` alongside the plugin name. The agent loop populates `ChatRequest.Tools` from the registry before calling the provider.
+
+**Rationale:** Without tool definitions in the `ChatRequest`, providers had no tool schemas to present to the LLM, so the model could never generate tool calls. The registry is the natural home for this data since it already maps tool names to plugins.
+
+**Ref:** PR #12 review round 8 finding 1
+
+## D045: Workspace-Scoped Pairing Authorization
+
+**Question:** Should `AuthorizeInbound` check workspace scope when verifying pairings?
+
+**Decision:** `AuthorizeInbound` now requires a `workspaceID` parameter and checks that the pairing matches the specific workspace in addition to channel type, channel ID, and active status.
+
+**Rationale:** Without workspace scoping, a pairing on workspace A could authorize access to workspace B through the same channel, violating workspace isolation boundaries.
+
+**Ref:** PR #12 review round 8 finding 2
+
+## D046: Config Schema — Workspace Bindings and Tool Deny Rules
+
+**Question:** Should the config schema include `bindings` and `deny` fields that the design docs and example config reference?
+
+**Decision:** Added `Bindings []BindingConfig` to `WorkspaceConfig` and `Deny []string` to `ToolsConfig`. These fields were already described in the design docs and example config but missing from the Go structs, causing silent ignore on parse.
+
+**Rationale:** The schema should match what users can configure. Missing struct fields meant valid YAML was silently dropped by Viper unmarshalling.
+
+**Ref:** PR #12 review round 8 finding 3
+
+## D047: Per-Attempt Provider Exclusion in RouteWithBudget
+
+**Question:** How should failover avoid re-selecting a provider that already failed in the current turn?
+
+**Decision:** `RouteWithBudget` accepts an `exclude []string` parameter. The agent loop tracks provider names across retry attempts and passes them to the router, which skips excluded providers in both primary and failover selection.
+
+**Rationale:** The `HealthReporter` circuit breaker operates on a 30s cooldown window — too coarse for within-turn retries. A provider that fails on attempt 1 stays "available" to the health check and gets re-selected on attempt 2. The exclusion list ensures deterministic failover progression without requiring all providers to implement `HealthReporter`.
+
+**Ref:** PR #12 review round 8 finding 4

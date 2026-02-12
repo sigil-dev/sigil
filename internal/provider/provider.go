@@ -43,7 +43,9 @@ type Router interface {
 
 	// RouteWithBudget selects a provider and enforces token budget constraints.
 	// Callers should prefer this over Route when budget context is available.
-	RouteWithBudget(ctx context.Context, workspaceID, modelName string, budget *Budget) (Provider, string, error)
+	// The exclude list contains provider names to skip (already-tried providers
+	// in the current failover sequence).
+	RouteWithBudget(ctx context.Context, workspaceID, modelName string, budget *Budget, exclude []string) (Provider, string, error)
 
 	// RegisterProvider adds a provider to the router.
 	RegisterProvider(name string, provider Provider) error

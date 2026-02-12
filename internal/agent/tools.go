@@ -13,46 +13,75 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
-// ToolRegistry maps tool names to the plugin that provides them.
-// The agent loop uses this to resolve PluginName for capability enforcement.
+// ToolRegistry maps tool names to the plugin that provides them and stores
+// tool definitions so the agent loop can send them to LLM providers.
 type ToolRegistry interface {
 	// LookupPlugin returns the plugin name that provides the given tool.
 	// Returns ("builtin", true) for built-in tools.
 	// Returns ("", false) if the tool is not registered.
 	LookupPlugin(toolName string) (pluginName string, ok bool)
+
+	// GetToolDefinitions returns all registered tool definitions for inclusion
+	// in ChatRequest.Tools. The returned slice is safe for concurrent use.
+	GetToolDefinitions() []provider.ToolDefinition
+}
+
+// toolEntry holds the plugin name and definition for a registered tool.
+type toolEntry struct {
+	pluginName string
+	definition provider.ToolDefinition
 }
 
 // SimpleToolRegistry is a thread-safe in-memory implementation of ToolRegistry.
 type SimpleToolRegistry struct {
 	mu    sync.RWMutex
-	tools map[string]string // toolName → pluginName
+	tools map[string]*toolEntry
 }
 
 // NewToolRegistry creates an empty SimpleToolRegistry.
 func NewToolRegistry() *SimpleToolRegistry {
 	return &SimpleToolRegistry{
-		tools: make(map[string]string),
+		tools: make(map[string]*toolEntry),
 	}
 }
 
-// Register maps a tool name to the plugin that provides it.
-func (r *SimpleToolRegistry) Register(toolName, pluginName string) {
+// Register maps a tool name to the plugin that provides it along with its
+// definition (schema) for LLM requests.
+func (r *SimpleToolRegistry) Register(toolName, pluginName string, def provider.ToolDefinition) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.tools[toolName] = pluginName
+	r.tools[toolName] = &toolEntry{
+		pluginName: pluginName,
+		definition: def,
+	}
 }
 
 // LookupPlugin returns the plugin name for the given tool.
 func (r *SimpleToolRegistry) LookupPlugin(toolName string) (string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	name, ok := r.tools[toolName]
-	return name, ok
+	entry, ok := r.tools[toolName]
+	if !ok {
+		return "", false
+	}
+	return entry.pluginName, true
+}
+
+// GetToolDefinitions returns all registered tool definitions.
+func (r *SimpleToolRegistry) GetToolDefinitions() []provider.ToolDefinition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	defs := make([]provider.ToolDefinition, 0, len(r.tools))
+	for _, entry := range r.tools {
+		defs = append(defs, entry.definition)
+	}
+	return defs
 }
 
 // PluginExecutor is the interface for executing tool calls via plugins.

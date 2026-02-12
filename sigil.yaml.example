@@ -45,4 +45,15 @@ workspaces:
     members: []
     tools:
       allow: ["*"]
+      # deny: ["tool.dangerous_exec"]   # deny patterns evaluated first
     skills: []
+  # team:
+  #   description: "Shared team workspace"
+  #   members: ["alice", "bob"]
+  #   bindings:
+  #     - channel: "slack"
+  #       channel_id: "C12345"
+  #   tools:
+  #     allow: ["tool.*"]
+  #     deny: ["tool.shell_exec"]
+  #   skills: ["summarize"]

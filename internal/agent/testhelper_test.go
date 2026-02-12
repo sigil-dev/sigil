@@ -231,7 +231,7 @@ func (r *mockProviderRouter) Route(_ context.Context, _, _ string) (provider.Pro
 	return r.provider, "mock-model", nil
 }
 
-func (r *mockProviderRouter) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
+func (r *mockProviderRouter) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
 	return r.provider, "mock-model", nil
 }
 
@@ -251,7 +251,7 @@ func (r *mockProviderRouterBudgetExceeded) Route(_ context.Context, _, _ string)
 	return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded for workspace")
 }
 
-func (r *mockProviderRouterBudgetExceeded) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
+func (r *mockProviderRouterBudgetExceeded) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
 	return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded for workspace")
 }
 
@@ -385,7 +385,7 @@ func (r *mockProviderRouterBudgetAware) Route(_ context.Context, _, _ string) (p
 	return r.provider, "mock-model", nil
 }
 
-func (r *mockProviderRouterBudgetAware) RouteWithBudget(_ context.Context, _, _ string, budget *provider.Budget) (provider.Provider, string, error) {
+func (r *mockProviderRouterBudgetAware) RouteWithBudget(_ context.Context, _, _ string, budget *provider.Budget, _ []string) (provider.Provider, string, error) {
 	r.mu.Lock()
 	r.capturedBudget = budget
 	r.mu.Unlock()
@@ -412,7 +412,7 @@ func (r *mockProviderRouterInvalidModelRef) Route(_ context.Context, _, _ string
 	return nil, "", sigilerr.New(sigilerr.CodeProviderInvalidModelRef, "model name must use provider/model format")
 }
 
-func (r *mockProviderRouterInvalidModelRef) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
+func (r *mockProviderRouterInvalidModelRef) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
 	return nil, "", sigilerr.New(sigilerr.CodeProviderInvalidModelRef, "model name must use provider/model format")
 }
 

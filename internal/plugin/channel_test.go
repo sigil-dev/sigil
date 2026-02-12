@@ -145,7 +145,7 @@ func TestAuthorizeInbound_OpenMode(t *testing.T) {
 		Mode:   plugin.PairingOpen,
 	})
 
-	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "any-user")
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "any-user", "ws-1")
 	assert.NoError(t, err, "open mode should allow any user without pairing")
 }
 
@@ -156,7 +156,7 @@ func TestAuthorizeInbound_ClosedMode(t *testing.T) {
 		Mode:   plugin.PairingClosed,
 	})
 
-	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "any-user")
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "any-user", "ws-1")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingDenied))
 }
@@ -169,6 +169,7 @@ func TestAuthorizeInbound_AllowlistWithPairing(t *testing.T) {
 				UserID:      "alice",
 				ChannelType: "telegram",
 				ChannelID:   "chat-1",
+				WorkspaceID: "ws-1",
 				Status:      store.PairingStatusActive,
 			},
 		},
@@ -181,16 +182,16 @@ func TestAuthorizeInbound_AllowlistWithPairing(t *testing.T) {
 	})
 
 	// Alice is allowlisted and has active pairing for chat-1
-	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice")
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-1")
 	assert.NoError(t, err)
 
 	// Bob is allowlisted but has no pairing for chat-1
-	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "bob")
+	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "bob", "ws-1")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
 
 	// Stranger is not allowlisted
-	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "stranger")
+	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "stranger", "ws-1")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingDenied))
 }
@@ -204,6 +205,7 @@ func TestAuthorizeInbound_PairingScopedToChannelInstance(t *testing.T) {
 				UserID:      "alice",
 				ChannelType: "telegram",
 				ChannelID:   "chat-1",
+				WorkspaceID: "ws-1",
 				Status:      store.PairingStatusActive,
 			},
 		},
@@ -216,11 +218,11 @@ func TestAuthorizeInbound_PairingScopedToChannelInstance(t *testing.T) {
 	})
 
 	// Same channel instance: OK
-	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice")
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-1")
 	assert.NoError(t, err)
 
 	// Different channel instance: denied (no pairing for chat-2)
-	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-2", "alice")
+	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-2", "alice", "ws-1")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
 }
@@ -234,7 +236,7 @@ func TestAuthorizeInbound_PairingBackendFailure(t *testing.T) {
 		Allowlist: []string{"alice"},
 	})
 
-	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice")
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-1")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelBackendFailure))
 }
@@ -242,7 +244,7 @@ func TestAuthorizeInbound_PairingBackendFailure(t *testing.T) {
 func TestAuthorizeInbound_UnregisteredChannel(t *testing.T) {
 	router := plugin.NewChannelRouter(nil)
 
-	err := router.AuthorizeInbound(context.Background(), "unknown", "chat-1", "alice")
+	err := router.AuthorizeInbound(context.Background(), "unknown", "chat-1", "alice", "ws-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown")
 }
@@ -252,7 +254,7 @@ func TestAuthorizeInbound_DefaultRegisterIsOpen(t *testing.T) {
 	router.Register("telegram", &mockChannelPlugin{name: "telegram"})
 
 	// Default Register should use open mode
-	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "any-user")
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "any-user", "ws-1")
 	assert.NoError(t, err, "default registration should be open mode")
 }
 
@@ -264,6 +266,7 @@ func TestAuthorizeInbound_InactivePairingDenied(t *testing.T) {
 				UserID:      "alice",
 				ChannelType: "telegram",
 				ChannelID:   "chat-1",
+				WorkspaceID: "ws-1",
 				Status:      store.PairingStatusPending, // not active
 			},
 		},
@@ -275,7 +278,7 @@ func TestAuthorizeInbound_InactivePairingDenied(t *testing.T) {
 		Allowlist: []string{"alice"},
 	})
 
-	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice")
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-1")
 	require.Error(t, err, "inactive pairing should not authorize")
 	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
 }
@@ -289,6 +292,7 @@ func TestAuthorizeInbound_CrossChannelTypePairingDenied(t *testing.T) {
 				UserID:      "alice",
 				ChannelType: "telegram",
 				ChannelID:   "chat-1",
+				WorkspaceID: "ws-1",
 				Status:      store.PairingStatusActive,
 			},
 		},
@@ -300,7 +304,38 @@ func TestAuthorizeInbound_CrossChannelTypePairingDenied(t *testing.T) {
 		Allowlist: []string{"alice"},
 	})
 
-	err := router.AuthorizeInbound(context.Background(), "discord", "server-1", "alice")
+	err := router.AuthorizeInbound(context.Background(), "discord", "server-1", "alice", "ws-1")
 	require.Error(t, err, "telegram pairing should not authorize discord access")
+	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+}
+
+func TestAuthorizeInbound_WorkspaceScopedPairingDenied(t *testing.T) {
+	// A pairing on ws-1 should NOT authorize access on ws-2.
+	ps := &mockPairingStore{
+		pairings: []*store.Pairing{
+			{
+				ID:          "p-1",
+				UserID:      "alice",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				WorkspaceID: "ws-1",
+				Status:      store.PairingStatusActive,
+			},
+		},
+	}
+	router := plugin.NewChannelRouter(ps)
+	router.RegisterWithConfig("telegram", plugin.ChannelRegistration{
+		Plugin:    &mockChannelPlugin{name: "telegram"},
+		Mode:      plugin.PairingAllowlist,
+		Allowlist: []string{"alice"},
+	})
+
+	// Same workspace: OK
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-1")
+	assert.NoError(t, err)
+
+	// Different workspace: denied
+	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-2")
+	require.Error(t, err, "ws-1 pairing should not authorize ws-2 access")
 	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
 }
