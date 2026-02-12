@@ -31,6 +31,11 @@ func NewRootCmd() *cobra.Command {
 		newStartCmd(),
 		newStatusCmd(),
 		newVersionCmd(),
+		newWorkspaceCmd(),
+		newPluginCmd(),
+		newSessionCmd(),
+		newChatCmd(),
+		newDoctorCmd(),
 	)
 
 	return root
