@@ -13,20 +13,26 @@ Every channel plugin implements the `Channel` gRPC service:
 
 ## Channel Auth and Pairing
 
-Users MUST be approved before the agent responds (configurable):
+Users MUST be approved before the agent responds (configurable per channel).
+Pairing enforcement is mode-aware and handled by `ChannelRouter.AuthorizeInbound()`,
+separate from identity resolution (which is a pure user lookup via `identity.Resolver`).
+See **D042** in the decision log.
 
 ```text
 Message arrives
   |
   v
-Identity Resolution (channel plugin -> canonical UserIdentity)
+Identity Resolution (identity.Resolver -> canonical User)
   |
   v
-Pairing Check (against pairing DB)
+Channel Authorization (ChannelRouter.AuthorizeInbound, mode-aware)
   |
-  +-- paired  -> Route to agent
-  +-- pending -> Queue for owner approval
-  +-- denied  -> Drop (silent or with message)
+  +-- open      -> Route to agent (no pairing required)
+  +-- allowlist  -> Check allowlist + active pairing for channel instance
+  +-- closed    -> Deny
+  +-- paired    -> Route to agent
+  +-- pending   -> Queue for owner approval
+  +-- denied    -> Drop (silent or with message)
 ```
 
 ### Pairing Modes (configurable per-channel)

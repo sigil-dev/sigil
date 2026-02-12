@@ -1173,3 +1173,64 @@ func (r *mockProviderRouterWithAttempts) callCount() int {
 	defer r.mu.Unlock()
 	return r.calls
 }
+
+// mockProviderChatErrorWithHealth is a provider whose Chat() fails and
+// implements provider.HealthReporter to track RecordFailure calls.
+type mockProviderChatErrorWithHealth struct {
+	mu           sync.Mutex
+	failureCount int
+}
+
+func (p *mockProviderChatErrorWithHealth) Name() string                     { return "mock-health-error" }
+func (p *mockProviderChatErrorWithHealth) Available(_ context.Context) bool { return true }
+func (p *mockProviderChatErrorWithHealth) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-health-error"}, nil
+}
+func (p *mockProviderChatErrorWithHealth) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderChatErrorWithHealth) Close() error { return nil }
+func (p *mockProviderChatErrorWithHealth) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	return nil, assert.AnError
+}
+func (p *mockProviderChatErrorWithHealth) RecordFailure() {
+	p.mu.Lock()
+	p.failureCount++
+	p.mu.Unlock()
+}
+func (p *mockProviderChatErrorWithHealth) RecordSuccess() {}
+
+func (p *mockProviderChatErrorWithHealth) getFailureCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failureCount
+}
+
+func TestAgentLoop_ChatFailureCallsRecordFailure(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	healthProv := &mockProviderChatErrorWithHealth{}
+	router := &mockProviderRouter{provider: healthProv}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+
+	// RecordFailure should have been called for the pre-stream Chat() error.
+	assert.Equal(t, 1, healthProv.getFailureCount(),
+		"RecordFailure should be called on pre-stream Chat() error")
+}

@@ -58,6 +58,9 @@ func (p *Provider) Available(_ context.Context) bool {
 	return p.health.IsHealthy()
 }
 
+func (p *Provider) RecordFailure() { p.health.RecordFailure() }
+func (p *Provider) RecordSuccess() { p.health.RecordSuccess() }
+
 // knownModels returns the hardcoded set of known OpenAI models.
 func knownModels() []provider.ModelInfo {
 	return []provider.ModelInfo{

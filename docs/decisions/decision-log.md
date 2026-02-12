@@ -506,18 +506,11 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 
 ## D039: Identity Resolver User-Scoped Pairing Verification
 
-**Question:** Should the identity resolver verify pairings via `GetByChannel(channelType, platformUserID)` or `GetByUser(userID)` filtered by channel type?
+**Superseded by D042.** Pairing was fully removed from the identity resolver.
 
-**Options considered:**
+**Original decision:** Resolver used `GetByUser(user.ID)` and filtered for matching `channelType` + active status. This was superseded in round 7 when pairing enforcement moved entirely to `ChannelRouter.AuthorizeInbound()`, making the resolver a pure identity lookup.
 
-- `GetByChannel` with ownership assertion — fixes the authorization gap but retains a semantic mismatch (`platformUserID` is not a `channelID`).
-- `GetByUser(userID)` + channel type filter (chosen) — queries by the resolved user's ID and filters for an active pairing on the requested channel type. Avoids the `channelID`/`platformUserID` mismatch entirely.
-
-**Decision:** Resolver uses `GetByUser(user.ID)` and filters for matching `channelType` + active status. The `GetByUser` method already existed in `PairingStore`; no interface change was needed.
-
-**Rationale:** `platformUserID` and `channelID` are semantically different identifiers. Using `GetByChannel(channelType, platformUserID)` would only work when they happen to coincide (e.g., DMs). The user-scoped query is correct in all cases.
-
-**Ref:** PR #12 review round 6 finding 2
+**Ref:** PR #12 review round 6 finding 2, superseded by round 7 finding 1
 
 ## D040: Tool Loop Iteration Limit Returns Error
 
@@ -538,3 +531,34 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** The previous `> 0` guard silently dropped `temperature=0`, making deterministic output impossible. The pointer type is the standard Go idiom for optional numeric fields and matches the pattern used by the Anthropic, OpenAI, and Google SDKs themselves.
 
 **Ref:** PR #12 review round 6 finding 4
+
+## D042: Channel-Level Pairing Enforcement (Moved from Identity Resolver)
+
+**Question:** Should pairing verification live in the identity resolver or the channel router?
+
+**Options considered:**
+
+- Keep pairing in identity resolver, pass channel mode — simple but muddies identity/authorization boundary. Every identity lookup requires pairing state, even for open channels.
+- Move to channel router (chosen) — channel router knows the pairing mode per-channel and can skip pairing for open channels. Resolver becomes a pure identity lookup. Pairing is scoped to specific channel instances (channelType + channelID), not just channel type.
+
+**Decision:** Pairing enforcement moved from `identity.Resolver` to `plugin.ChannelRouter.AuthorizeInbound()`. The resolver now performs only user identity lookup. The channel router applies mode-aware authorization: open channels skip pairing entirely, closed channels deny all, allowlist channels check membership + active pairing for the specific channel instance.
+
+**Rationale:** Identity resolution (who is this user?) and channel authorization (can this user interact here?) are separate concerns. Mixing them caused three bugs: (1) open-mode channels couldn't allow unpaired users, (2) a pairing on one channel of a type (e.g., Telegram bot A) could satisfy checks for a different channel of the same type (bot B), (3) the resolver required `PairingStore` even when the channel mode made pairing irrelevant.
+
+**Ref:** PR #12 review round 7 finding 1
+
+## D043: Pre-Stream Chat Failure Health Reporting via HealthReporter Interface
+
+**Question:** How should the agent loop mark providers unhealthy when `Chat()` returns an error before creating a stream?
+
+**Options considered:**
+
+- Add `RecordFailure()` to the `Provider` interface — breaks the interface for all implementors including plugin providers.
+- Optional `HealthReporter` interface (chosen) — providers that embed `HealthTracker` implement the interface. The agent loop type-asserts and calls `RecordFailure()`. Non-implementing providers (e.g., future plugin providers) degrade gracefully.
+- Per-attempt exclusion set in `Route()` — more explicit but requires `Router` interface changes and duplicates the circuit-breaker logic already in `HealthTracker`.
+
+**Decision:** Added `provider.HealthReporter` interface (`RecordFailure()`, `RecordSuccess()`). All 4 built-in providers implement it. On pre-stream `Chat()` errors, `callLLM` calls `RecordFailure()` via type assertion. The existing `HealthTracker` cooldown (30s) acts as a circuit breaker with automatic half-open recovery.
+
+**Rationale:** In-stream errors already triggered `RecordFailure()` (via the streaming goroutine), but pre-stream errors bypassed it because the goroutine never started. This caused failover retries to keep selecting the same broken primary provider. The optional interface pattern preserves backward compatibility while closing the health tracking gap.
+
+**Ref:** PR #12 review round 7 finding 2

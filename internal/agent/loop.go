@@ -365,6 +365,13 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 
 		eventCh, err := prov.Chat(ctx, req)
 		if err != nil {
+			// Mark provider unhealthy so the next Route call skips it
+			// via the failover chain. The HealthTracker's cooldown acts
+			// as a circuit breaker, re-enabling the provider after the
+			// cooldown period for recovery.
+			if hr, ok := prov.(provider.HealthReporter); ok {
+				hr.RecordFailure()
+			}
 			lastErr = sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "chat call to %s", prov.Name())
 			continue
 		}

@@ -148,3 +148,14 @@ type ProviderStatus struct {
 	Provider  string
 	Message   string
 }
+
+// HealthReporter is an optional interface that providers can implement to
+// expose circuit-breaker health signals. When a provider implements this
+// interface, the agent loop calls RecordFailure on pre-stream Chat() errors
+// so the router's failover chain can skip unhealthy providers. The existing
+// HealthTracker already implements cooldown-based recovery (circuit breaker
+// half-open state), so providers become eligible for retry after the cooldown.
+type HealthReporter interface {
+	RecordFailure()
+	RecordSuccess()
+}
