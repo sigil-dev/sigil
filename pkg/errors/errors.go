@@ -39,6 +39,14 @@ const (
 	CodeProviderRequestInvalid  Code = "provider.request.invalid"
 	CodeProviderResponseInvalid Code = "provider.response.invalid"
 	CodeProviderUpstreamFailure Code = "provider.upstream.failure"
+	CodeProviderBudgetExceeded  Code = "provider.budget.exceeded"
+
+	CodeAgentLoopInvalidInput         Code = "agent.loop.invalid_input"
+	CodeAgentLoopFailure             Code = "agent.loop.failure"
+	CodeAgentSessionBoundaryMismatch Code = "agent.session.boundary.forbidden"
+	CodeAgentSessionInactive         Code = "agent.session.status.forbidden"
+	CodeAgentToolBudgetExceeded      Code = "agent.tool.budget_exceeded"
+	CodeAgentToolTimeout             Code = "agent.tool.timeout"
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
@@ -67,6 +75,10 @@ func FieldWorkspaceID(value string) Attr {
 
 func FieldSessionID(value string) Attr {
 	return Field("session_id", value)
+}
+
+func FieldUserID(value string) Attr {
+	return Field("user_id", value)
 }
 
 func FieldPlugin(value string) Attr {
@@ -174,6 +186,20 @@ func IsUnauthorized(err error) bool {
 	return r == "unauthorized" || r == "forbidden" || r == "denied"
 }
 
+func IsBudgetExceeded(err error) bool {
+	r := reason(CodeOf(err))
+	return r == "exceeded" || r == "budget_exceeded"
+}
+
+func IsTimeout(err error) bool {
+	return reason(CodeOf(err)) == "timeout"
+}
+
+func IsUpstreamFailure(err error) bool {
+	code := CodeOf(err)
+	return strings.Contains(string(code), "upstream") && reason(code) == "failure"
+}
+
 func HTTPStatus(err error) int {
 	switch {
 	case IsNotFound(err):
@@ -187,6 +213,12 @@ func HTTPStatus(err error) int {
 			return http.StatusForbidden
 		}
 		return http.StatusUnauthorized
+	case IsBudgetExceeded(err):
+		return http.StatusTooManyRequests
+	case IsTimeout(err):
+		return http.StatusGatewayTimeout
+	case IsUpstreamFailure(err):
+		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
 	}

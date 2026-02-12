@@ -239,7 +239,7 @@ The factory lives in `internal/store/factory.go`. It reads config, imports the b
 
 ## Package Layout
 
-```
+```text
 internal/
   store/
     store.go                  # SessionStore, MemoryStore, VectorStore, GatewayStore
@@ -259,7 +259,7 @@ internal/
 
 ## Workspace Directory Layout
 
-```
+```text
 data/
   gateway.db                  # GatewayStore (users, pairings, audit)
   workspaces/

@@ -6,7 +6,7 @@ Security is the core differentiator. Three layers: capability enforcement, agent
 
 Every plugin call passes through the Enforcer before reaching the gateway's internal services:
 
-```
+```text
 Plugin --gRPC--> Gateway Host Functions
                       |
                  +----v-----+
@@ -21,7 +21,7 @@ Plugin --gRPC--> Gateway Host Functions
 
 ### Capability Model (glob-based)
 
-```
+```text
 sessions.read                    # read any session
 sessions.read.self               # read only sessions this plugin handles
 sessions.write.self              # write only own sessions
@@ -124,7 +124,7 @@ Sandbox configuration is derived from the plugin manifest's `execution.sandbox` 
 
 Capabilities are further scoped by workspace:
 
-```
+```text
 Enforcer input:
   1. Plugin declares:     capabilities: [exec.run.sandboxed]
   2. Workspace allows:    tools.allow: [exec.sandboxed]

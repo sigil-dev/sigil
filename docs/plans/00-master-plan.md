@@ -43,7 +43,7 @@ All test/build/lint operations use `task` commands per CLAUDE.md.
 
 ## Dependency Graph
 
-```
+```text
 Phase 1: Foundation
   ├── Proto definitions (no deps)
   ├── Storage interfaces (no deps)

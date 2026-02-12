@@ -32,7 +32,7 @@ message ChatEvent {
 
 ## Built-in vs Plugin Providers
 
-```
+```text
 Provider Registry
   Built-in (compiled into binary):
   +-- anthropic    (anthropic-sdk-go)
@@ -83,7 +83,7 @@ models:
 
 ### Routing Logic
 
-```
+```text
 Agent needs LLM call
   +-- Check workspace model override -> use if set
   +-- Otherwise use default model

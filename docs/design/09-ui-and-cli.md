@@ -4,7 +4,7 @@
 
 Single binary, subcommand structure:
 
-```
+```text
 sigil
 +-- start                            # start the gateway (foreground)
 |   +-- --config <path>
@@ -96,7 +96,7 @@ Talks to the gateway via REST+SSE (OpenAPI-typed). Four main areas:
 
 Wraps the SvelteKit UI + bundles the gateway binary as a sidecar:
 
-```
+```text
 app (Tauri v2)
 +-- SvelteKit UI (webview)
 +-- Gateway binary (sidecar, auto-launched)

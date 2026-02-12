@@ -65,6 +65,10 @@ func TestClassificationAndStatusMapping(t *testing.T) {
 		{name: "conflict", code: sigilerr.CodeStoreSessionUpdateConflict, status: 409, check: sigilerr.IsConflict},
 		{name: "invalid", code: sigilerr.CodeConfigValidateInvalidValue, status: 400, check: sigilerr.IsInvalidInput},
 		{name: "unauthorized", code: sigilerr.CodeServerAuthUnauthorized, status: 401, check: sigilerr.IsUnauthorized},
+		{name: "budget exceeded (provider)", code: sigilerr.CodeProviderBudgetExceeded, status: 429, check: sigilerr.IsBudgetExceeded},
+		{name: "budget exceeded (tool)", code: sigilerr.CodeAgentToolBudgetExceeded, status: 429, check: sigilerr.IsBudgetExceeded},
+		{name: "tool timeout", code: sigilerr.CodeAgentToolTimeout, status: 504, check: sigilerr.IsTimeout},
+		{name: "upstream failure", code: sigilerr.CodeProviderUpstreamFailure, status: 502, check: sigilerr.IsUpstreamFailure},
 		{name: "internal", code: sigilerr.CodeServerInternalFailure, status: 500, check: func(err error) bool { return !sigilerr.IsNotFound(err) }},
 	}
 

@@ -25,6 +25,7 @@ Two parallel research tasks were launched:
 
 **Q:** What's the primary motivation for the rewrite?
 **A:** All of the above (performance, plugin ecosystem, architectural control) plus:
+
 - Security is paramount, especially around agentic corruption/hijacking
 - Lightweight, easy to install
 - Viper-based CLI, Taskfile.dev builds
@@ -36,6 +37,7 @@ Two parallel research tasks were launched:
 **A:** Channel plugins -- all channels are plugins via go-plugin.
 
 Additional notes:
+
 - OpenClaw's restart-to-reconfigure approach is terrible; we need hot-reload
 - Take advantage of sandbox/containerized support for plugin execution
 
@@ -44,6 +46,7 @@ Additional notes:
 **Q:** Agent-as-core, agent-as-plugin, or thin agent core + plugin tools?
 
 Research into OpenClaw's current approach was conducted. Found:
+
 - Agent loop deeply embedded in gateway
 - Multi-layered tool policies but all in-process
 - No plugin isolation (JS modules loaded via jiti)
@@ -96,6 +99,7 @@ Research into OpenClaw's current approach was conducted. Found:
 ### 12. Build Toolchain
 
 **A:**
+
 - CGo required (sqlite3, sqlite-vec)
 - GoReleaser + release-please for releases
 - Cocogitto for conventional commit validation
@@ -127,6 +131,7 @@ Three candidates evaluated: Talon, Sigil, Loom.
 - **Sigil** selected: Cleanest namespace, security connotation, `sigil-dev` org available on GitHub.
 
 ## Open Questions (for future sessions)
+
 - ~~GitHub organization~~ -> `sigil-dev`
 - ~~License choice~~ -> Apache 2.0
 - V1 scope -- which channels and tools to ship first

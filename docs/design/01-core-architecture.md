@@ -4,7 +4,7 @@
 
 The system has six layers, from clients at the top to plugins at the bottom:
 
-```
+```text
 +-------------------------------------------------------------+
 |  Clients                                                     |
 |  +-- SvelteKit Web UI (REST+SSE via OpenAPI)                |
@@ -55,7 +55,7 @@ The system has six layers, from clients at the top to plugins at the bottom:
 
 ## Protocol Stack
 
-```
+```text
 SvelteKit UI                    Go Gateway                    Plugins
 (fetch + SSE + typed client) -> (REST/SSE + OpenAPI spec) -> (gRPC via go-plugin)
   generated from OpenAPI          generated from Go types      generated from proto
@@ -66,7 +66,7 @@ SvelteKit UI                    Go Gateway                    Plugins
 
 ## Proto Definitions
 
-```
+```text
 api/proto/
 +-- gateway/v1/gateway.proto    (UI <-> Gateway — also generates OpenAPI)
 +-- plugin/v1/plugin.proto      (Gateway <-> Plugin lifecycle + tools)

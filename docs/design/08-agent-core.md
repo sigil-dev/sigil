@@ -69,7 +69,7 @@ All storage is accessed through interfaces, enabling backend swaps via configura
 
 `MemoryStore` composes three sub-interfaces: `MessageStore` (Tier 1), `SummaryStore` (Tier 2), and `KnowledgeStore` (Tier 3). The `KnowledgeStore` sub-interface is independently swappable — enabling graph database backends for entity/relationship storage.
 
-```
+```text
 data/
 +-- gateway.db                 # GatewayStore (users, pairings, audit)
 +-- workspaces/
@@ -93,7 +93,7 @@ data/
 
 One conversation at a time per session. Prevents race conditions where two parallel LLM calls produce conflicting tool actions.
 
-```
+```text
 User sends 3 messages quickly:
   msg1 -> +
   msg2 -> +-- Session lane (FIFO queue)
@@ -164,7 +164,7 @@ Memory is workspace-scoped: the agent in "homelab" cannot recall conversations f
 
 Skills are markdown files that inject domain knowledge into the system prompt:
 
-```
+```text
 workspaces/
 +-- homelab/
 |   +-- skills/

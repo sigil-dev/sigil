@@ -6,7 +6,7 @@ Nodes are remote devices that connect to the gateway and expose device capabilit
 
 Rather than building a separate node protocol, nodes are remote instances of the plugin host that connect back to the gateway:
 
-```
+```text
 Gateway                          Node (macOS laptop)
   |                               +-- Node Agent (Go binary)
   |<------- gRPC (TLS) ----------|    +-- camera-tool
@@ -49,7 +49,7 @@ capabilities:
 
 ## Connection and Trust
 
-```
+```text
 Node Agent starts
   +-- Connects to gateway (gRPC stream, TLS)
   +-- Authenticates (token, mTLS, or Tailscale identity)
