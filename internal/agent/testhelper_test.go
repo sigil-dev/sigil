@@ -197,7 +197,7 @@ func (m *mockSessionStoreTracking) AppendMessage(ctx context.Context, sessionID 
 // mockProvider returns a static "Hello, world!" chat response.
 type mockProvider struct{}
 
-func (p *mockProvider) Name() string             { return "mock" }
+func (p *mockProvider) Name() string                     { return "mock" }
 func (p *mockProvider) Available(_ context.Context) bool { return true }
 
 func (p *mockProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
@@ -232,7 +232,7 @@ func (r *mockProviderRouter) Route(_ context.Context, _, _ string) (provider.Pro
 }
 
 func (r *mockProviderRouter) RegisterProvider(_ string, _ provider.Provider) error { return nil }
-func (r *mockProviderRouter) Close() error                                        { return nil }
+func (r *mockProviderRouter) Close() error                                         { return nil }
 
 // newMockProviderRouter returns a Router that always responds with "Hello, world!".
 func newMockProviderRouter() *mockProviderRouter {
@@ -260,7 +260,7 @@ func newMockProviderRouterWithBudgetExceeded() *mockProviderRouterBudgetExceeded
 // mockProviderStreamError emits only an error event.
 type mockProviderStreamError struct{}
 
-func (p *mockProviderStreamError) Name() string                { return "mock-error" }
+func (p *mockProviderStreamError) Name() string                     { return "mock-error" }
 func (p *mockProviderStreamError) Available(_ context.Context) bool { return true }
 
 func (p *mockProviderStreamError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
@@ -283,7 +283,7 @@ func (p *mockProviderStreamError) Close() error { return nil }
 // mockProviderStreamPartialThenError emits partial text then an error event.
 type mockProviderStreamPartialThenError struct{}
 
-func (p *mockProviderStreamPartialThenError) Name() string                { return "mock-partial-error" }
+func (p *mockProviderStreamPartialThenError) Name() string                     { return "mock-partial-error" }
 func (p *mockProviderStreamPartialThenError) Available(_ context.Context) bool { return true }
 
 func (p *mockProviderStreamPartialThenError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
@@ -317,11 +317,11 @@ func newMockProviderRouterStreamPartialThenError() *mockProviderRouter {
 
 // mockProviderCapturing records ChatRequest.Messages for test assertions.
 type mockProviderCapturing struct {
-	mu              sync.Mutex
+	mu               sync.Mutex
 	capturedMessages []provider.Message
 }
 
-func (p *mockProviderCapturing) Name() string                { return "mock-capturing" }
+func (p *mockProviderCapturing) Name() string                     { return "mock-capturing" }
 func (p *mockProviderCapturing) Available(_ context.Context) bool { return true }
 
 func (p *mockProviderCapturing) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
@@ -468,7 +468,7 @@ func newMockMemoryStore() *mockMemoryStore {
 	}
 }
 
-func (m *mockMemoryStore) Messages() store.MessageStore   { return m.messages }
+func (m *mockMemoryStore) Messages() store.MessageStore    { return m.messages }
 func (m *mockMemoryStore) Summaries() store.SummaryStore   { return m.summaries }
 func (m *mockMemoryStore) Knowledge() store.KnowledgeStore { return m.knowledge }
 func (m *mockMemoryStore) Close() error                    { return nil }

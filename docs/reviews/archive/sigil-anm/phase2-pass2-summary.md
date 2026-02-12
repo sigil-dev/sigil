@@ -15,48 +15,48 @@ Second independent review pass after all bug fixes from pass 1 were applied. Eac
 
 ## Summary by Task
 
-| Task | Bead | Verdict | Bug Fixes Verified | New Issues | Open Suggestions |
-|------|-------|---------|--------------------|------------|------------------|
-| 1. Capability Model | sigil-anm.1 | PASS | -- (none needed) | 0 | 5 (sigil-anm.16) |
-| 2. Security Enforcer | sigil-anm.2 | PASS | sigil-anm.11 (3 missing tests) | 0 | 3 (sigil-anm.17) |
-| 3. Plugin Manifest | sigil-anm.3 | PASS | sigil-anm.14 (semver validation) | 0 | 3 (sigil-anm.18) |
-| 4. Lifecycle State Machine | sigil-anm.4 | PASS | sigil-anm.15 (transitions + concurrency) | 0 | 3 (sigil-anm.19) |
-| 5. Plugin Manager | sigil-anm.5 | PASS | sigil-anm.13 (logging) | 0 | 4 (sigil-anm.20) |
-| 6. go-plugin Host | sigil-anm.6 | PASS | sigil-anm.12 (slice mutation + NetRPC) | 0 | 0 |
-| 7. Sandbox Config | sigil-anm.7 | PASS | sigil-anm.9 (5 security fixes) | 2 (info) | 7 (sigil-anm.21) |
-| 8. Wasm Host | sigil-anm.8 | PASS | D035 design change (timeout replaces fuel) | 3 (minor) | 0 |
+| Task                       | Bead        | Verdict | Bug Fixes Verified                         | New Issues | Open Suggestions |
+| -------------------------- | ----------- | ------- | ------------------------------------------ | ---------- | ---------------- |
+| 1. Capability Model        | sigil-anm.1 | PASS    | -- (none needed)                           | 0          | 5 (sigil-anm.16) |
+| 2. Security Enforcer       | sigil-anm.2 | PASS    | sigil-anm.11 (3 missing tests)             | 0          | 3 (sigil-anm.17) |
+| 3. Plugin Manifest         | sigil-anm.3 | PASS    | sigil-anm.14 (semver validation)           | 0          | 3 (sigil-anm.18) |
+| 4. Lifecycle State Machine | sigil-anm.4 | PASS    | sigil-anm.15 (transitions + concurrency)   | 0          | 3 (sigil-anm.19) |
+| 5. Plugin Manager          | sigil-anm.5 | PASS    | sigil-anm.13 (logging)                     | 0          | 4 (sigil-anm.20) |
+| 6. go-plugin Host          | sigil-anm.6 | PASS    | sigil-anm.12 (slice mutation + NetRPC)     | 0          | 0                |
+| 7. Sandbox Config          | sigil-anm.7 | PASS    | sigil-anm.9 (5 security fixes)             | 2 (info)   | 7 (sigil-anm.21) |
+| 8. Wasm Host               | sigil-anm.8 | PASS    | D035 design change (timeout replaces fuel) | 3 (minor)  | 0                |
 
 ## Test Results
 
 All tests pass across all packages with `-race` flag:
 
-| Package | Tests | Status |
-|---------|-------|--------|
-| `internal/security` | 46 (33 capability + 13 enforcer) | PASS |
-| `internal/plugin` | 27 (8 manifest + 15 lifecycle + 4 instance) | PASS |
-| `internal/plugin/goplugin` | 6 | PASS |
-| `internal/plugin/sandbox` | 24 (1 SKIP on Darwin) | PASS |
-| `internal/plugin/wasm` | 4 | PASS |
-| `pkg/plugin` | 46 (SDK validation) | PASS |
+| Package                    | Tests                                       | Status |
+| -------------------------- | ------------------------------------------- | ------ |
+| `internal/security`        | 46 (33 capability + 13 enforcer)            | PASS   |
+| `internal/plugin`          | 27 (8 manifest + 15 lifecycle + 4 instance) | PASS   |
+| `internal/plugin/goplugin` | 6                                           | PASS   |
+| `internal/plugin/sandbox`  | 24 (1 SKIP on Darwin)                       | PASS   |
+| `internal/plugin/wasm`     | 4                                           | PASS   |
+| `pkg/plugin`               | 46 (SDK validation)                         | PASS   |
 
 ## Bug Fix Verification
 
 All 12 bug fixes from pass 1 were verified as correctly implemented:
 
-| # | Fix | Bead | Commit | Pass 2 Verification |
-|---|-----|------|--------|---------------------|
-| 1 | Seatbelt path injection + syntax | sigil-anm.9 | `536d051` | Regex blocklist correct, per-path rules, tests thorough |
-| 2 | Network host:port enforcement | sigil-anm.9 | `536d051` | Per-entry port-specific rules with validation |
-| 3 | `/lib64` conditional mount | sigil-anm.9 | `536d051` | `checkDirExists` guard with test stubbing |
-| 4 | bwrap path validation | sigil-anm.9 | `536d051` | Dash-prefix rejection + `--` separator |
-| 5 | Missing sandbox content tests | sigil-anm.9 | `536d051` | 21 internal tests added |
-| 6 | 3 missing enforcer spec tests | sigil-anm.11 | `a29834c` | AllowThreeWayIntersection, UserWithNoPermissions, AuditLogging all solid |
-| 7 | Silent manifest skip logging | sigil-anm.13 | `c69d090`, `a9189b8` | slog.Warn on parse error and ReadFile error, both tested |
-| 8 | Missing semver validation | sigil-anm.14 | `0b67f3a` | Regex matches pkg/plugin, 13 test cases |
-| 9 | Missing draining/stopping→error | sigil-anm.15 | `bc92ddf` | Both transitions in table, tested with full lifecycle path |
-| 10 | Missing concurrency test | sigil-anm.15 | `bc92ddf` | 50-goroutine race test, exactly 1 winner |
-| 11 | Slice mutation in buildCommand | sigil-anm.12 | `ca34ce2` | `slices.Clone` fix, regression test with spare capacity |
-| 12 | NetRPCUnsupportedPlugin embedding | sigil-anm.12 | `ca34ce2` | All 4 wrappers return error on Server() |
+| #  | Fix                               | Bead         | Commit               | Pass 2 Verification                                                      |
+| -- | --------------------------------- | ------------ | -------------------- | ------------------------------------------------------------------------ |
+| 1  | Seatbelt path injection + syntax  | sigil-anm.9  | `536d051`            | Regex blocklist correct, per-path rules, tests thorough                  |
+| 2  | Network host:port enforcement     | sigil-anm.9  | `536d051`            | Per-entry port-specific rules with validation                            |
+| 3  | `/lib64` conditional mount        | sigil-anm.9  | `536d051`            | `checkDirExists` guard with test stubbing                                |
+| 4  | bwrap path validation             | sigil-anm.9  | `536d051`            | Dash-prefix rejection + `--` separator                                   |
+| 5  | Missing sandbox content tests     | sigil-anm.9  | `536d051`            | 21 internal tests added                                                  |
+| 6  | 3 missing enforcer spec tests     | sigil-anm.11 | `a29834c`            | AllowThreeWayIntersection, UserWithNoPermissions, AuditLogging all solid |
+| 7  | Silent manifest skip logging      | sigil-anm.13 | `c69d090`, `a9189b8` | slog.Warn on parse error and ReadFile error, both tested                 |
+| 8  | Missing semver validation         | sigil-anm.14 | `0b67f3a`            | Regex matches pkg/plugin, 13 test cases                                  |
+| 9  | Missing draining/stopping→error   | sigil-anm.15 | `bc92ddf`            | Both transitions in table, tested with full lifecycle path               |
+| 10 | Missing concurrency test          | sigil-anm.15 | `bc92ddf`            | 50-goroutine race test, exactly 1 winner                                 |
+| 11 | Slice mutation in buildCommand    | sigil-anm.12 | `ca34ce2`            | `slices.Clone` fix, regression test with spare capacity                  |
+| 12 | NetRPCUnsupportedPlugin embedding | sigil-anm.12 | `ca34ce2`            | All 4 wrappers return error on Server()                                  |
 
 ## New Findings (This Pass)
 
@@ -75,17 +75,17 @@ All 12 bug fixes from pass 1 were verified as correctly implemented:
 
 All suggestion beads from pass 2 have been resolved:
 
-| Bead | Title | Priority | Status |
-|------|-------|----------|--------|
-| sigil-anm.16 | Capability: test + doc suggestions | P3 | **Closed** — 5 items resolved |
-| sigil-anm.17 | Enforcer: nil guard + ID counter | P3 | **Closed** — 3 items resolved |
-| sigil-anm.18 | Manifest: design doc fields + timeout | P4 | **Closed** — 3 items resolved |
-| sigil-anm.19 | Lifecycle: documentation + stringer | P4 | **Closed** — 3 items resolved |
-| sigil-anm.20 | Manager: unused ctx + ordering | P3 | **Closed** — 4 items resolved |
-| sigil-anm.21 | Sandbox: hardening pass | P3 | **Closed** — 7 items resolved (seccomp deferred as TODO) |
-| sigil-anm.22 | Wasm: error code + call wrapping | P3 | **Closed** — 2 items resolved |
-| sigil-anm.23 | Wasm: fixture rebuild docs | P4 | **Closed** — README + Taskfile target |
-| sigil-anm.24 | Sandbox: Seatbelt docs + ~user fix | P4 | **Closed** — SBPL limitation documented, ~user fixed |
+| Bead         | Title                                 | Priority | Status                                                   |
+| ------------ | ------------------------------------- | -------- | -------------------------------------------------------- |
+| sigil-anm.16 | Capability: test + doc suggestions    | P3       | **Closed** — 5 items resolved                            |
+| sigil-anm.17 | Enforcer: nil guard + ID counter      | P3       | **Closed** — 3 items resolved                            |
+| sigil-anm.18 | Manifest: design doc fields + timeout | P4       | **Closed** — 3 items resolved                            |
+| sigil-anm.19 | Lifecycle: documentation + stringer   | P4       | **Closed** — 3 items resolved                            |
+| sigil-anm.20 | Manager: unused ctx + ordering        | P3       | **Closed** — 4 items resolved                            |
+| sigil-anm.21 | Sandbox: hardening pass               | P3       | **Closed** — 7 items resolved (seccomp deferred as TODO) |
+| sigil-anm.22 | Wasm: error code + call wrapping      | P3       | **Closed** — 2 items resolved                            |
+| sigil-anm.23 | Wasm: fixture rebuild docs            | P4       | **Closed** — README + Taskfile target                    |
+| sigil-anm.24 | Sandbox: Seatbelt docs + ~user fix    | P4       | **Closed** — SBPL limitation documented, ~user fixed     |
 
 All tracked items resolved. No remaining open suggestion beads.
 
@@ -98,6 +98,7 @@ The Phase 2 Core Runtime implementation is complete and correct. All spec requir
 ## Individual Reports
 
 Detailed findings for each task are in the pass 2 review files:
+
 - [Task 1: Capability Model](phase2-pass2-task1-capability-model.md)
 - [Task 2: Security Enforcer](phase2-pass2-task2-security-enforcer.md)
 - [Task 3: Plugin Manifest](phase2-pass2-task3-plugin-manifest.md)

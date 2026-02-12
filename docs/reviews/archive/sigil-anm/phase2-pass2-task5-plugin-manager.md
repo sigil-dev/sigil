@@ -12,6 +12,7 @@ All API surface present: `Manager`, `Discover`, `Get`, `List`. All 3 spec test c
 ## Bug Fix Verification (sigil-anm.13)
 
 Logging fix verified:
+
 - `slog.Warn("skipping plugin: cannot read manifest", ...)` for ReadFile errors
 - `slog.Warn("skipping plugin: invalid manifest", ...)` for parse errors
 - Both tested with slog capture and assertion

@@ -60,12 +60,12 @@ type Session struct {
 
 All storage is accessed through interfaces, enabling backend swaps via configuration. Initial implementations use SQLite.
 
-| Interface | Scope | Default Backend |
-|-----------|-------|-----------------|
-| `SessionStore` | Per workspace | SQLite |
-| `MemoryStore` | Per workspace | SQLite (FTS5 + RDF triples) |
-| `VectorStore` | Per workspace | sqlite-vec |
-| `GatewayStore` | Global | SQLite |
+| Interface      | Scope         | Default Backend             |
+| -------------- | ------------- | --------------------------- |
+| `SessionStore` | Per workspace | SQLite                      |
+| `MemoryStore`  | Per workspace | SQLite (FTS5 + RDF triples) |
+| `VectorStore`  | Per workspace | sqlite-vec                  |
+| `GatewayStore` | Global        | SQLite                      |
 
 `MemoryStore` composes three sub-interfaces: `MessageStore` (Tier 1), `SummaryStore` (Tier 2), and `KnowledgeStore` (Tier 3). The `KnowledgeStore` sub-interface is independently swappable — enabling graph database backends for entity/relationship storage.
 
@@ -112,13 +112,13 @@ Instead of stuffing entire history into context, older messages are summarized a
 
 ### Tiers
 
-| Tier | Interface | Default Backend | Content | Access |
-|------|-----------|-----------------|---------|--------|
-| Active Window | `SessionStore` | SQLite | Last N messages (configurable, default 20) | Automatic |
-| Tier 1: Recent | `MessageStore` | SQLite FTS5 | Full message text, last ~1000 messages | `memory_search(query)` tool |
-| Tier 2: Summaries | `SummaryStore` | SQLite | LLM-generated summaries per ~50 messages | `memory_summary(date_range)` tool |
-| Tier 3: Knowledge | `KnowledgeStore` | SQLite (RDF triples) | Entities, relationships, facts | `memory_recall(topic)` tool |
-| Tier 4: Embeddings | `VectorStore` | sqlite-vec | Semantic search across all history | `memory_semantic(query, k)` tool |
+| Tier               | Interface        | Default Backend      | Content                                    | Access                            |
+| ------------------ | ---------------- | -------------------- | ------------------------------------------ | --------------------------------- |
+| Active Window      | `SessionStore`   | SQLite               | Last N messages (configurable, default 20) | Automatic                         |
+| Tier 1: Recent     | `MessageStore`   | SQLite FTS5          | Full message text, last ~1000 messages     | `memory_search(query)` tool       |
+| Tier 2: Summaries  | `SummaryStore`   | SQLite               | LLM-generated summaries per ~50 messages   | `memory_summary(date_range)` tool |
+| Tier 3: Knowledge  | `KnowledgeStore` | SQLite (RDF triples) | Entities, relationships, facts             | `memory_recall(topic)` tool       |
+| Tier 4: Embeddings | `VectorStore`    | sqlite-vec           | Semantic search across all history         | `memory_semantic(query, k)` tool  |
 
 ### Configuration
 
@@ -144,12 +144,12 @@ sessions:
 
 # Storage backend selection (see Section 11)
 storage:
-  backend: sqlite             # default for all stores
+  backend: sqlite # default for all stores
   memory:
     knowledge:
-      backend: sqlite         # future: ladybugdb
+      backend: sqlite # future: ladybugdb
   vector:
-    backend: sqlite_vec       # future: lancedb
+    backend: sqlite_vec # future: lancedb
 ```
 
 ### Compaction Lifecycle
@@ -188,7 +188,7 @@ allowed-tools: Bash(kubectl:*) Bash(terraform:*)
 metadata:
   author: sean
   version: "1.0"
-  gateway:trigger: auto          # auto | manual | keyword
+  gateway:trigger: auto # auto | manual | keyword
   gateway:keywords: server deploy kubernetes terraform
   gateway:workspace: homelab
 ---
@@ -200,11 +200,11 @@ Our extensions live in `metadata.*` to stay spec-compliant. Any agentskills.io s
 
 ### Trigger Modes
 
-| Mode | Behavior |
-|------|----------|
-| `auto` | Always injected into system prompt for this workspace |
-| `manual` | Only when user says "use skill: infra-ops" |
-| `keyword` | Injected when user message matches keywords |
+| Mode      | Behavior                                              |
+| --------- | ----------------------------------------------------- |
+| `auto`    | Always injected into system prompt for this workspace |
+| `manual`  | Only when user says "use skill: infra-ops"            |
+| `keyword` | Injected when user message matches keywords           |
 
 ### Skill Management
 

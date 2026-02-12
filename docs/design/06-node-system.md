@@ -27,12 +27,12 @@ A node is just a plugin host running on a different machine. It registers its av
 
 ```yaml
 # node.yaml on the device
-gateway: "my-agent:18789"         # or IP address in local mode
+gateway: "my-agent:18789" # or IP address in local mode
 node_id: "macbook-pro"
 auth:
-  method: tailscale               # or: token, mtls
-  # method: token
-  # token: "${NODE_TOKEN}"
+  method: tailscale # or: token, mtls
+# method: token
+# token: "${NODE_TOKEN}"
 
 plugins:
   - camera-tool
@@ -44,7 +44,7 @@ plugins:
 
 capabilities:
   deny:
-    - filesystem.write.*          # read-only from gateway's perspective
+    - filesystem.write.* # read-only from gateway's perspective
 ```
 
 ## Connection and Trust
@@ -65,11 +65,11 @@ Node Agent starts
 
 ### Trust Model
 
-| Node Type | Auth | Trust Level |
-|-----------|------|-------------|
-| Owner device (macOS/iOS) | mTLS or Tailscale identity | High -- full tool access per node config |
-| Shared device | Token + approval | Medium -- workspace-scoped tools only |
-| Ephemeral (CI runner, cloud VM) | One-time token with TTL | Low -- specific tools, auto-expires |
+| Node Type                       | Auth                       | Trust Level                              |
+| ------------------------------- | -------------------------- | ---------------------------------------- |
+| Owner device (macOS/iOS)        | mTLS or Tailscale identity | High -- full tool access per node config |
+| Shared device                   | Token + approval           | Medium -- workspace-scoped tools only    |
+| Ephemeral (CI runner, cloud VM) | One-time token with TTL    | Low -- specific tools, auto-expires      |
 
 ## Tailscale Integration (Opt-In)
 
@@ -88,24 +88,24 @@ networking:
 
 ### What Tailscale Provides
 
-| Feature | Benefit |
-|---------|---------|
-| `tsnet` embedded node | Gateway is on your tailnet. No port forwarding. |
-| Auto TLS (HTTPS) | Tailscale provisions Let's Encrypt certs. Zero config. |
-| NAT traversal | Nodes behind NAT/CGNAT connect without relay servers. |
-| Tailscale ACLs | "Only my devices can reach the gateway." Network-layer enforcement. |
-| MagicDNS | Nodes find gateway by name, not IP. |
-| Funnel (optional) | Expose gateway to internet for webhooks without reverse proxy. |
+| Feature               | Benefit                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| `tsnet` embedded node | Gateway is on your tailnet. No port forwarding.                     |
+| Auto TLS (HTTPS)      | Tailscale provisions Let's Encrypt certs. Zero config.              |
+| NAT traversal         | Nodes behind NAT/CGNAT connect without relay servers.               |
+| Tailscale ACLs        | "Only my devices can reach the gateway." Network-layer enforcement. |
+| MagicDNS              | Nodes find gateway by name, not IP.                                 |
+| Funnel (optional)     | Expose gateway to internet for webhooks without reverse proxy.      |
 
 ### Tag-Based Auto-Auth
 
 Three-layer auth for nodes over Tailscale:
 
-| Layer | What | Who Controls |
-|-------|------|-------------|
-| 1. Tailscale ACL | "Can this device reach the gateway port?" | Tailnet admin |
-| 2. Tag check | "Does this node have `tag:agent-node`?" | Gateway config |
-| 3. Workspace binding | "Which workspaces can this node access?" | Gateway config |
+| Layer                | What                                      | Who Controls   |
+| -------------------- | ----------------------------------------- | -------------- |
+| 1. Tailscale ACL     | "Can this device reach the gateway port?" | Tailnet admin  |
+| 2. Tag check         | "Does this node have `tag:agent-node`?"   | Gateway config |
+| 3. Workspace binding | "Which workspaces can this node access?"  | Gateway config |
 
 Recommended Tailscale ACL:
 
@@ -113,12 +113,14 @@ Recommended Tailscale ACL:
 {
   "tagOwners": {
     "tag:agent-gateway": ["autogroup:admin"],
-    "tag:agent-node":    ["autogroup:admin"]
+    "tag:agent-node": ["autogroup:admin"]
   },
   "acls": [
-    { "action": "accept",
+    {
+      "action": "accept",
       "src": ["tag:agent-node"],
-      "dst": ["tag:agent-gateway:18789"] }
+      "dst": ["tag:agent-gateway:18789"]
+    }
   ]
 }
 ```

@@ -22,7 +22,7 @@ type Config map[string]WorkspaceConfig
 
 // WorkspaceConfig defines the settings for a single workspace.
 type WorkspaceConfig struct {
-	Members  []string  // User IDs allowed to access this workspace.
+	Members  []string // User IDs allowed to access this workspace.
 	Tools    ToolConfig
 	Bindings []Binding
 }

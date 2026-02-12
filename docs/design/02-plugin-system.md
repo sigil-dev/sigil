@@ -4,20 +4,20 @@
 
 Four plugin categories, all using the same manifest and lifecycle system:
 
-| Type | Purpose | Examples |
-|------|---------|---------|
-| **Provider** | LLM API integration | Anthropic, OpenAI, Google, Ollama |
-| **Channel** | Messaging platform bridge | Telegram, WhatsApp, Discord, Slack |
-| **Tool** | Agent capabilities | exec, browse, search, file-ops, calendar |
-| **Skill** | Domain-specific behaviors | "booking assistant", "code reviewer" |
+| Type         | Purpose                   | Examples                                 |
+| ------------ | ------------------------- | ---------------------------------------- |
+| **Provider** | LLM API integration       | Anthropic, OpenAI, Google, Ollama        |
+| **Channel**  | Messaging platform bridge | Telegram, WhatsApp, Discord, Slack       |
+| **Tool**     | Agent capabilities        | exec, browse, search, file-ops, calendar |
+| **Skill**    | Domain-specific behaviors | "booking assistant", "code reviewer"     |
 
 ## Plugin Manifest (`plugin.yaml`)
 
 ```yaml
 name: telegram-channel
 version: 1.2.0
-type: channel                    # provider | channel | tool | skill
-engine: ">= 1.0.0"              # core version constraint
+type: channel # provider | channel | tool | skill
+engine: ">= 1.0.0" # core version constraint
 license: MIT
 
 # What this plugin needs from the gateway
@@ -26,8 +26,8 @@ capabilities:
   - sessions.write
   - messages.send
   - messages.receive
-  - config.read.self              # read own plugin config only
-  - kv.*                          # plugin-scoped key-value store
+  - config.read.self # read own plugin config only
+  - kv.* # plugin-scoped key-value store
 
 # What this plugin must NOT have (defense in depth)
 deny_capabilities:
@@ -37,7 +37,7 @@ deny_capabilities:
 
 # Execution tier (determines isolation level)
 execution:
-  tier: process                   # wasm | process | container
+  tier: process # wasm | process | container
   sandbox:
     filesystem:
       write_allow:
@@ -51,7 +51,7 @@ execution:
       proxy: true
   # container-only options:
   image: ghcr.io/org/telegram-channel:latest
-  network: restricted             # none | restricted | host
+  network: restricted # none | restricted | host
   memory_limit: 256Mi
 
 # Plugin-specific config schema (validated by gateway)
@@ -60,7 +60,7 @@ config_schema:
   properties:
     bot_token:
       type: string
-      secret: true                # encrypted at rest, never logged
+      secret: true # encrypted at rest, never logged
     allowed_chat_ids:
       type: array
       items: { type: integer }

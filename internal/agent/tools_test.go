@@ -866,11 +866,11 @@ func TestToolDispatcher_AuditNotCalledOnDeny(t *testing.T) {
 
 func TestToolRegistry_LookupPlugin(t *testing.T) {
 	tests := []struct {
-		name           string
-		registrations  map[string]string // toolName → pluginName
-		lookupTool     string
-		wantPlugin     string
-		wantOK         bool
+		name          string
+		registrations map[string]string // toolName → pluginName
+		lookupTool    string
+		wantPlugin    string
+		wantOK        bool
 	}{
 		{
 			name:          "registered tool returns plugin name",

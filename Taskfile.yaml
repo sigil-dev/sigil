@@ -64,20 +64,20 @@ tasks:
       - task: lint:go
       - task: lint:markdown
       - task: lint:yaml
-      # TODO: restore when UI exists
-      #- task: ui:check
+        # TODO: restore when UI exists
+        # - task: ui:check
   lint:go:
     desc: Lint Go code
     cmds:
-      - golangci-lint run --build-tags {{.GO_TAGS}}
+      - golangci-lint run --build-tags {{.GO_TAGS}} ./...
   lint:markdown:
     desc: Lint Markdown files
     cmds:
-      - rumdl check .
+      - rumdl check --exclude ".beads/**" .
   lint:yaml:
     desc: Lint YAML files
     cmds:
-      - yamlfmt -lint .
+      - yamlfmt -lint -exclude ".beads/**" .
   # UI
   ui:deps:
     desc: Install UI dependencies
@@ -92,7 +92,7 @@ tasks:
   ui:build:
     desc: Build UI assets
     dir: ui
-    deps: ['ui:deps']
+    deps: ["ui:deps"]
     sources:
       - src/**/*
       - static/**/*
@@ -108,13 +108,13 @@ tasks:
   ui:dev:
     desc: Start UI development server
     dir: ui
-    deps: ['ui:deps']
+    deps: ["ui:deps"]
     cmds:
       - npm run dev
   ui:check:
     desc: Run Svelte/TypeScript check
     dir: ui
-    deps: ['ui:deps']
+    deps: ["ui:deps"]
     cmds:
       - npm run check
   # Formatting
@@ -123,6 +123,7 @@ tasks:
     cmds:
       - task: fmt:go
       - task: fmt:yaml
+      - task: fmt:markdown
       - task: fmt:dprint
   fmt:go:
     desc: Format Go code
@@ -131,7 +132,11 @@ tasks:
   fmt:yaml:
     desc: Format YAML files
     cmds:
-      - yamlfmt .
+      - yamlfmt -exclude ".beads/**" .
+  fmt:markdown:
+    desc: Format Markdown files
+    cmds:
+      - rumdl fmt --exclude ".beads/**" .
   fmt:dprint:
     desc: Format with dprint
     cmds:

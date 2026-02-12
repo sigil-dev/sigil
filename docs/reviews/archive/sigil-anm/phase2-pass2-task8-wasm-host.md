@@ -8,6 +8,7 @@
 ## Design Change Compliance (D035)
 
 All requirements from the design change implemented correctly:
+
 - `Host` struct with `runtime` and `execTimeout` fields
 - `Option func(*Host)` type with `WithExecTimeout`
 - `NewHost` iterates and applies options (no longer discards)
@@ -18,11 +19,11 @@ All requirements from the design change implemented correctly:
 
 ## Previous Issue Resolution
 
-| Issue | Severity | Status |
-|-------|----------|--------|
-| `WithFuelLimit` absent | CRITICAL | Superseded by D035 (`WithExecTimeout`) |
-| `NewHost` discards options | CRITICAL | Fixed -- options iterated and applied |
-| Runtime with defaults | IMPORTANT | Fixed -- `NewRuntimeWithConfig` |
+| Issue                      | Severity  | Status                                         |
+| -------------------------- | --------- | ---------------------------------------------- |
+| `WithFuelLimit` absent     | CRITICAL  | Superseded by D035 (`WithExecTimeout`)         |
+| `NewHost` discards options | CRITICAL  | Fixed -- options iterated and applied          |
+| Runtime with defaults      | IMPORTANT | Fixed -- `NewRuntimeWithConfig`                |
 | Missing fuel metering test | IMPORTANT | Replaced by `TestWasmHost_ExecTimeoutEnforced` |
 
 ## Security Properties

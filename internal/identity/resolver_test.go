@@ -39,11 +39,11 @@ func (m *mockUserStore) GetByExternalID(_ context.Context, provider, externalID 
 	return nil, fmt.Errorf("user not found for %s", key)
 }
 
-func (m *mockUserStore) Create(context.Context, *store.User) error             { return nil }
-func (m *mockUserStore) Get(context.Context, string) (*store.User, error)      { return nil, nil }
-func (m *mockUserStore) Update(context.Context, *store.User) error             { return nil }
+func (m *mockUserStore) Create(context.Context, *store.User) error                   { return nil }
+func (m *mockUserStore) Get(context.Context, string) (*store.User, error)            { return nil, nil }
+func (m *mockUserStore) Update(context.Context, *store.User) error                   { return nil }
 func (m *mockUserStore) List(context.Context, store.ListOpts) ([]*store.User, error) { return nil, nil }
-func (m *mockUserStore) Delete(context.Context, string) error                  { return nil }
+func (m *mockUserStore) Delete(context.Context, string) error                        { return nil }
 
 // --- Mock PairingStore ---
 
@@ -53,6 +53,7 @@ func (m *mockPairingStore) Create(context.Context, *store.Pairing) error { retur
 func (m *mockPairingStore) GetByChannel(context.Context, string, string) (*store.Pairing, error) {
 	return nil, nil
 }
+
 func (m *mockPairingStore) GetByUser(context.Context, string) ([]*store.Pairing, error) {
 	return nil, nil
 }

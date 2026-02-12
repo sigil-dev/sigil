@@ -363,10 +363,10 @@ Factory reads `storage.*` config, creates the right backend. Callers import only
 
 **Decision:** Two candidates identified, neither adopted yet:
 
-| Backend | Replaces | Language | Go SDK Status (early 2026) | License |
-|---------|----------|----------|---------------------------|---------|
-| LanceDB | VectorStore (sqlite-vec) | Rust | v0.1.2 (pre-1.0, not production-ready) | Apache 2.0 |
-| LadybugDB | KnowledgeStore (SQLite RDF) | C++ (fork of KuzuDB) | Moderate maturity, active development | MIT |
+| Backend   | Replaces                    | Language             | Go SDK Status (early 2026)             | License    |
+| --------- | --------------------------- | -------------------- | -------------------------------------- | ---------- |
+| LanceDB   | VectorStore (sqlite-vec)    | Rust                 | v0.1.2 (pre-1.0, not production-ready) | Apache 2.0 |
+| LadybugDB | KnowledgeStore (SQLite RDF) | C++ (fork of KuzuDB) | Moderate maturity, active development  | MIT        |
 
 **Rationale:** Both are embedded (no server), both are Apache 2.0/MIT compatible, both add CGo dependencies (already required). However:
 

@@ -19,9 +19,9 @@ type mockRegistryProvider struct {
 	available bool
 }
 
-func (m *mockRegistryProvider) Name() string                        { return m.name }
-func (m *mockRegistryProvider) Available(_ context.Context) bool    { return m.available }
-func (m *mockRegistryProvider) Close() error                        { return nil }
+func (m *mockRegistryProvider) Name() string                     { return m.name }
+func (m *mockRegistryProvider) Available(_ context.Context) bool { return m.available }
+func (m *mockRegistryProvider) Close() error                     { return nil }
 
 func (m *mockRegistryProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil

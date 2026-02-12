@@ -7,6 +7,7 @@
 ## Spec Compliance -- PASS
 
 All required elements present:
+
 - `HandshakeConfig()` with magic cookie (ProtocolVersion=1, key="SIGIL_PLUGIN")
 - `PluginMap()` with all 4 types: "lifecycle", "channel", "tool", "provider"
 - `ClientConfig(binary, sandbox)` creates `plugin.ClientConfig` with gRPC-only protocol
@@ -16,9 +17,11 @@ All required elements present:
 ## Important Issues
 
 1. **Slice mutation in `buildCommand`** (`host.go:55`):
+
    ```go
    args := append(sandboxCmd, binaryPath)  // may mutate caller's slice
    ```
+
    Fix: `args := append([]string(nil), sandboxCmd...)` then `args = append(args, binaryPath)`.
 
 2. **Embed `plugin.NetRPCUnsupportedPlugin` instead of `plugin.Plugin`** (lines 59-61, 76-78, 93-95, 110-112):

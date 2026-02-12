@@ -29,15 +29,15 @@ All test/build/lint operations use `task` commands per CLAUDE.md.
 
 ## Phase Overview
 
-| Phase | Name | Doc | Key Deliverables | Est. Tasks |
-|-------|------|-----|------------------|------------|
-| 1 | Foundation | [01-phase-1-foundation.md](01-phase-1-foundation.md) | Proto defs, storage interfaces, SQLite backends, config, provider interfaces, plugin SDK types | 14 |
-| 2 | Core Runtime | [02-phase-2-core-runtime.md](02-phase-2-core-runtime.md) | Security enforcer, plugin host, sandboxing, Wasm tier | 8 |
-| 3 | Agent Core | [03-phase-3-agent-core.md](03-phase-3-agent-core.md) | Agent loop, sessions, tool dispatch, tiered memory, skills | 8 |
-| 4 | Platform Integration | [04-phase-4-platform-integration.md](04-phase-4-platform-integration.md) | Workspaces, channels, providers, built-in LLM providers | 7 |
-| 5 | Server & API | [05-phase-5-server-api.md](05-phase-5-server-api.md) | HTTP server, REST+SSE endpoints, OpenAPI gen, CLI | 7 |
-| 6 | Advanced Features | [06-phase-6-advanced-features.md](06-phase-6-advanced-features.md) | Nodes, container tier, memory compaction, Tailscale | 6 |
-| 7 | UI & Distribution | [07-phase-7-ui-distribution.md](07-phase-7-ui-distribution.md) | SvelteKit UI, Tauri desktop, GoReleaser, doc site | 6 |
+| Phase | Name                 | Doc                                                                      | Key Deliverables                                                                               | Est. Tasks |
+| ----- | -------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- | ---------- |
+| 1     | Foundation           | [01-phase-1-foundation.md](01-phase-1-foundation.md)                     | Proto defs, storage interfaces, SQLite backends, config, provider interfaces, plugin SDK types | 14         |
+| 2     | Core Runtime         | [02-phase-2-core-runtime.md](02-phase-2-core-runtime.md)                 | Security enforcer, plugin host, sandboxing, Wasm tier                                          | 8          |
+| 3     | Agent Core           | [03-phase-3-agent-core.md](03-phase-3-agent-core.md)                     | Agent loop, sessions, tool dispatch, tiered memory, skills                                     | 8          |
+| 4     | Platform Integration | [04-phase-4-platform-integration.md](04-phase-4-platform-integration.md) | Workspaces, channels, providers, built-in LLM providers                                        | 7          |
+| 5     | Server & API         | [05-phase-5-server-api.md](05-phase-5-server-api.md)                     | HTTP server, REST+SSE endpoints, OpenAPI gen, CLI                                              | 7          |
+| 6     | Advanced Features    | [06-phase-6-advanced-features.md](06-phase-6-advanced-features.md)       | Nodes, container tier, memory compaction, Tailscale                                            | 6          |
+| 7     | UI & Distribution    | [07-phase-7-ui-distribution.md](07-phase-7-ui-distribution.md)           | SvelteKit UI, Tauri desktop, GoReleaser, doc site                                              | 6          |
 
 ---
 

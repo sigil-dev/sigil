@@ -71,12 +71,12 @@ func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
 		Hooks: &agent.LoopHooks{
-			OnReceive:  record("receive"),
-			OnPrepare:  record("prepare"),
-			OnCallLLM:  record("call_llm"),
-			OnProcess:  record("process"),
-			OnRespond:  record("respond"),
-			OnAudit:    record("audit"),
+			OnReceive: record("receive"),
+			OnPrepare: record("prepare"),
+			OnCallLLM: record("call_llm"),
+			OnProcess: record("process"),
+			OnRespond: record("respond"),
+			OnAudit:   record("audit"),
 		},
 	})
 
@@ -619,11 +619,12 @@ type mockProviderToolCall struct {
 	toolCall *provider.ToolCall
 }
 
-func (p *mockProviderToolCall) Name() string                         { return "mock-tool-call" }
-func (p *mockProviderToolCall) Available(_ context.Context) bool     { return true }
+func (p *mockProviderToolCall) Name() string                     { return "mock-tool-call" }
+func (p *mockProviderToolCall) Available(_ context.Context) bool { return true }
 func (p *mockProviderToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-tool-call"}, nil
 }
+
 func (p *mockProviderToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
@@ -824,11 +825,12 @@ type mockProviderToolCallWithText struct {
 	textContent string
 }
 
-func (p *mockProviderToolCallWithText) Name() string                         { return "mock-tool-text" }
-func (p *mockProviderToolCallWithText) Available(_ context.Context) bool     { return true }
+func (p *mockProviderToolCallWithText) Name() string                     { return "mock-tool-text" }
+func (p *mockProviderToolCallWithText) Available(_ context.Context) bool { return true }
 func (p *mockProviderToolCallWithText) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-tool-text"}, nil
 }
+
 func (p *mockProviderToolCallWithText) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
@@ -880,11 +882,12 @@ func (m *mockSessionStoreWindowError) GetActiveWindow(_ context.Context, _ strin
 // mockProviderChatError is a provider whose Chat() method returns an error.
 type mockProviderChatError struct{}
 
-func (p *mockProviderChatError) Name() string                         { return "mock-chat-error" }
-func (p *mockProviderChatError) Available(_ context.Context) bool     { return true }
+func (p *mockProviderChatError) Name() string                     { return "mock-chat-error" }
+func (p *mockProviderChatError) Available(_ context.Context) bool { return true }
 func (p *mockProviderChatError) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-chat-error"}, nil
 }
+
 func (p *mockProviderChatError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }

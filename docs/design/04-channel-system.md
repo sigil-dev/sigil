@@ -31,13 +31,13 @@ Pairing Check (against pairing DB)
 
 ### Pairing Modes (configurable per-channel)
 
-| Mode | Behavior |
-|------|----------|
-| `open` | Anyone can talk to the agent (public bots) |
-| `allowlist` | Only pre-approved users (by platform ID or pattern) |
+| Mode              | Behavior                                                              |
+| ----------------- | --------------------------------------------------------------------- |
+| `open`            | Anyone can talk to the agent (public bots)                            |
+| `allowlist`       | Only pre-approved users (by platform ID or pattern)                   |
 | `pair_on_request` | Unknown users get a "request sent" message, owner approves via UI/CLI |
-| `pair_with_code` | User must provide a one-time code (generated in UI) to pair |
-| `closed` | Only owner, no pairing possible |
+| `pair_with_code`  | User must provide a one-time code (generated in UI) to pair           |
+| `closed`          | Only owner, no pairing possible                                       |
 
 ## Secrets Handling
 
@@ -47,9 +47,9 @@ Channel plugins need platform credentials (bot tokens, API keys):
 plugins:
   telegram-channel:
     config:
-      bot_token: "${TELEGRAM_BOT_TOKEN}"         # env var reference
+      bot_token: "${TELEGRAM_BOT_TOKEN}" # env var reference
       # OR
-      bot_token: "vault:secret/telegram#token"   # future: vault integration
+      bot_token: "vault:secret/telegram#token" # future: vault integration
 ```
 
 - Secrets marked `secret: true` in the plugin's config schema are encrypted at rest
@@ -73,7 +73,7 @@ users:
         platform_id: "+15551234567"
       - channel: discord
         platform_id: "alice#1234"
-    session_mode: unified     # unified | per_channel
+    session_mode: unified # unified | per_channel
 ```
 
 - **`unified` mode:** Same session across all channels. Start on Telegram, continue on WhatsApp.

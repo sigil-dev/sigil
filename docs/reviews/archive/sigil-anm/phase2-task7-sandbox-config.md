@@ -32,12 +32,12 @@ Core requirements met: correct function signature, platform switching, nil retur
 
 ## Suggestions
 
-| # | Finding | Recommendation | Resolution |
-|---|---------|----------------|------------|
-| S1 | Seccomp filters absent | Design doc mentions them for Linux. File follow-up issue. | TODO comment in sandbox.go (deferred — needs per-arch BPF filter work) |
-| S2 | No `--unshare-pid` | Standard bwrap hardening measure. | **Closed:** sigil-anm.21 |
-| S3 | ReadDeny mapped to `--tmpfs` | Document this design choice (hides content vs permission denied). | **Closed:** sigil-anm.21 (block comment explaining tmpfs overlay design) |
-| S4 | `expandPath` error handling | Silently swallows `os.UserHomeDir()` errors. Log warning. | **Closed:** sigil-anm.21 + sigil-anm.24 (returns error, ~user syntax documented) |
-| S5 | No `binaryPath` validation | Empty string or spaces produce broken args. | **Closed:** sigil-anm.21 (empty check + validateSandboxPath) |
-| S6 | Write profile to file | Avoids argument-length limits and shell-escaping. | **Closed:** sigil-anm.21 (temp file via -f, lifecycle documented) |
-| S7 | Container tier returns nil silently | Could mask configuration errors. | **Closed:** sigil-anm.21 (returns descriptive error) |
+| #  | Finding                             | Recommendation                                                    | Resolution                                                                       |
+| -- | ----------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| S1 | Seccomp filters absent              | Design doc mentions them for Linux. File follow-up issue.         | TODO comment in sandbox.go (deferred — needs per-arch BPF filter work)           |
+| S2 | No `--unshare-pid`                  | Standard bwrap hardening measure.                                 | **Closed:** sigil-anm.21                                                         |
+| S3 | ReadDeny mapped to `--tmpfs`        | Document this design choice (hides content vs permission denied). | **Closed:** sigil-anm.21 (block comment explaining tmpfs overlay design)         |
+| S4 | `expandPath` error handling         | Silently swallows `os.UserHomeDir()` errors. Log warning.         | **Closed:** sigil-anm.21 + sigil-anm.24 (returns error, ~user syntax documented) |
+| S5 | No `binaryPath` validation          | Empty string or spaces produce broken args.                       | **Closed:** sigil-anm.21 (empty check + validateSandboxPath)                     |
+| S6 | Write profile to file               | Avoids argument-length limits and shell-escaping.                 | **Closed:** sigil-anm.21 (temp file via -f, lifecycle documented)                |
+| S7 | Container tier returns nil silently | Could mask configuration errors.                                  | **Closed:** sigil-anm.21 (returns descriptive error)                             |
