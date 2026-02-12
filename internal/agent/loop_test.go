@@ -1014,4 +1014,162 @@ func (r *mockProviderRouterGenericError) RegisterProvider(_ string, _ provider.P
 	return nil
 }
 
-func (r *mockProviderRouterGenericError) Close() error { return nil }
+func (r *mockProviderRouterGenericError) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterGenericError) Close() error     { return nil }
+
+// ---------------------------------------------------------------------------
+// Budget accounting tests
+// ---------------------------------------------------------------------------
+
+func TestAgentLoop_UsageAccountedAfterLLMCall(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Set initial budget with limits.
+	session.TokenBudget.MaxPerSession = 100000
+	session.TokenBudget.UsedSession = 0
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(), // returns Usage{InputTokens:10, OutputTokens:5}
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Verify token counters were incremented (10 input + 5 output = 15 total).
+	updated, err := ss.GetSession(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 15, updated.TokenBudget.UsedSession, "UsedSession should be incremented by total tokens")
+	assert.Equal(t, 15, updated.TokenBudget.UsedHour, "UsedHour should be incremented by total tokens")
+	assert.Equal(t, 15, updated.TokenBudget.UsedDay, "UsedDay should be incremented by total tokens")
+}
+
+func TestAgentLoop_UsageAccountedInToolLoop(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	session.TokenBudget.MaxPerSession = 100000
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	// Tool call provider: first call emits tool call (10+2=12 tokens),
+	// second call emits text (20+8=28 tokens). Total = 40.
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-1",
+			Name:      "get_weather",
+			Arguments: `{"city":"London"}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "weather?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
+		UserPermissions: security.NewCapabilitySet("tool:*"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Verify cumulative usage: initial call (12) + tool loop re-call (28) = 40.
+	updated, err := ss.GetSession(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 40, updated.TokenBudget.UsedSession, "UsedSession should accumulate across tool loop iterations")
+}
+
+// ---------------------------------------------------------------------------
+// Failover cap test
+// ---------------------------------------------------------------------------
+
+func TestAgentLoop_FailoverCapMatchesRouterChainLength(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Router that returns MaxAttempts=3 but always fails routing.
+	router := &mockProviderRouterWithAttempts{maxAttempts: 3}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+
+	// The router should have been called exactly maxAttempts times (3).
+	assert.Equal(t, 3, router.callCount(), "loop should try exactly MaxAttempts() providers")
+}
+
+// mockProviderRouterWithAttempts is a router that tracks RouteWithBudget calls
+// and returns a provider that fails on Chat() to trigger retry.
+type mockProviderRouterWithAttempts struct {
+	maxAttempts int
+	mu          sync.Mutex
+	calls       int
+}
+
+func (r *mockProviderRouterWithAttempts) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return &mockProviderChatError{}, "mock-model", nil
+}
+
+func (r *mockProviderRouterWithAttempts) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return &mockProviderChatError{}, "mock-model", nil
+}
+
+func (r *mockProviderRouterWithAttempts) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+
+func (r *mockProviderRouterWithAttempts) MaxAttempts() int { return r.maxAttempts }
+func (r *mockProviderRouterWithAttempts) Close() error     { return nil }
+
+func (r *mockProviderRouterWithAttempts) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}

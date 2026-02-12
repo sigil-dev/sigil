@@ -112,6 +112,22 @@ func (m *Manager) SetConfig(cfg Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config = cfg
+
+	// Refresh policy on cached workspaces so updated allow/deny sets take
+	// effect immediately without requiring a close/reopen cycle.
+	for id, ws := range m.workspaces {
+		if wsCfg, ok := cfg[id]; ok {
+			ws.Config = wsCfg
+			ws.allowSet = security.NewCapabilitySet(wsCfg.Tools.Allow...)
+			ws.denySet = security.NewCapabilitySet(wsCfg.Tools.Deny...)
+		} else {
+			// Workspace no longer in config — reset to empty (fail-closed).
+			ws.Config = WorkspaceConfig{}
+			ws.allowSet = security.NewCapabilitySet()
+			ws.denySet = security.NewCapabilitySet()
+		}
+	}
+
 	return nil
 }
 
@@ -160,14 +176,16 @@ func (m *Manager) Open(ctx context.Context, workspaceID string) (*Workspace, err
 
 // Route finds the workspace for an incoming message based on channel bindings,
 // checks membership, and returns the opened workspace. Unbound channels fall
-// back to the "personal" workspace (no membership check).
+// back to a user-scoped personal workspace ("personal:<userID>").
 func (m *Manager) Route(ctx context.Context, req RouteRequest) (*Workspace, error) {
 	m.mu.RLock()
 	wsID := m.findBinding(req.ChannelType, req.ChannelID)
 	m.mu.RUnlock()
 
 	if wsID == "" {
-		return m.Open(ctx, "personal")
+		// User-scoped personal workspace — each user gets their own isolated
+		// fallback workspace. Membership is implied (it's the user's own space).
+		return m.Open(ctx, "personal:"+req.UserID)
 	}
 
 	// Check membership.

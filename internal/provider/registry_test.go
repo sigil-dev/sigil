@@ -175,3 +175,14 @@ func TestRegistry_Close(t *testing.T) {
 	err := reg.Close()
 	assert.NoError(t, err)
 }
+
+func TestRegistry_MaxAttempts(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	// Empty failover chain → 1 attempt (primary only).
+	assert.Equal(t, 1, reg.MaxAttempts())
+
+	// Set failover chain with 3 entries → 4 attempts total.
+	reg.SetFailover([]string{"a/model", "b/model", "c/model"})
+	assert.Equal(t, 4, reg.MaxAttempts())
+}

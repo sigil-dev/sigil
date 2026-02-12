@@ -65,14 +65,14 @@ func TestManager_RouteMessage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "work", ws.ID)
 
-	// Unbound channel falls back to "personal" workspace.
+	// Unbound channel falls back to user-scoped personal workspace.
 	ws2, err := m.Route(context.Background(), workspace.RouteRequest{
 		ChannelType: "telegram",
 		ChannelID:   "T999",
 		UserID:      "charlie",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "personal", ws2.ID)
+	assert.Equal(t, "personal:charlie", ws2.ID)
 }
 
 func TestManager_MembershipCheck(t *testing.T) {
@@ -119,4 +119,64 @@ func TestManager_ToolAllowlist(t *testing.T) {
 	assert.True(t, ws.ToolAllowed("shopping.list"), "shopping.list should be allowed")
 	assert.False(t, ws.ToolAllowed("exec.run"), "exec.run should be denied")
 	assert.False(t, ws.ToolAllowed("unknown.tool"), "unknown.tool should not match allow list")
+}
+
+func TestManager_SetConfigRefreshesCachedPolicy(t *testing.T) {
+	m := newTestManager(t)
+
+	// Open workspace with initial config.
+	cfg := workspace.Config{
+		"ws": {
+			Members: []string{"alice"},
+			Tools: workspace.ToolConfig{
+				Allow: []string{"calendar.*"},
+			},
+		},
+	}
+	require.NoError(t, m.SetConfig(cfg))
+
+	ws, err := m.Open(context.Background(), "ws")
+	require.NoError(t, err)
+	assert.True(t, ws.ToolAllowed("calendar.create"), "initial config should allow calendar tools")
+	assert.False(t, ws.ToolAllowed("exec.run"), "initial config should deny exec tools")
+
+	// Update config to change the allow set — cached workspace should reflect the change.
+	cfg2 := workspace.Config{
+		"ws": {
+			Members: []string{"alice"},
+			Tools: workspace.ToolConfig{
+				Allow: []string{"exec.*"},
+				Deny:  []string{"calendar.*"},
+			},
+		},
+	}
+	require.NoError(t, m.SetConfig(cfg2))
+
+	assert.True(t, ws.ToolAllowed("exec.run"), "updated config should allow exec tools")
+	assert.False(t, ws.ToolAllowed("calendar.create"), "updated config should deny calendar tools")
+}
+
+func TestManager_PersonalWorkspaceIsUserScoped(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.SetConfig(workspace.Config{}))
+
+	// Different users get different personal workspaces.
+	ws1, err := m.Route(context.Background(), workspace.RouteRequest{
+		ChannelType: "telegram",
+		ChannelID:   "T1",
+		UserID:      "alice",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "personal:alice", ws1.ID)
+
+	ws2, err := m.Route(context.Background(), workspace.RouteRequest{
+		ChannelType: "telegram",
+		ChannelID:   "T2",
+		UserID:      "bob",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "personal:bob", ws2.ID)
+
+	// They should be different instances.
+	assert.NotSame(t, ws1, ws2)
 }

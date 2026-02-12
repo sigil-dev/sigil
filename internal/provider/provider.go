@@ -48,6 +48,11 @@ type Router interface {
 	// RegisterProvider adds a provider to the router.
 	RegisterProvider(name string, provider Provider) error
 
+	// MaxAttempts returns the maximum number of provider attempts the router
+	// supports (primary + failover candidates). Used by the agent loop to
+	// cap its retry count.
+	MaxAttempts() int
+
 	// Close shuts down all registered providers.
 	Close() error
 }

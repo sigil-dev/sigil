@@ -236,6 +236,7 @@ func (r *mockProviderRouter) RouteWithBudget(_ context.Context, _, _ string, _ *
 }
 
 func (r *mockProviderRouter) RegisterProvider(_ string, _ provider.Provider) error { return nil }
+func (r *mockProviderRouter) MaxAttempts() int                                     { return 1 }
 func (r *mockProviderRouter) Close() error                                         { return nil }
 
 // newMockProviderRouter returns a Router that always responds with "Hello, world!".
@@ -258,7 +259,8 @@ func (r *mockProviderRouterBudgetExceeded) RegisterProvider(_ string, _ provider
 	return nil
 }
 
-func (r *mockProviderRouterBudgetExceeded) Close() error { return nil }
+func (r *mockProviderRouterBudgetExceeded) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterBudgetExceeded) Close() error     { return nil }
 
 // newMockProviderRouterWithBudgetExceeded returns a Router that always returns a budget error.
 func newMockProviderRouterWithBudgetExceeded() *mockProviderRouterBudgetExceeded {
@@ -394,6 +396,7 @@ func (r *mockProviderRouterBudgetAware) RouteWithBudget(_ context.Context, _, _ 
 }
 
 func (r *mockProviderRouterBudgetAware) RegisterProvider(_ string, _ provider.Provider) error { return nil }
+func (r *mockProviderRouterBudgetAware) MaxAttempts() int                                     { return 1 }
 func (r *mockProviderRouterBudgetAware) Close() error                                         { return nil }
 
 func (r *mockProviderRouterBudgetAware) getCapturedBudget() *provider.Budget {
@@ -414,6 +417,7 @@ func (r *mockProviderRouterInvalidModelRef) RouteWithBudget(_ context.Context, _
 }
 
 func (r *mockProviderRouterInvalidModelRef) RegisterProvider(_ string, _ provider.Provider) error { return nil }
+func (r *mockProviderRouterInvalidModelRef) MaxAttempts() int                                     { return 1 }
 func (r *mockProviderRouterInvalidModelRef) Close() error                                         { return nil }
 
 // ---------------------------------------------------------------------------

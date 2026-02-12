@@ -145,6 +145,9 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 		return nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error: session %s", msg.SessionID)
 	}
 
+	// Account token usage from this LLM call.
+	l.accountUsage(ctx, session, usage)
+
 	// Step 4b: TOOL LOOP — dispatch tool calls and re-call the LLM.
 	if l.toolDispatcher != nil && len(toolCalls) > 0 {
 		var loopText string
@@ -322,10 +325,6 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	return session, messages, nil
 }
 
-// maxProviderAttempts is the maximum number of providers to try (primary + failovers)
-// before giving up in callLLM.
-const maxProviderAttempts = 4
-
 func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.Session, messages []provider.Message) (<-chan provider.ChatEvent, error) {
 	modelName := session.ModelOverride
 	if modelName == "" {
@@ -338,8 +337,9 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		UsedSessionTokens: session.TokenBudget.UsedSession,
 	}
 
+	maxAttempts := l.providerRouter.MaxAttempts()
 	var lastErr error
-	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		prov, resolvedModel, err := l.providerRouter.RouteWithBudget(ctx, workspaceID, modelName, budget)
 		if err != nil {
 			// Propagate specific routing errors directly instead of masking
@@ -435,6 +435,23 @@ func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*prov
 	}
 
 	return buf.String(), toolCalls, usage, streamErr
+}
+
+// accountUsage increments the session's token budget counters with the
+// tokens consumed by an LLM call and persists the update. This ensures
+// budget enforcement stays accurate across multi-turn tool loops.
+func (l *Loop) accountUsage(ctx context.Context, session *store.Session, usage *provider.Usage) {
+	if usage == nil {
+		return
+	}
+	total := usage.InputTokens + usage.OutputTokens
+	session.TokenBudget.UsedSession += total
+	session.TokenBudget.UsedHour += total
+	session.TokenBudget.UsedDay += total
+
+	// Best-effort persist — budget enforcement still works in-memory for
+	// the current turn even if the write fails.
+	_ = l.sessions.Update(ctx, session)
 }
 
 // runToolLoop executes the bounded inner tool loop: dispatch tool calls,
@@ -541,6 +558,9 @@ func (l *Loop) runToolLoop(
 		if err != nil {
 			return "", nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "stream error in tool loop: session %s", msg.SessionID)
 		}
+
+		// Account token usage from this tool-loop LLM call.
+		l.accountUsage(ctx, session, usage)
 
 		// If no more tool calls, the loop is done.
 		if len(currentToolCalls) == 0 {

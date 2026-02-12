@@ -90,6 +90,14 @@ func (r *Registry) SetFailover(chain []string) {
 	r.failover = chain
 }
 
+// MaxAttempts returns 1 (primary) + len(failover chain) so the agent loop
+// caps its retry count to exactly the number of configured provider candidates.
+func (r *Registry) MaxAttempts() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return 1 + len(r.failover)
+}
+
 // Route selects a provider for the given workspace and model name.
 // It implements the Router interface. When modelName is empty the
 // default (or workspace override) is used.
