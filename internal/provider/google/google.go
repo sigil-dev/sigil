@@ -133,8 +133,8 @@ func (p *Provider) Close() error { return nil }
 func buildConfig(req provider.ChatRequest) *genai.GenerateContentConfig {
 	cfg := &genai.GenerateContentConfig{}
 
-	if req.Options.Temperature > 0 {
-		cfg.Temperature = genai.Ptr(req.Options.Temperature)
+	if req.Options.Temperature != nil {
+		cfg.Temperature = genai.Ptr(*req.Options.Temperature)
 	}
 
 	if req.Options.MaxTokens > 0 {

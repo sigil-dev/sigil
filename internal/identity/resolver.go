@@ -46,33 +46,33 @@ func (r *Resolver) Resolve(ctx context.Context, channelType, platformUserID stri
 		)
 	}
 
-	// Verify pairing exists and is active for this channel.
-	pairing, err := r.pairings.GetByChannel(ctx, channelType, platformUserID)
+	// Verify the user has an active pairing for this channel type.
+	// We query by user ID (not channel ID) to avoid the semantic mismatch
+	// between platformUserID and channelID — they are different identifiers.
+	pairings, err := r.pairings.GetByUser(ctx, user.ID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, sigilerr.New(
-				CodeIdentityPairingRequired,
-				"no active pairing for channel",
-				sigilerr.Field("platform", channelType),
-				sigilerr.Field("platform_user_id", platformUserID),
-			)
-		}
 		return nil, sigilerr.Wrap(
 			err,
 			CodeIdentityBackendFailure,
 			"pairing lookup failed",
 			sigilerr.Field("platform", channelType),
-			sigilerr.Field("platform_user_id", platformUserID),
+			sigilerr.Field("user_id", user.ID),
 		)
 	}
 
-	if pairing.Status != store.PairingStatusActive {
+	var found bool
+	for _, p := range pairings {
+		if p.ChannelType == channelType && p.Status == store.PairingStatusActive {
+			found = true
+			break
+		}
+	}
+	if !found {
 		return nil, sigilerr.New(
 			CodeIdentityPairingRequired,
-			"pairing is not active",
+			"no active pairing for channel",
 			sigilerr.Field("platform", channelType),
-			sigilerr.Field("platform_user_id", platformUserID),
-			sigilerr.Field("pairing_status", string(pairing.Status)),
+			sigilerr.Field("user_id", user.ID),
 		)
 	}
 

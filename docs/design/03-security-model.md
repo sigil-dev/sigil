@@ -34,6 +34,8 @@ config.read.*                    # read all config (admin only)
 filesystem.read./data/*          # path-scoped filesystem access
 filesystem.write./data/plugins/self/*  # write only to own directory
 kv.*                             # full KV access (plugin-scoped automatically)
+tool.<name>                      # dispatch a specific tool (D038)
+tool.*                           # dispatch any tool
 provider.chat                    # invoke LLM (skill plugins need this)
 storage.volumes.*                # (future) volume management
 storage.memory.*                 # (future) memory collections

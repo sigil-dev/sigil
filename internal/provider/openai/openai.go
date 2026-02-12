@@ -172,8 +172,8 @@ func buildParams(req provider.ChatRequest) (openaisdk.ChatCompletionNewParams, e
 		params.MaxCompletionTokens = param.NewOpt(int64(req.Options.MaxTokens))
 	}
 
-	if req.Options.Temperature > 0 {
-		params.Temperature = param.NewOpt(float64(req.Options.Temperature))
+	if req.Options.Temperature != nil {
+		params.Temperature = param.NewOpt(float64(*req.Options.Temperature))
 	}
 
 	if len(req.Options.StopSequences) > 0 {

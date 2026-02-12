@@ -151,8 +151,8 @@ func buildParams(req provider.ChatRequest) (anthropicsdk.MessageNewParams, error
 		}
 	}
 
-	if req.Options.Temperature > 0 {
-		params.Temperature = anthropicsdk.Float(float64(req.Options.Temperature))
+	if req.Options.Temperature != nil {
+		params.Temperature = anthropicsdk.Float(float64(*req.Options.Temperature))
 	}
 
 	if len(req.Options.StopSequences) > 0 {

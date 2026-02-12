@@ -478,7 +478,7 @@ func (l *Loop) runToolLoop(
 	copy(currentMessages, messages)
 	currentToolCalls := toolCalls
 	text := initialText
-	usage := initialUsage
+	var usage *provider.Usage
 
 	for range maxToolLoopIterations {
 		// If the LLM emitted text alongside tool calls, persist it as an
@@ -572,11 +572,16 @@ func (l *Loop) runToolLoop(
 
 		// If no more tool calls, the loop is done.
 		if len(currentToolCalls) == 0 {
-			break
+			return text, usage, nil
 		}
 	}
 
-	return text, usage, nil
+	// Loop exhausted iterations with tool calls still pending.
+	return "", nil, sigilerr.New(sigilerr.CodeAgentLoopFailure,
+		"tool loop exceeded maximum iterations with unresolved tool calls",
+		sigilerr.Field("max_iterations", maxToolLoopIterations),
+		sigilerr.Field("pending_tool_calls", len(currentToolCalls)),
+	)
 }
 
 func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {

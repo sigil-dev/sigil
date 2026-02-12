@@ -49,8 +49,17 @@ func (m *mockUserStore) Delete(context.Context, string) error                   
 
 // --- Mock PairingStore ---
 
-// mockPairingStore returns an active pairing for any channel lookup.
-type mockPairingStore struct{}
+// mockPairingStore returns active pairings for known channel types via GetByUser.
+type mockPairingStore struct {
+	channelTypes []string
+}
+
+func newMockPairingStore(channelTypes ...string) *mockPairingStore {
+	if len(channelTypes) == 0 {
+		channelTypes = []string{"telegram", "whatsapp", "discord", "slack"}
+	}
+	return &mockPairingStore{channelTypes: channelTypes}
+}
 
 func (m *mockPairingStore) Create(context.Context, *store.Pairing) error { return nil }
 func (m *mockPairingStore) GetByChannel(_ context.Context, channelType, channelID string) (*store.Pairing, error) {
@@ -62,12 +71,21 @@ func (m *mockPairingStore) GetByChannel(_ context.Context, channelType, channelI
 	}, nil
 }
 
-func (m *mockPairingStore) GetByUser(context.Context, string) ([]*store.Pairing, error) {
-	return nil, nil
+func (m *mockPairingStore) GetByUser(_ context.Context, _ string) ([]*store.Pairing, error) {
+	var pairings []*store.Pairing
+	for i, ct := range m.channelTypes {
+		pairings = append(pairings, &store.Pairing{
+			ID:          fmt.Sprintf("pairing-%d", i+1),
+			ChannelType: ct,
+			ChannelID:   fmt.Sprintf("chan-%d", i+1),
+			Status:      store.PairingStatusActive,
+		})
+	}
+	return pairings, nil
 }
 func (m *mockPairingStore) Delete(context.Context, string) error { return nil }
 
-// mockNoPairingStore returns ErrNotFound for all pairing lookups.
+// mockNoPairingStore returns empty results for all pairing lookups.
 type mockNoPairingStore struct{}
 
 func (m *mockNoPairingStore) Create(context.Context, *store.Pairing) error { return nil }
@@ -93,7 +111,7 @@ func TestResolver_ResolvePlatformUser(t *testing.T) {
 	}
 
 	users := newMockUserStore(user)
-	r := identity.NewResolver(users, &mockPairingStore{})
+	r := identity.NewResolver(users, newMockPairingStore())
 	ctx := context.Background()
 
 	got, err := r.Resolve(ctx, "telegram", "tg-alice")
@@ -108,7 +126,7 @@ func TestResolver_ResolvePlatformUser(t *testing.T) {
 
 func TestResolver_UnknownUser(t *testing.T) {
 	users := newMockUserStore() // empty store
-	r := identity.NewResolver(users, &mockPairingStore{})
+	r := identity.NewResolver(users, newMockPairingStore())
 
 	_, err := r.Resolve(context.Background(), "telegram", "nonexistent")
 	require.Error(t, err)
@@ -124,7 +142,7 @@ func (m *mockErrorUserStore) GetByExternalID(_ context.Context, _, _ string) (*s
 }
 
 func TestResolver_BackendFailure(t *testing.T) {
-	r := identity.NewResolver(&mockErrorUserStore{}, &mockPairingStore{})
+	r := identity.NewResolver(&mockErrorUserStore{}, newMockPairingStore())
 
 	_, err := r.Resolve(context.Background(), "telegram", "tg-alice")
 	require.Error(t, err)
@@ -163,7 +181,7 @@ func TestResolver_ResolvePlatformUser_MultiplePlatforms(t *testing.T) {
 	}
 
 	users := newMockUserStore(user)
-	r := identity.NewResolver(users, &mockPairingStore{})
+	r := identity.NewResolver(users, newMockPairingStore())
 	ctx := context.Background()
 
 	platforms := []struct {

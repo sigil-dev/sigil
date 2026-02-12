@@ -143,7 +143,7 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*Too
 	// determines whether the tool call is permitted.
 	checkReq := security.CheckRequest{
 		Plugin:          req.PluginName,
-		Capability:      "tool:" + req.ToolName,
+		Capability:      "tool." + req.ToolName,
 		WorkspaceID:     req.WorkspaceID,
 		WorkspaceAllow:  req.WorkspaceAllow,
 		UserPermissions: req.UserPermissions,

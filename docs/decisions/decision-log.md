@@ -488,3 +488,53 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** A shared personal workspace is a security and privacy concern — users would see each other's conversation history and tool outputs. User-scoped workspaces provide proper isolation with minimal additional complexity. Membership is implied since the workspace belongs to the user.
 
 **Ref:** PR #12 review round 5 finding 4, bead `sigil-0cs`
+
+## D038: Tool Capability Dot Namespace
+
+**Question:** Should runtime tool capability checks use colon (`tool:name`) or dot (`tool.name`) as the namespace separator?
+
+**Options considered:**
+
+- Colon-separated `tool:<name>` — used in initial implementation, but colons are rejected by manifest `capPatternRe` validation (`^[a-zA-Z0-9.*_\-/]+$`), breaking least-privilege enforcement for non-wildcard grants.
+- Dot-separated `tool.<name>` (chosen) — consistent with existing `MatchCapability` dot-segment matching and the design docs' capability namespace convention.
+
+**Decision:** Runtime tool capability checks use `tool.<name>`. Manifest validation, `MatchCapability`, and the enforcer all operate on dot-segmented namespaces consistently.
+
+**Rationale:** The colon separator was an implementation artifact that conflicted with the validation regex. Aligning on dot namespaces means `tool.search`, `tool.*`, and `tool.web_search` all pass manifest validation and match correctly at runtime without requiring wildcard grants.
+
+**Ref:** PR #12 review round 6 finding 1
+
+## D039: Identity Resolver User-Scoped Pairing Verification
+
+**Question:** Should the identity resolver verify pairings via `GetByChannel(channelType, platformUserID)` or `GetByUser(userID)` filtered by channel type?
+
+**Options considered:**
+
+- `GetByChannel` with ownership assertion — fixes the authorization gap but retains a semantic mismatch (`platformUserID` is not a `channelID`).
+- `GetByUser(userID)` + channel type filter (chosen) — queries by the resolved user's ID and filters for an active pairing on the requested channel type. Avoids the `channelID`/`platformUserID` mismatch entirely.
+
+**Decision:** Resolver uses `GetByUser(user.ID)` and filters for matching `channelType` + active status. The `GetByUser` method already existed in `PairingStore`; no interface change was needed.
+
+**Rationale:** `platformUserID` and `channelID` are semantically different identifiers. Using `GetByChannel(channelType, platformUserID)` would only work when they happen to coincide (e.g., DMs). The user-scoped query is correct in all cases.
+
+**Ref:** PR #12 review round 6 finding 2
+
+## D040: Tool Loop Iteration Limit Returns Error
+
+**Question:** Should the tool loop return success or an error when it exhausts its iteration limit with tool calls still pending?
+
+**Decision:** The tool loop now returns `CodeAgentLoopFailure` when `maxToolLoopIterations` is reached with unresolved tool calls, instead of silently returning success.
+
+**Rationale:** Returning success with incomplete orchestration is misleading and diverges from the design intent ("continue until done or limit hit"). An explicit error lets callers distinguish between clean completion and truncated execution.
+
+**Ref:** PR #12 review round 6 finding 3, `docs/design/08-agent-core.md` §Multi-Turn Tool Orchestration
+
+## D041: Temperature Zero via Pointer Type
+
+**Question:** How should providers handle `temperature=0` (deterministic) when the Go zero value for `float32` is also `0`?
+
+**Decision:** `ChatOptions.Temperature` is now `*float32`. A nil pointer means "not set" (use provider default); a non-nil pointer sends the exact value, including `0`.
+
+**Rationale:** The previous `> 0` guard silently dropped `temperature=0`, making deterministic output impossible. The pointer type is the standard Go idiom for optional numeric fields and matches the pattern used by the Anthropic, OpenAI, and Google SDKs themselves.
+
+**Ref:** PR #12 review round 6 finding 4

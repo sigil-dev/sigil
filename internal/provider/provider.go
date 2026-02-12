@@ -68,7 +68,7 @@ type ChatRequest struct {
 
 // ChatOptions contains model configuration.
 type ChatOptions struct {
-	Temperature   float32
+	Temperature   *float32
 	MaxTokens     int
 	StopSequences []string
 	Stream        bool

@@ -373,7 +373,7 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 	}{
 		{
 			name:            "all allow wildcard",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{"*"},
 			userPermissions: []string{"*"},
 			toolName:        "search",
@@ -381,15 +381,15 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "exact match all three",
-			pluginAllow:     []string{"tool:search"},
-			workspaceAllow:  []string{"tool:search"},
-			userPermissions: []string{"tool:search"},
+			pluginAllow:     []string{"tool.search"},
+			workspaceAllow:  []string{"tool.search"},
+			userPermissions: []string{"tool.search"},
 			toolName:        "search",
 			wantErr:         false,
 		},
 		{
 			name:            "denied by workspace empty set",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{},
 			userPermissions: []string{"*"},
 			toolName:        "search",
@@ -398,8 +398,8 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "denied by workspace wrong capability",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:read"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.read"},
 			userPermissions: []string{"*"},
 			toolName:        "search",
 			wantErr:         true,
@@ -407,7 +407,7 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "denied by user empty set",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{"*"},
 			userPermissions: []string{},
 			toolName:        "search",
@@ -416,16 +416,16 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "denied by user wrong capability",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{"*"},
-			userPermissions: []string{"tool:read"},
+			userPermissions: []string{"tool.read"},
 			toolName:        "search",
 			wantErr:         true,
 			wantReason:      "user_permission_missing",
 		},
 		{
 			name:            "denied by both workspace and user",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{},
 			userPermissions: []string{},
 			toolName:        "search",
@@ -443,42 +443,42 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "workspace allows subset user allows all",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:search", "tool:read"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.search", "tool.read"},
 			userPermissions: []string{"*"},
 			toolName:        "search",
 			wantErr:         false,
 		},
 		{
 			name:            "workspace allows subset user allows subset matching",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:search", "tool:read"},
-			userPermissions: []string{"tool:search"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.search", "tool.read"},
+			userPermissions: []string{"tool.search"},
 			toolName:        "search",
 			wantErr:         false,
 		},
 		{
 			name:            "workspace allows subset user allows subset non-matching",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:search", "tool:read"},
-			userPermissions: []string{"tool:write"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.search", "tool.read"},
+			userPermissions: []string{"tool.write"},
 			toolName:        "search",
 			wantErr:         true,
 			wantReason:      "user_permission_missing",
 		},
 		{
 			name:            "glob workspace pattern matches",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:*"},
-			userPermissions: []string{"tool:search"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.*"},
+			userPermissions: []string{"tool.search"},
 			toolName:        "search",
 			wantErr:         false,
 		},
 		{
 			name:            "glob user pattern matches",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:search"},
-			userPermissions: []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.search"},
+			userPermissions: []string{"tool.*"},
 			toolName:        "search",
 			wantErr:         false,
 		},
@@ -937,7 +937,7 @@ func TestToolDispatcher_ResolvesPluginFromRegistry(t *testing.T) {
 
 	// Enforcer must allow "weather-plugin" to use tool:get_weather.
 	enforcer := security.NewEnforcer(nil)
-	enforcer.RegisterPlugin("weather-plugin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+	enforcer.RegisterPlugin("weather-plugin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
 	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
@@ -972,8 +972,8 @@ func TestToolDispatcher_ResolvesPluginFromRegistry(t *testing.T) {
 		WorkspaceID:     "ws-1",
 		UserID:          "user-1",
 		Content:         "What is the weather in London?",
-		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
-		UserPermissions: security.NewCapabilitySet("tool:*"),
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, out)
@@ -995,7 +995,7 @@ func TestToolDispatcher_FallsBackToBuiltin(t *testing.T) {
 
 	// Enforcer must allow "builtin" to use tool:get_weather.
 	enforcer := security.NewEnforcer(nil)
-	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
 	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
@@ -1030,8 +1030,8 @@ func TestToolDispatcher_FallsBackToBuiltin(t *testing.T) {
 		WorkspaceID:     "ws-1",
 		UserID:          "user-1",
 		Content:         "What is the weather in Paris?",
-		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
-		UserPermissions: security.NewCapabilitySet("tool:*"),
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, out)

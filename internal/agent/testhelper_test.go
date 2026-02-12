@@ -452,7 +452,7 @@ func (s *mockAuditStore) Query(_ context.Context, _ store.AuditFilter) ([]*store
 // newMockEnforcer returns an enforcer that allows all tool:* capabilities.
 func newMockEnforcer() *security.Enforcer {
 	e := security.NewEnforcer(nil)
-	e.RegisterPlugin("test-plugin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+	e.RegisterPlugin("test-plugin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 	return e
 }
 

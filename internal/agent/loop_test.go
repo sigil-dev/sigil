@@ -781,7 +781,7 @@ func TestAgentLoop_ToolCallDispatch(t *testing.T) {
 	}
 
 	enforcer := security.NewEnforcer(nil)
-	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
 	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
@@ -802,8 +802,8 @@ func TestAgentLoop_ToolCallDispatch(t *testing.T) {
 		WorkspaceID:     "ws-1",
 		UserID:          "user-1",
 		Content:         "What is the weather in London?",
-		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
-		UserPermissions: security.NewCapabilitySet("tool:*"),
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, out)
@@ -858,8 +858,8 @@ func TestAgentLoop_ToolCallDenied(t *testing.T) {
 		WorkspaceID:     "ws-1",
 		UserID:          "user-1",
 		Content:         "Use the dangerous tool",
-		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
-		UserPermissions: security.NewCapabilitySet("tool:*"),
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
 	})
 	require.NoError(t, err, "denied tool should not fail the entire turn")
 	require.NotNil(t, out)
@@ -1077,7 +1077,7 @@ func TestAgentLoop_UsageAccountedInToolLoop(t *testing.T) {
 	}
 
 	enforcer := security.NewEnforcer(nil)
-	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
 	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
@@ -1098,8 +1098,8 @@ func TestAgentLoop_UsageAccountedInToolLoop(t *testing.T) {
 		WorkspaceID:     "ws-1",
 		UserID:          "user-1",
 		Content:         "weather?",
-		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
-		UserPermissions: security.NewCapabilitySet("tool:*"),
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, out)

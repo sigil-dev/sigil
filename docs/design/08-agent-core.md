@@ -219,4 +219,4 @@ sigil skill search "kubernetes"                    # search registry (future)
 
 ## Multi-Turn Tool Orchestration
 
-The agent loop supports multi-step tool chains within a single turn. Each tool call goes through the full security check. The loop continues until the LLM produces a text response or hits the per-turn tool call limit (configurable, default 20).
+The agent loop supports multi-step tool chains within a single turn. Each tool call goes through the full security check. The loop continues until the LLM produces a text response or hits the iteration limit (default 5). If the iteration limit is reached with tool calls still pending, the loop returns an error rather than silently succeeding with incomplete orchestration (D040).
