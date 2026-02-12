@@ -32,6 +32,7 @@ type Server struct {
 	api           huma.API
 	cfg           Config
 	streamHandler StreamHandler
+	services      *Services
 }
 
 // New creates a Server with chi router, huma API, health endpoint, and CORS.
