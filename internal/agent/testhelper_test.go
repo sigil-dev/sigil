@@ -197,7 +197,7 @@ func (m *mockSessionStoreTracking) AppendMessage(ctx context.Context, sessionID 
 // mockProvider returns a static "Hello, world!" chat response.
 type mockProvider struct{}
 
-func (p *mockProvider) Name() string             { return "mock" }
+func (p *mockProvider) Name() string                     { return "mock" }
 func (p *mockProvider) Available(_ context.Context) bool { return true }
 
 func (p *mockProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
@@ -231,8 +231,13 @@ func (r *mockProviderRouter) Route(_ context.Context, _, _ string) (provider.Pro
 	return r.provider, "mock-model", nil
 }
 
+func (r *mockProviderRouter) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
+	return r.provider, "mock-model", nil
+}
+
 func (r *mockProviderRouter) RegisterProvider(_ string, _ provider.Provider) error { return nil }
-func (r *mockProviderRouter) Close() error                                        { return nil }
+func (r *mockProviderRouter) MaxAttempts() int                                     { return 1 }
+func (r *mockProviderRouter) Close() error                                         { return nil }
 
 // newMockProviderRouter returns a Router that always responds with "Hello, world!".
 func newMockProviderRouter() *mockProviderRouter {
@@ -246,11 +251,16 @@ func (r *mockProviderRouterBudgetExceeded) Route(_ context.Context, _, _ string)
 	return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded for workspace")
 }
 
+func (r *mockProviderRouterBudgetExceeded) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
+	return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded for workspace")
+}
+
 func (r *mockProviderRouterBudgetExceeded) RegisterProvider(_ string, _ provider.Provider) error {
 	return nil
 }
 
-func (r *mockProviderRouterBudgetExceeded) Close() error { return nil }
+func (r *mockProviderRouterBudgetExceeded) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterBudgetExceeded) Close() error     { return nil }
 
 // newMockProviderRouterWithBudgetExceeded returns a Router that always returns a budget error.
 func newMockProviderRouterWithBudgetExceeded() *mockProviderRouterBudgetExceeded {
@@ -260,7 +270,7 @@ func newMockProviderRouterWithBudgetExceeded() *mockProviderRouterBudgetExceeded
 // mockProviderStreamError emits only an error event.
 type mockProviderStreamError struct{}
 
-func (p *mockProviderStreamError) Name() string                { return "mock-error" }
+func (p *mockProviderStreamError) Name() string                     { return "mock-error" }
 func (p *mockProviderStreamError) Available(_ context.Context) bool { return true }
 
 func (p *mockProviderStreamError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
@@ -283,7 +293,7 @@ func (p *mockProviderStreamError) Close() error { return nil }
 // mockProviderStreamPartialThenError emits partial text then an error event.
 type mockProviderStreamPartialThenError struct{}
 
-func (p *mockProviderStreamPartialThenError) Name() string                { return "mock-partial-error" }
+func (p *mockProviderStreamPartialThenError) Name() string                     { return "mock-partial-error" }
 func (p *mockProviderStreamPartialThenError) Available(_ context.Context) bool { return true }
 
 func (p *mockProviderStreamPartialThenError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
@@ -315,13 +325,14 @@ func newMockProviderRouterStreamPartialThenError() *mockProviderRouter {
 	return &mockProviderRouter{provider: &mockProviderStreamPartialThenError{}}
 }
 
-// mockProviderCapturing records ChatRequest.Messages for test assertions.
+// mockProviderCapturing records ChatRequest fields for test assertions.
 type mockProviderCapturing struct {
-	mu              sync.Mutex
-	capturedMessages []provider.Message
+	mu                   sync.Mutex
+	capturedMessages     []provider.Message
+	capturedSystemPrompt string
 }
 
-func (p *mockProviderCapturing) Name() string                { return "mock-capturing" }
+func (p *mockProviderCapturing) Name() string                     { return "mock-capturing" }
 func (p *mockProviderCapturing) Available(_ context.Context) bool { return true }
 
 func (p *mockProviderCapturing) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
@@ -331,6 +342,7 @@ func (p *mockProviderCapturing) ListModels(_ context.Context) ([]provider.ModelI
 func (p *mockProviderCapturing) Chat(_ context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	p.mu.Lock()
 	p.capturedMessages = append([]provider.Message{}, req.Messages...)
+	p.capturedSystemPrompt = req.SystemPrompt
 	p.mu.Unlock()
 
 	ch := make(chan provider.ChatEvent, 3)
@@ -360,6 +372,53 @@ func (p *mockProviderCapturing) getCapturedMessages() []provider.Message {
 func newMockProviderRouterCapturing(capturer *mockProviderCapturing) *mockProviderRouter {
 	return &mockProviderRouter{provider: capturer}
 }
+
+// mockProviderRouterBudgetAware routes normally but enforces budget via RouteWithBudget.
+// It also captures the budget passed to RouteWithBudget for assertions.
+type mockProviderRouterBudgetAware struct {
+	provider      provider.Provider
+	mu            sync.Mutex
+	capturedBudget *provider.Budget
+}
+
+func (r *mockProviderRouterBudgetAware) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return r.provider, "mock-model", nil
+}
+
+func (r *mockProviderRouterBudgetAware) RouteWithBudget(_ context.Context, _, _ string, budget *provider.Budget, _ []string) (provider.Provider, string, error) {
+	r.mu.Lock()
+	r.capturedBudget = budget
+	r.mu.Unlock()
+	if budget != nil && budget.MaxSessionTokens > 0 && budget.UsedSessionTokens >= budget.MaxSessionTokens {
+		return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded")
+	}
+	return r.provider, "mock-model", nil
+}
+
+func (r *mockProviderRouterBudgetAware) RegisterProvider(_ string, _ provider.Provider) error { return nil }
+func (r *mockProviderRouterBudgetAware) MaxAttempts() int                                     { return 1 }
+func (r *mockProviderRouterBudgetAware) Close() error                                         { return nil }
+
+func (r *mockProviderRouterBudgetAware) getCapturedBudget() *provider.Budget {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.capturedBudget
+}
+
+// mockProviderRouterInvalidModelRef always returns an invalid-model-ref error.
+type mockProviderRouterInvalidModelRef struct{}
+
+func (r *mockProviderRouterInvalidModelRef) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return nil, "", sigilerr.New(sigilerr.CodeProviderInvalidModelRef, "model name must use provider/model format")
+}
+
+func (r *mockProviderRouterInvalidModelRef) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
+	return nil, "", sigilerr.New(sigilerr.CodeProviderInvalidModelRef, "model name must use provider/model format")
+}
+
+func (r *mockProviderRouterInvalidModelRef) RegisterProvider(_ string, _ provider.Provider) error { return nil }
+func (r *mockProviderRouterInvalidModelRef) MaxAttempts() int                                     { return 1 }
+func (r *mockProviderRouterInvalidModelRef) Close() error                                         { return nil }
 
 // ---------------------------------------------------------------------------
 // Audit store mock
@@ -393,7 +452,7 @@ func (s *mockAuditStore) Query(_ context.Context, _ store.AuditFilter) ([]*store
 // newMockEnforcer returns an enforcer that allows all tool:* capabilities.
 func newMockEnforcer() *security.Enforcer {
 	e := security.NewEnforcer(nil)
-	e.RegisterPlugin("test-plugin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+	e.RegisterPlugin("test-plugin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 	return e
 }
 
@@ -468,7 +527,7 @@ func newMockMemoryStore() *mockMemoryStore {
 	}
 }
 
-func (m *mockMemoryStore) Messages() store.MessageStore   { return m.messages }
+func (m *mockMemoryStore) Messages() store.MessageStore    { return m.messages }
 func (m *mockMemoryStore) Summaries() store.SummaryStore   { return m.summaries }
 func (m *mockMemoryStore) Knowledge() store.KnowledgeStore { return m.knowledge }
 func (m *mockMemoryStore) Close() error                    { return nil }

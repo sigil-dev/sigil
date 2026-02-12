@@ -10,17 +10,17 @@ Module loading and basic lifecycle (create/load/close) work correctly. Code qual
 
 **However, fuel metering is entirely missing:**
 
-| Requirement | Status |
-|---|---|
-| `Host` struct wrapping `wazero.Runtime` | PASS |
-| `NewHost(opts ...Option)` | PARTIAL -- options silently discarded |
-| `LoadModule(ctx, name, wasmBytes)` | PASS |
-| `Close()` | PASS |
-| `WithFuelLimit(n uint64) Option` | **MISSING** |
-| `FuelLimit() uint64` | **MISSING** |
-| `TestWasmHost_Create` | PASS |
-| `TestWasmHost_LoadModule` | PASS |
-| `TestWasmHost_FuelMeteringEnforced` | **MISSING** |
+| Requirement                             | Status                                |
+| --------------------------------------- | ------------------------------------- |
+| `Host` struct wrapping `wazero.Runtime` | PASS                                  |
+| `NewHost(opts ...Option)`               | PARTIAL -- options silently discarded |
+| `LoadModule(ctx, name, wasmBytes)`      | PASS                                  |
+| `Close()`                               | PASS                                  |
+| `WithFuelLimit(n uint64) Option`        | **MISSING**                           |
+| `FuelLimit() uint64`                    | **MISSING**                           |
+| `TestWasmHost_Create`                   | PASS                                  |
+| `TestWasmHost_LoadModule`               | PASS                                  |
+| `TestWasmHost_FuelMeteringEnforced`     | **MISSING**                           |
 
 ## Critical Issues
 
@@ -45,9 +45,9 @@ Module loading and basic lifecycle (create/load/close) work correctly. Code qual
 
 ## Suggestions
 
-| # | Finding | Recommendation | Resolution |
-|---|---------|----------------|------------|
-| S1 | Missing `testdata/echo.wasm` | Inline `minimalWasm()` works for now; add fixtures for integration tests later. | Open (backlog) |
-| S2 | `Module` type could be richer | Add `Exports()`, `MemorySize()` for introspection. | Open (backlog) |
-| S3 | `LoadModule` doesn't validate empty name | Add guard clause. | **Closed:** sigil-anm.22 (empty name validation added) |
-| S4 | Commit message says "module loading" not "fuel metering" | Accurately reflects what was implemented, but signals awareness of the omission. | N/A (informational) |
+| #  | Finding                                                  | Recommendation                                                                   | Resolution                                             |
+| -- | -------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| S1 | Missing `testdata/echo.wasm`                             | Inline `minimalWasm()` works for now; add fixtures for integration tests later.  | Open (backlog)                                         |
+| S2 | `Module` type could be richer                            | Add `Exports()`, `MemorySize()` for introspection.                               | Open (backlog)                                         |
+| S3 | `LoadModule` doesn't validate empty name                 | Add guard clause.                                                                | **Closed:** sigil-anm.22 (empty name validation added) |
+| S4 | Commit message says "module loading" not "fuel metering" | Accurately reflects what was implemented, but signals awareness of the omission. | N/A (informational)                                    |

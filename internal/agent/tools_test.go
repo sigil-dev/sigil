@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/agent"
+	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -372,7 +373,7 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 	}{
 		{
 			name:            "all allow wildcard",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{"*"},
 			userPermissions: []string{"*"},
 			toolName:        "search",
@@ -380,15 +381,15 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "exact match all three",
-			pluginAllow:     []string{"tool:search"},
-			workspaceAllow:  []string{"tool:search"},
-			userPermissions: []string{"tool:search"},
+			pluginAllow:     []string{"tool.search"},
+			workspaceAllow:  []string{"tool.search"},
+			userPermissions: []string{"tool.search"},
 			toolName:        "search",
 			wantErr:         false,
 		},
 		{
 			name:            "denied by workspace empty set",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{},
 			userPermissions: []string{"*"},
 			toolName:        "search",
@@ -397,8 +398,8 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "denied by workspace wrong capability",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:read"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.read"},
 			userPermissions: []string{"*"},
 			toolName:        "search",
 			wantErr:         true,
@@ -406,7 +407,7 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "denied by user empty set",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{"*"},
 			userPermissions: []string{},
 			toolName:        "search",
@@ -415,16 +416,16 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "denied by user wrong capability",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{"*"},
-			userPermissions: []string{"tool:read"},
+			userPermissions: []string{"tool.read"},
 			toolName:        "search",
 			wantErr:         true,
 			wantReason:      "user_permission_missing",
 		},
 		{
 			name:            "denied by both workspace and user",
-			pluginAllow:     []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
 			workspaceAllow:  []string{},
 			userPermissions: []string{},
 			toolName:        "search",
@@ -442,42 +443,42 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 		},
 		{
 			name:            "workspace allows subset user allows all",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:search", "tool:read"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.search", "tool.read"},
 			userPermissions: []string{"*"},
 			toolName:        "search",
 			wantErr:         false,
 		},
 		{
 			name:            "workspace allows subset user allows subset matching",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:search", "tool:read"},
-			userPermissions: []string{"tool:search"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.search", "tool.read"},
+			userPermissions: []string{"tool.search"},
 			toolName:        "search",
 			wantErr:         false,
 		},
 		{
 			name:            "workspace allows subset user allows subset non-matching",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:search", "tool:read"},
-			userPermissions: []string{"tool:write"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.search", "tool.read"},
+			userPermissions: []string{"tool.write"},
 			toolName:        "search",
 			wantErr:         true,
 			wantReason:      "user_permission_missing",
 		},
 		{
 			name:            "glob workspace pattern matches",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:*"},
-			userPermissions: []string{"tool:search"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.*"},
+			userPermissions: []string{"tool.search"},
 			toolName:        "search",
 			wantErr:         false,
 		},
 		{
 			name:            "glob user pattern matches",
-			pluginAllow:     []string{"tool:*"},
-			workspaceAllow:  []string{"tool:search"},
-			userPermissions: []string{"tool:*"},
+			pluginAllow:     []string{"tool.*"},
+			workspaceAllow:  []string{"tool.search"},
+			userPermissions: []string{"tool.*"},
 			toolName:        "search",
 			wantErr:         false,
 		},
@@ -857,6 +858,202 @@ func TestToolDispatcher_AuditNotCalledOnDeny(t *testing.T) {
 	auditStore.mu.Lock()
 	defer auditStore.mu.Unlock()
 	assert.Len(t, auditStore.entries, 0, "no audit entry should be created when capability is denied")
+}
+
+// ---------------------------------------------------------------------------
+// ToolRegistry tests
+// ---------------------------------------------------------------------------
+
+func TestToolRegistry_LookupPlugin(t *testing.T) {
+	tests := []struct {
+		name          string
+		registrations map[string]string // toolName → pluginName
+		lookupTool    string
+		wantPlugin    string
+		wantOK        bool
+	}{
+		{
+			name:          "registered tool returns plugin name",
+			registrations: map[string]string{"search": "search-plugin"},
+			lookupTool:    "search",
+			wantPlugin:    "search-plugin",
+			wantOK:        true,
+		},
+		{
+			name:          "unregistered tool returns false",
+			registrations: map[string]string{"search": "search-plugin"},
+			lookupTool:    "unknown-tool",
+			wantPlugin:    "",
+			wantOK:        false,
+		},
+		{
+			name:          "empty registry returns false",
+			registrations: map[string]string{},
+			lookupTool:    "search",
+			wantPlugin:    "",
+			wantOK:        false,
+		},
+		{
+			name: "multiple registrations returns correct plugin",
+			registrations: map[string]string{
+				"search":      "search-plugin",
+				"get_weather": "weather-plugin",
+				"calc":        "builtin",
+			},
+			lookupTool: "get_weather",
+			wantPlugin: "weather-plugin",
+			wantOK:     true,
+		},
+		{
+			name:          "builtin tool returns builtin",
+			registrations: map[string]string{"calc": "builtin"},
+			lookupTool:    "calc",
+			wantPlugin:    "builtin",
+			wantOK:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := agent.NewToolRegistry()
+			for tool, plugin := range tt.registrations {
+				reg.Register(tool, plugin, provider.ToolDefinition{Name: tool})
+			}
+
+			gotPlugin, gotOK := reg.LookupPlugin(tt.lookupTool)
+			assert.Equal(t, tt.wantPlugin, gotPlugin)
+			assert.Equal(t, tt.wantOK, gotOK)
+		})
+	}
+}
+
+func TestToolDispatcher_ResolvesPluginFromRegistry(t *testing.T) {
+	// Register "get_weather" under "weather-plugin".
+	registry := agent.NewToolRegistry()
+	registry.Register("get_weather", "weather-plugin", provider.ToolDefinition{Name: "get_weather"})
+
+	// Create a capturing plugin executor that records the plugin name.
+	capturer := &mockPluginExecutorCapturing{}
+
+	// Enforcer must allow "weather-plugin" to use tool:get_weather.
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("weather-plugin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  capturer,
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-1",
+			Name:      "get_weather",
+			Arguments: `{"city":"London"}`,
+		},
+	}
+
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+		ToolRegistry:   registry,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather in London?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// The plugin executor should have been called with "weather-plugin", not "builtin".
+	capturer.mu.Lock()
+	pluginName := capturer.lastPluginName
+	capturer.mu.Unlock()
+	assert.Equal(t, "weather-plugin", pluginName, "tool dispatcher should resolve plugin name from registry")
+}
+
+func TestToolDispatcher_FallsBackToBuiltin(t *testing.T) {
+	// Registry exists but does NOT contain "get_weather".
+	registry := agent.NewToolRegistry()
+	registry.Register("some_other_tool", "other-plugin", provider.ToolDefinition{Name: "some_other_tool"})
+
+	// Create a capturing plugin executor that records the plugin name.
+	capturer := &mockPluginExecutorCapturing{}
+
+	// Enforcer must allow "builtin" to use tool:get_weather.
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  capturer,
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-1",
+			Name:      "get_weather",
+			Arguments: `{"city":"Paris"}`,
+		},
+	}
+
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+		ToolRegistry:   registry,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather in Paris?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// The plugin executor should have been called with "builtin" (fallback).
+	capturer.mu.Lock()
+	pluginName := capturer.lastPluginName
+	capturer.mu.Unlock()
+	assert.Equal(t, "builtin", pluginName, "tool dispatcher should fall back to builtin when tool not in registry")
+}
+
+// mockPluginExecutorCapturing captures the plugin name passed to ExecuteTool.
+type mockPluginExecutorCapturing struct {
+	mu             sync.Mutex
+	lastPluginName string
+}
+
+func (m *mockPluginExecutorCapturing) ExecuteTool(_ context.Context, pluginName, _, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastPluginName = pluginName
+	return "executed", nil
 }
 
 // scanToolOutputForTest is a test-accessible wrapper for the private scanToolOutput function.

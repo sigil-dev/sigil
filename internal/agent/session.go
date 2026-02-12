@@ -61,6 +61,11 @@ func (m *SessionManager) GetActiveWindow(ctx context.Context, sessionID string, 
 	return m.ss.GetActiveWindow(ctx, sessionID, limit)
 }
 
+// Update persists changes to an existing session (e.g. token budget counters).
+func (m *SessionManager) Update(ctx context.Context, session *store.Session) error {
+	return m.ss.UpdateSession(ctx, session)
+}
+
 // Archive marks a session as archived and updates its timestamp.
 func (m *SessionManager) Archive(ctx context.Context, id string) error {
 	session, err := m.ss.GetSession(ctx, id)

@@ -20,12 +20,12 @@ Rather than hardcode SQLite, we define storage interfaces that all components pr
 
 Four store interfaces, scoped by lifecycle:
 
-| Interface | Scope | Purpose |
-|-----------|-------|---------|
-| `SessionStore` | Per workspace | Sessions and active message windows |
-| `MemoryStore` | Per workspace | Tiered memory (messages, summaries, knowledge) |
-| `VectorStore` | Per workspace | Embedding storage and similarity search |
-| `GatewayStore` | Global | Users, pairings, audit log |
+| Interface      | Scope         | Purpose                                        |
+| -------------- | ------------- | ---------------------------------------------- |
+| `SessionStore` | Per workspace | Sessions and active message windows            |
+| `MemoryStore`  | Per workspace | Tiered memory (messages, summaries, knowledge) |
+| `VectorStore`  | Per workspace | Embedding storage and similarity search        |
+| `GatewayStore` | Global        | Users, pairings, audit log                     |
 
 ### SessionStore
 
@@ -188,13 +188,13 @@ CREATE INDEX idx_osp ON triples(workspace, object, subject, predicate);
 
 ### Mapping
 
-| KnowledgeStore Method | Triple Pattern |
-|---|---|
-| `PutEntity(entity)` | `(entity.ID, "type", entity.Type)` + property triples |
-| `PutRelationship(rel)` | `(rel.FromID, rel.Type, rel.ToID)` |
-| `PutFact(fact)` | `(fact.EntityID, fact.Predicate, fact.Value)` |
-| `FindEntities(query)` | `SELECT subject FROM triples WHERE predicate = 'type' AND ...` |
-| `Traverse(startID, depth)` | Recursive CTE over triples |
+| KnowledgeStore Method      | Triple Pattern                                                 |
+| -------------------------- | -------------------------------------------------------------- |
+| `PutEntity(entity)`        | `(entity.ID, "type", entity.Type)` + property triples          |
+| `PutRelationship(rel)`     | `(rel.FromID, rel.Type, rel.ToID)`                             |
+| `PutFact(fact)`            | `(fact.EntityID, fact.Predicate, fact.Value)`                  |
+| `FindEntities(query)`      | `SELECT subject FROM triples WHERE predicate = 'type' AND ...` |
+| `Traverse(startID, depth)` | Recursive CTE over triples                                     |
 
 When swapping to LadybugDB, the same interface methods map to Cypher: `CREATE (n:Entity)`, `MATCH (a)-[r]->(b)`, `MATCH path = (a)-[*1..N]->(b)`.
 
@@ -211,9 +211,9 @@ storage:
   memory:
     backend: sqlite
     knowledge:
-      backend: sqlite       # future: ladybugdb
+      backend: sqlite # future: ladybugdb
   vector:
-    backend: sqlite_vec     # future: lancedb
+    backend: sqlite_vec # future: lancedb
 
   # Global store
   gateway:
@@ -279,10 +279,10 @@ data/
 
 When a backend changes, only its file changes:
 
-| Backend Swap | File Change |
-|---|---|
-| Knowledge: sqlite → ladybugdb | `knowledge.db` → `knowledge.kuzu` |
-| Vector: sqlite_vec → lancedb | `vectors.db` → `vectors/` (directory) |
+| Backend Swap                  | File Change                           |
+| ----------------------------- | ------------------------------------- |
+| Knowledge: sqlite → ladybugdb | `knowledge.db` → `knowledge.kuzu`     |
+| Vector: sqlite_vec → lancedb  | `vectors.db` → `vectors/` (directory) |
 
 ## Integration Points
 
@@ -295,12 +295,12 @@ The agent loop (`internal/agent/`) consumes store interfaces during PREPARE and 
 
 Memory tools exposed to the LLM become thin wrappers:
 
-| Tool | Store Method |
-|---|---|
-| `memory_search(query)` | `MemoryStore.Messages().Search()` |
-| `memory_summary(range)` | `MemoryStore.Summaries().GetByRange()` |
-| `memory_recall(topic)` | `MemoryStore.Knowledge().FindFacts()` |
-| `memory_semantic(query, k)` | `VectorStore.Search()` |
+| Tool                        | Store Method                           |
+| --------------------------- | -------------------------------------- |
+| `memory_search(query)`      | `MemoryStore.Messages().Search()`      |
+| `memory_summary(range)`     | `MemoryStore.Summaries().GetByRange()` |
+| `memory_recall(topic)`      | `MemoryStore.Knowledge().FindFacts()`  |
+| `memory_semantic(query, k)` | `VectorStore.Search()`                 |
 
 ### Workspace Manager
 
@@ -316,9 +316,9 @@ func (wm *Manager) Open(workspaceID string) (*Workspace, error) {
 
 ## Future Backend Candidates
 
-| Backend | Replaces | Status (early 2026) | Waiting For |
-|---|---|---|---|
-| LanceDB | VectorStore (sqlite-vec) | Go SDK v0.1.2, pre-1.0 | Stable Go SDK |
+| Backend   | Replaces                    | Status (early 2026)           | Waiting For                 |
+| --------- | --------------------------- | ----------------------------- | --------------------------- |
+| LanceDB   | VectorStore (sqlite-vec)    | Go SDK v0.1.2, pre-1.0        | Stable Go SDK               |
 | LadybugDB | KnowledgeStore (SQLite RDF) | Go bindings moderate maturity | 1.0 release, fork stability |
 
 The interface architecture means we can adopt these when ready without changing any caller code. Monitor Go SDK maturity and add implementations when they stabilize.

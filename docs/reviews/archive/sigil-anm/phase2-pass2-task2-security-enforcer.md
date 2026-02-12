@@ -10,6 +10,7 @@
 All API elements present: `Enforcer`, `NewEnforcer`, `RegisterPlugin`, `UnregisterPlugin`, `Check`, `CheckRequest`.
 
 Four-way enforcement matches spec exactly:
+
 1. Plugin allow set must contain capability
 2. Plugin deny set must NOT contain capability
 3. Workspace allow set must contain capability
@@ -18,6 +19,7 @@ Four-way enforcement matches spec exactly:
 ## Bug Fix Verification (sigil-anm.11)
 
 Three previously missing spec tests now present and well-implemented:
+
 - `TestEnforcer_AllowThreeWayIntersection` -- tests 3 scenarios with audit verification
 - `TestEnforcer_UserWithNoPermissions` -- validates fail-closed on empty permission set
 - `TestEnforcer_AuditLogging` -- comprehensive audit entry structure verification

@@ -34,13 +34,13 @@ Instructions for Claude Code working on the Sigil codebase.
 
 This project uses **bd** (beads) for issue tracking.
 
-| Command | Purpose |
-|---------|---------|
-| `bd ready` | Find available work |
-| `bd show <id>` | View issue details |
-| `bd update <id> --status in_progress` | Claim work |
-| `bd close <id>` | Complete work |
-| `bd sync` | Sync with git |
+| Command                               | Purpose             |
+| ------------------------------------- | ------------------- |
+| `bd ready`                            | Find available work |
+| `bd show <id>`                        | View issue details  |
+| `bd update <id> --status in_progress` | Claim work          |
+| `bd close <id>`                       | Complete work       |
+| `bd sync`                             | Sync with git       |
 
 ## Project Overview
 
@@ -75,12 +75,12 @@ task proto     # Generate Go code from protobuf
 task deps      # Download and tidy dependencies
 ```
 
-| Requirement | Description |
-|---|---|
-| **MUST** use `task` | Never run Go/lint/fmt commands directly |
-| **MUST** run `task test` | Before claiming any implementation is complete |
-| **MUST** run `task lint` | Before committing changes |
-| **MUST NOT** disable lint/format rules | Without explicit user confirmation |
+| Requirement                            | Description                                    |
+| -------------------------------------- | ---------------------------------------------- |
+| **MUST** use `task`                    | Never run Go/lint/fmt commands directly        |
+| **MUST** run `task test`               | Before claiming any implementation is complete |
+| **MUST** run `task lint`               | Before committing changes                      |
+| **MUST NOT** disable lint/format rules | Without explicit user confirmation             |
 
 ### CGo Requirement
 
@@ -102,13 +102,13 @@ uv run           # Run Python commands in the project venv
 
 `main` is a protected branch. Direct pushes to main are not allowed.
 
-| Requirement | Description |
-|---|---|
-| **MUST** create feature branch | All work happens on feature branches |
-| **MUST** submit PR for review | All changes to main require a pull request |
-| **MUST NOT** push directly to main | Create a branch and PR instead |
-| **MUST NOT** use `--no-verify` | Fix the underlying issue, don't skip hooks |
-| **MUST NOT** force push | Use `--force-with-lease` only with user confirmation |
+| Requirement                        | Description                                          |
+| ---------------------------------- | ---------------------------------------------------- |
+| **MUST** create feature branch     | All work happens on feature branches                 |
+| **MUST** submit PR for review      | All changes to main require a pull request           |
+| **MUST NOT** push directly to main | Create a branch and PR instead                       |
+| **MUST NOT** use `--no-verify`     | Fix the underlying issue, don't skip hooks           |
+| **MUST NOT** force push            | Use `--force-with-lease` only with user confirmation |
 
 ---
 
@@ -118,20 +118,20 @@ This repo includes in-repo Claude Code hooks and commands in `.claude/`:
 
 ### Hooks (automatic enforcement)
 
-| Hook | Enforces |
-|---|---|
-| `enforce-dev-practices.sh` | `task` over raw go/lint commands, uv over pip, no CGO_ENABLED=0, no --no-verify, no push to main |
-| `protect-generated-files.sh` | No edits to `*.pb.go`, `internal/gen/`, or `go.sum` |
+| Hook                         | Enforces                                                                                         |
+| ---------------------------- | ------------------------------------------------------------------------------------------------ |
+| `enforce-dev-practices.sh`   | `task` over raw go/lint commands, uv over pip, no CGO_ENABLED=0, no --no-verify, no push to main |
+| `protect-generated-files.sh` | No edits to `*.pb.go`, `internal/gen/`, or `go.sum`                                              |
 
 ### Commands (slash commands)
 
-| Command | Purpose |
-|---|---|
-| `/sigil-test` | Run tests and analyze failures |
-| `/sigil-lint-fix` | Iterative lint → format → fix → verify cycle |
-| `/sigil-new-plugin` | Scaffold a new plugin (manifest + code + tests) |
-| `/sigil-design-review` | Check implementation against design docs |
-| `/sigil-security-check` | Audit code for security model compliance |
+| Command                 | Purpose                                         |
+| ----------------------- | ----------------------------------------------- |
+| `/sigil-test`           | Run tests and analyze failures                  |
+| `/sigil-lint-fix`       | Iterative lint → format → fix → verify cycle    |
+| `/sigil-new-plugin`     | Scaffold a new plugin (manifest + code + tests) |
+| `/sigil-design-review`  | Check implementation against design docs        |
+| `/sigil-security-check` | Audit code for security model compliance        |
 
 ---
 
@@ -153,12 +153,12 @@ This repo includes in-repo Claude Code hooks and commands in `.claude/`:
 
 ### RFC2119 Keywords
 
-| Keyword | Meaning |
-|---|---|
-| **MUST** | Absolute requirement |
-| **MUST NOT** | Absolute prohibition |
-| **SHOULD** | Recommended, may ignore with justification |
-| **MAY** | Optional |
+| Keyword      | Meaning                                    |
+| ------------ | ------------------------------------------ |
+| **MUST**     | Absolute requirement                       |
+| **MUST NOT** | Absolute prohibition                       |
+| **SHOULD**   | Recommended, may ignore with justification |
+| **MAY**      | Optional                                   |
 
 ---
 
@@ -207,11 +207,11 @@ All source files MUST include SPDX license headers. Lefthook pre-commit hook add
 
 **Shell/Proto/YAML:** Same pattern with appropriate comment syntax.
 
-| Requirement | Description |
-|---|---|
-| **MUST** include SPDX header | All `.go`, `.sh`, `.proto` files |
-| **MUST NOT** add to generated files | Skip `*.pb.go` files |
-| **Auto-added on commit** | Lefthook pre-commit hook handles this |
+| Requirement                         | Description                           |
+| ----------------------------------- | ------------------------------------- |
+| **MUST** include SPDX header        | All `.go`, `.sh`, `.proto` files      |
+| **MUST NOT** add to generated files | Skip `*.pb.go` files                  |
+| **Auto-added on commit**            | Lefthook pre-commit hook handles this |
 
 **Directories checked:** `api/`, `cmd/`, `internal/`, `pkg/`, `plugins/`, `scripts/`
 
@@ -317,13 +317,13 @@ ui/                      # SvelteKit web UI
 
 Security is Sigil's primary differentiator. All code MUST follow these principles:
 
-| Principle | Description |
-|---|---|
-| Default deny | Plugins have zero capabilities unless explicitly granted in manifest |
-| Capability enforcement | Every plugin operation checked against manifest capabilities |
-| Agent loop integrity | LLM outputs are validated before tool dispatch (7-step checks) |
-| Plugin isolation | Execution tier determines sandbox boundary |
-| No trust escalation | A plugin cannot grant capabilities it doesn't have |
+| Principle              | Description                                                          |
+| ---------------------- | -------------------------------------------------------------------- |
+| Default deny           | Plugins have zero capabilities unless explicitly granted in manifest |
+| Capability enforcement | Every plugin operation checked against manifest capabilities         |
+| Agent loop integrity   | LLM outputs are validated before tool dispatch (7-step checks)       |
+| Plugin isolation       | Execution tier determines sandbox boundary                           |
+| No trust escalation    | A plugin cannot grant capabilities it doesn't have                   |
 
 When implementing any plugin-facing API:
 
@@ -338,20 +338,20 @@ When implementing any plugin-facing API:
 
 Four plugin types, all via gRPC (go-plugin):
 
-| Type | Purpose | Example |
-|---|---|---|
-| Provider | LLM integration | Anthropic, OpenAI, Ollama |
-| Channel | Messaging platform | Telegram, WhatsApp, Discord |
-| Tool | Agent capabilities | File access, web search, code exec |
-| Skill | Structured workflows | Summarize, translate, analyze |
+| Type     | Purpose              | Example                            |
+| -------- | -------------------- | ---------------------------------- |
+| Provider | LLM integration      | Anthropic, OpenAI, Ollama          |
+| Channel  | Messaging platform   | Telegram, WhatsApp, Discord        |
+| Tool     | Agent capabilities   | File access, web search, code exec |
+| Skill    | Structured workflows | Summarize, translate, analyze      |
 
 Three execution tiers:
 
-| Tier | Isolation | Use Case |
-|---|---|---|
-| Wasm (Wazero) | Memory-safe, no syscalls | Lightweight pure-compute tools |
-| Process (go-plugin) | OS-level sandbox (bwrap/sandbox-exec) | Most plugins |
-| Container (OCI) | Full container isolation | Untrusted or network-heavy plugins |
+| Tier                | Isolation                             | Use Case                           |
+| ------------------- | ------------------------------------- | ---------------------------------- |
+| Wasm (Wazero)       | Memory-safe, no syscalls              | Lightweight pure-compute tools     |
+| Process (go-plugin) | OS-level sandbox (bwrap/sandbox-exec) | Most plugins                       |
+| Container (OCI)     | Full container isolation              | Untrusted or network-heavy plugins |
 
 ---
 
@@ -380,21 +380,21 @@ Three execution tiers:
 
 ## Key Design Docs
 
-| Doc | Path | Covers |
-|---|---|---|
-| Overview | `docs/design/00-overview.md` | Goals, non-goals, prior art |
-| Core Architecture | `docs/design/01-core-architecture.md` | Layers, trust boundaries |
-| Plugin System | `docs/design/02-plugin-system.md` | Manifests, tiers, lifecycle |
-| Security Model | `docs/design/03-security-model.md` | ABAC, agent integrity |
-| Channel System | `docs/design/04-channel-system.md` | Channel plugins, pairing |
-| Workspaces | `docs/design/05-workspace-system.md` | Scoped contexts |
-| Nodes | `docs/design/06-node-system.md` | Remote devices, Tailscale |
-| Providers | `docs/design/07-provider-system.md` | LLM routing, budgets |
-| Agent Core | `docs/design/08-agent-core.md` | Agent loop, memory, skills |
-| UI & CLI | `docs/design/09-ui-and-cli.md` | SvelteKit, Tauri, Cobra |
-| Build | `docs/design/10-build-and-distribution.md` | Toolchain, CI/CD |
-| Storage Interfaces | `docs/design/11-storage-interfaces.md` | Store abstractions, backends |
-| Decisions | `docs/decisions/decision-log.md` | All architectural decisions |
+| Doc                | Path                                       | Covers                       |
+| ------------------ | ------------------------------------------ | ---------------------------- |
+| Overview           | `docs/design/00-overview.md`               | Goals, non-goals, prior art  |
+| Core Architecture  | `docs/design/01-core-architecture.md`      | Layers, trust boundaries     |
+| Plugin System      | `docs/design/02-plugin-system.md`          | Manifests, tiers, lifecycle  |
+| Security Model     | `docs/design/03-security-model.md`         | ABAC, agent integrity        |
+| Channel System     | `docs/design/04-channel-system.md`         | Channel plugins, pairing     |
+| Workspaces         | `docs/design/05-workspace-system.md`       | Scoped contexts              |
+| Nodes              | `docs/design/06-node-system.md`            | Remote devices, Tailscale    |
+| Providers          | `docs/design/07-provider-system.md`        | LLM routing, budgets         |
+| Agent Core         | `docs/design/08-agent-core.md`             | Agent loop, memory, skills   |
+| UI & CLI           | `docs/design/09-ui-and-cli.md`             | SvelteKit, Tauri, Cobra      |
+| Build              | `docs/design/10-build-and-distribution.md` | Toolchain, CI/CD             |
+| Storage Interfaces | `docs/design/11-storage-interfaces.md`     | Store abstractions, backends |
+| Decisions          | `docs/decisions/decision-log.md`           | All architectural decisions  |
 
 ## Landing the Plane (Session Completion)
 
@@ -426,6 +426,7 @@ Three execution tiers:
 - If push fails, resolve and retry until it succeeds
 
 <!-- BEGIN BEADS INTEGRATION -->
+
 ## Issue Tracking with bd (beads)
 
 **IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.

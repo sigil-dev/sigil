@@ -24,14 +24,16 @@ const defaultMaxToolCallsPerTurn = 10
 // (LLM call → tool dispatch → re-call) before the loop is terminated.
 const maxToolLoopIterations = 5
 
-// builtinPluginName is the plugin name used for built-in tools.
-// Phase 3 only supports built-in tools. runToolLoop hard-codes this
-// value for every ToolCallRequest, which is correct as long as no
-// external plugin tools are registered. When plugin-originated tools
-// are introduced (Phase 4+), the loop must resolve PluginName from
-// the tool registry so capability checks and audit attribution
-// reference the correct plugin identity.
+// builtinPluginName is the default plugin name used for tools that are
+// not registered in a ToolRegistry. When a ToolRegistry is configured,
+// runToolLoop resolves the plugin name from the registry; tools not
+// found in the registry fall back to this value.
 const builtinPluginName = "builtin"
+
+// defaultSystemPrompt is the baseline system instruction sent to the LLM via
+// ChatRequest.SystemPrompt. Providers use their native mechanism to inject it
+// (e.g. Anthropic's system param, Google's SystemInstruction, OpenAI's system role).
+const defaultSystemPrompt = "You are a helpful assistant."
 
 // InboundMessage is the input to the agent loop.
 type InboundMessage struct {
@@ -70,13 +72,14 @@ type LoopHooks struct {
 
 // LoopConfig holds dependencies for the Loop.
 type LoopConfig struct {
-	SessionManager     *SessionManager
-	Enforcer           *security.Enforcer
-	ProviderRouter     provider.Router
-	AuditStore         store.AuditStore
-	ToolDispatcher     *ToolDispatcher
+	SessionManager      *SessionManager
+	Enforcer            *security.Enforcer
+	ProviderRouter      provider.Router
+	AuditStore          store.AuditStore
+	ToolDispatcher      *ToolDispatcher
+	ToolRegistry        ToolRegistry
 	MaxToolCallsPerTurn int
-	Hooks              *LoopHooks
+	Hooks               *LoopHooks
 }
 
 // Loop is the agent's core processing pipeline.
@@ -86,6 +89,7 @@ type Loop struct {
 	providerRouter      provider.Router
 	auditStore          store.AuditStore
 	toolDispatcher      *ToolDispatcher
+	toolRegistry        ToolRegistry
 	maxToolCallsPerTurn int
 	hooks               *LoopHooks
 }
@@ -103,6 +107,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		providerRouter:      cfg.ProviderRouter,
 		auditStore:          cfg.AuditStore,
 		toolDispatcher:      cfg.ToolDispatcher,
+		toolRegistry:        cfg.ToolRegistry,
 		maxToolCallsPerTurn: maxCalls,
 		hooks:               cfg.Hooks,
 	}
@@ -134,6 +139,12 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	// Step 4: PROCESS — buffer text deltas and collect tool calls.
 	text, toolCalls, usage, streamErr := l.processEvents(eventCh)
 	l.fireHook(l.hooks, hookProcess)
+
+	// Account token usage even if the stream errored — the provider may have
+	// emitted usage before the failure and those tokens were real consumption.
+	if err := l.accountUsage(ctx, session, usage); err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeStoreDatabaseFailure, "budget accounting: session %s", msg.SessionID)
+	}
 
 	// If the stream emitted a fatal error, discard partial output and fail the turn.
 	if streamErr != nil {
@@ -301,10 +312,10 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	}
 
 	// Build the message array for the LLM:
-	// system prompt → active window history (which already includes the user message we just appended).
-	messages := []provider.Message{
-		{Role: store.MessageRoleSystem, Content: "You are a helpful assistant."},
-	}
+	// active window history (which already includes the user message we just appended).
+	// The system prompt is set separately via ChatRequest.SystemPrompt so that all
+	// providers (Anthropic, Google, OpenAI) handle it through their native mechanism.
+	var messages []provider.Message
 	for _, m := range history {
 		messages = append(messages, provider.Message{
 			Role:       m.Role,
@@ -323,27 +334,94 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		modelName = "default"
 	}
 
-	prov, resolvedModel, err := l.providerRouter.Route(ctx, workspaceID, modelName)
-	if err != nil {
-		// Propagate budget errors directly so callers can handle them.
-		if sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded) {
-			return nil, err
+	// Build budget from session token limits so the router can enforce them.
+	budget := &provider.Budget{
+		MaxSessionTokens:  session.TokenBudget.MaxPerSession,
+		UsedSessionTokens: session.TokenBudget.UsedSession,
+	}
+
+	maxAttempts := l.providerRouter.MaxAttempts()
+	var lastErr error
+	var triedProviders []string
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		prov, resolvedModel, err := l.providerRouter.RouteWithBudget(ctx, workspaceID, modelName, budget, triedProviders)
+		if err != nil {
+			// Propagate specific routing errors directly instead of masking
+			// them as "all providers unavailable".
+			if sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded) ||
+				sigilerr.HasCode(err, sigilerr.CodeProviderInvalidModelRef) ||
+				sigilerr.HasCode(err, sigilerr.CodeProviderNoDefault) {
+				return nil, err
+			}
+			lastErr = err
+			break
 		}
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "routing provider for workspace %s", workspaceID)
+
+		triedProviders = append(triedProviders, prov.Name())
+
+		req := provider.ChatRequest{
+			Model:        resolvedModel,
+			Messages:     messages,
+			SystemPrompt: defaultSystemPrompt,
+			Options:      provider.ChatOptions{Stream: true},
+		}
+		if l.toolRegistry != nil {
+			req.Tools = l.toolRegistry.GetToolDefinitions()
+		}
+
+		eventCh, err := prov.Chat(ctx, req)
+		if err != nil {
+			// Mark provider unhealthy so the next Route call skips it
+			// via the failover chain. The HealthTracker's cooldown acts
+			// as a circuit breaker, re-enabling the provider after the
+			// cooldown period for recovery.
+			if hr, ok := prov.(provider.HealthReporter); ok {
+				hr.RecordFailure()
+			}
+			lastErr = sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "chat call to %s", prov.Name())
+			continue
+		}
+
+		// Peek at the first event to detect immediate upstream failures
+		// (auth errors, rate limits, provider down). Providers call
+		// RecordFailure() before sending the error event, so the next
+		// Route call will skip this provider via the failover chain.
+		firstEvent, ok := <-eventCh
+		if !ok {
+			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: stream closed without events", prov.Name())
+			continue
+		}
+
+		if firstEvent.Type == provider.EventTypeError {
+			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: %s", prov.Name(), firstEvent.Error)
+			// Drain remaining events so the goroutine can exit.
+			for range eventCh {
+			}
+			continue
+		}
+
+		// First event is valid — wrap it back with the rest of the stream.
+		// NOTE: Failover only covers first-event failures (auth errors, rate
+		// limits, provider down). Mid-stream failures are not retried because
+		// replaying the full conversation to a fallback provider requires
+		// buffering all events and resending all messages — significant
+		// complexity with partial-output ambiguity. Mid-stream errors surface
+		// to the caller via processEvents. See sigil-dxw for tracking.
+		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
+		wrappedCh <- firstEvent
+		go func() {
+			defer close(wrappedCh)
+			for ev := range eventCh {
+				wrappedCh <- ev
+			}
+		}()
+		return wrappedCh, nil
 	}
 
-	req := provider.ChatRequest{
-		Model:    resolvedModel,
-		Messages: messages,
-		Options:  provider.ChatOptions{Stream: true},
+	if lastErr != nil {
+		return nil, sigilerr.Wrapf(lastErr, sigilerr.CodeProviderAllUnavailable, "all providers failed for workspace %s", workspaceID)
 	}
-
-	eventCh, err := prov.Chat(ctx, req)
-	if err != nil {
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "chat call to %s", prov.Name())
-	}
-
-	return eventCh, nil
+	return nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, "no providers available for workspace "+workspaceID)
 }
 
 func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*provider.ToolCall, *provider.Usage, error) {
@@ -375,6 +453,25 @@ func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*prov
 	return buf.String(), toolCalls, usage, streamErr
 }
 
+// accountUsage increments the session's token budget counters with the
+// tokens consumed by an LLM call and persists the update. Returns an error
+// if persistence fails (fail-closed: budget counters must be durable to
+// prevent over-budget sessions after restart).
+func (l *Loop) accountUsage(ctx context.Context, session *store.Session, usage *provider.Usage) error {
+	if usage == nil {
+		return nil
+	}
+	total := usage.InputTokens + usage.OutputTokens
+	session.TokenBudget.UsedSession += total
+	session.TokenBudget.UsedHour += total
+	session.TokenBudget.UsedDay += total
+
+	if err := l.sessions.Update(ctx, session); err != nil {
+		return fmt.Errorf("persisting token budget counters: %w", err)
+	}
+	return nil
+}
+
 // runToolLoop executes the bounded inner tool loop: dispatch tool calls,
 // append results to message history, re-call the LLM, and repeat if
 // more tool calls are emitted. Bounded by maxToolLoopIterations.
@@ -394,7 +491,7 @@ func (l *Loop) runToolLoop(
 	copy(currentMessages, messages)
 	currentToolCalls := toolCalls
 	text := initialText
-	usage := initialUsage
+	var usage *provider.Usage
 
 	for range maxToolLoopIterations {
 		// If the LLM emitted text alongside tool calls, persist it as an
@@ -418,12 +515,19 @@ func (l *Loop) runToolLoop(
 
 		// Dispatch each tool call and collect results.
 		for _, tc := range currentToolCalls {
+			pluginName := builtinPluginName
+			if l.toolRegistry != nil {
+				if name, ok := l.toolRegistry.LookupPlugin(tc.Name); ok {
+					pluginName = name
+				}
+			}
+
 			req := ToolCallRequest{
 				ToolName:        tc.Name,
 				Arguments:       tc.Arguments,
 				SessionID:       msg.SessionID,
 				WorkspaceID:     msg.WorkspaceID,
-				PluginName:      builtinPluginName,
+				PluginName:      pluginName,
 				TurnID:          turnID,
 				WorkspaceAllow:  msg.WorkspaceAllow,
 				UserPermissions: msg.UserPermissions,
@@ -468,18 +572,29 @@ func (l *Loop) runToolLoop(
 			return "", nil, err
 		}
 
-		text, currentToolCalls, usage, err = l.processEvents(eventCh)
-		if err != nil {
-			return "", nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "stream error in tool loop: session %s", msg.SessionID)
+		var streamErr error
+		text, currentToolCalls, usage, streamErr = l.processEvents(eventCh)
+
+		// Account usage even on stream errors — tokens were consumed at the provider.
+		if err := l.accountUsage(ctx, session, usage); err != nil {
+			return "", nil, sigilerr.Wrapf(err, sigilerr.CodeStoreDatabaseFailure, "budget accounting in tool loop: session %s", msg.SessionID)
+		}
+		if streamErr != nil {
+			return "", nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error in tool loop: session %s", msg.SessionID)
 		}
 
 		// If no more tool calls, the loop is done.
 		if len(currentToolCalls) == 0 {
-			break
+			return text, usage, nil
 		}
 	}
 
-	return text, usage, nil
+	// Loop exhausted iterations with tool calls still pending.
+	return "", nil, sigilerr.New(sigilerr.CodeAgentLoopFailure,
+		"tool loop exceeded maximum iterations with unresolved tool calls",
+		sigilerr.Field("max_iterations", maxToolLoopIterations),
+		sigilerr.Field("pending_tool_calls", len(currentToolCalls)),
+	)
 }
 
 func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {

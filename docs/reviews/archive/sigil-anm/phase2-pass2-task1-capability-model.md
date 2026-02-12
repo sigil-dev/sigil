@@ -8,6 +8,7 @@
 ## Spec Compliance
 
 All required API surface present and correct:
+
 - `MatchCapability(pattern, cap string) bool` -- glob matching on dot-separated segments
 - `CapabilitySet` with `NewCapabilitySet`, `Contains`, `AllowedBy`
 - All 12 spec test cases covered (11 directly in TestMatchCapability, 1 via CapabilitySet)
@@ -15,6 +16,7 @@ All required API surface present and correct:
 ## Design Doc Alignment
 
 Matches `docs/design/03-security-model.md`:
+
 - Additive model (starts with nothing)
 - Fail-closed (unknown = denied)
 - Glob-based matching for all design doc capability examples

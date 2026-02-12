@@ -77,9 +77,9 @@ api/proto/
 
 ## Networking Modes
 
-| Mode | Transport | Node Auth | Setup |
-|------|-----------|-----------|-------|
-| `local` | Standard TCP/TLS | Token or mTLS (manual) | User manages certs/tokens |
-| `tailscale` | WireGuard via tsnet | Tailscale identity (automatic) | Install Tailscale, done |
+| Mode        | Transport           | Node Auth                      | Setup                     |
+| ----------- | ------------------- | ------------------------------ | ------------------------- |
+| `local`     | Standard TCP/TLS    | Token or mTLS (manual)         | User manages certs/tokens |
+| `tailscale` | WireGuard via tsnet | Tailscale identity (automatic) | Install Tailscale, done   |
 
 When `tailscale` mode is enabled, the gateway binary becomes a Tailscale node via `tsnet`. Provides: auto TLS, NAT traversal, MagicDNS, ACL-governed connectivity.

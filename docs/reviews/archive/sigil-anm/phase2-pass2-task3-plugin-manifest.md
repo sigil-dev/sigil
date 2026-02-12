@@ -12,6 +12,7 @@ All requirements satisfied: `PluginType` enum, `ExecutionTier` enum, `Manifest` 
 ## Bug Fix Verification (sigil-anm.14)
 
 Semver validation fix is solid:
+
 - Regex identical to `pkg/plugin/validate.go` (strict semver, no v-prefix, no leading zeros)
 - 5 valid + 8 invalid test cases covering prerelease, build metadata, edge cases
 - No regression risk

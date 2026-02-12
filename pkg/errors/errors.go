@@ -35,18 +35,27 @@ const (
 	CodePluginLifecycleTransitionInvalid Code = "plugin.lifecycle.transition.invalid"
 	CodePluginDiscoveryFailure           Code = "plugin.discovery.failure"
 	CodePluginNotFound                   Code = "plugin.not_found"
+	CodePluginChannelNotFound            Code = "plugin.channel.not_found"
 
 	CodeProviderRequestInvalid  Code = "provider.request.invalid"
 	CodeProviderResponseInvalid Code = "provider.response.invalid"
 	CodeProviderUpstreamFailure Code = "provider.upstream.failure"
 	CodeProviderBudgetExceeded  Code = "provider.budget.exceeded"
+	CodeProviderNotFound        Code = "provider.registry.not_found"
+	CodeProviderAllUnavailable  Code = "provider.routing.all_unavailable"
+	CodeProviderNoDefault        Code = "provider.routing.no_default"
+	CodeProviderInvalidModelRef  Code = "provider.routing.invalid_model_ref"
 
-	CodeAgentLoopInvalidInput         Code = "agent.loop.invalid_input"
+	CodeAgentLoopInvalidInput        Code = "agent.loop.invalid_input"
 	CodeAgentLoopFailure             Code = "agent.loop.failure"
 	CodeAgentSessionBoundaryMismatch Code = "agent.session.boundary.forbidden"
 	CodeAgentSessionInactive         Code = "agent.session.status.forbidden"
 	CodeAgentToolBudgetExceeded      Code = "agent.tool.budget_exceeded"
 	CodeAgentToolTimeout             Code = "agent.tool.timeout"
+
+	CodeWorkspaceOpenFailure      Code = "workspace.open.failure"
+	CodeWorkspaceMembershipDenied Code = "workspace.membership.denied"
+	CodeWorkspaceConfigInvalid    Code = "workspace.config.invalid"
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"

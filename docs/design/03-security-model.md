@@ -34,6 +34,8 @@ config.read.*                    # read all config (admin only)
 filesystem.read./data/*          # path-scoped filesystem access
 filesystem.write./data/plugins/self/*  # write only to own directory
 kv.*                             # full KV access (plugin-scoped automatically)
+tool.<name>                      # dispatch a specific tool (D038)
+tool.*                           # dispatch any tool
 provider.chat                    # invoke LLM (skill plugins need this)
 storage.volumes.*                # (future) volume management
 storage.memory.*                 # (future) memory collections
@@ -86,30 +88,30 @@ The agent loop itself has security checks at every step:
 
 ### Defense Matrix
 
-| Attack Vector | Defense |
-|---------------|---------|
-| Prompt injection via user message | Input scanning + origin tagging |
-| Prompt injection via tool result | Tool outputs tagged as `tool_output` role, scanned for instruction patterns |
-| Tool escalation | Session-scoped tool allowlist + capability check before dispatch |
-| Infinite tool loops | Per-session tool call budget (max N calls per turn, max M turns per session) |
-| Cost explosion | Token budget per-session, per-hour, per-day enforced at provider level |
-| Plugin data exfiltration | Plugins cannot read other plugins' KV/config. Network policy for container tier. |
-| Session hijacking | Sessions bound to channel+user identity. Cross-session access requires explicit grant. |
-| Config poisoning | Config changes validated against schema, audit-logged, require admin capability |
+| Attack Vector                     | Defense                                                                                |
+| --------------------------------- | -------------------------------------------------------------------------------------- |
+| Prompt injection via user message | Input scanning + origin tagging                                                        |
+| Prompt injection via tool result  | Tool outputs tagged as `tool_output` role, scanned for instruction patterns            |
+| Tool escalation                   | Session-scoped tool allowlist + capability check before dispatch                       |
+| Infinite tool loops               | Per-session tool call budget (max N calls per turn, max M turns per session)           |
+| Cost explosion                    | Token budget per-session, per-hour, per-day enforced at provider level                 |
+| Plugin data exfiltration          | Plugins cannot read other plugins' KV/config. Network policy for container tier.       |
+| Session hijacking                 | Sessions bound to channel+user identity. Cross-session access requires explicit grant. |
+| Config poisoning                  | Config changes validated against schema, audit-logged, require admin capability        |
 
 ## Layer 3: Plugin Isolation
 
 Isolation depends on execution tier, but all tiers get baseline controls:
 
-| Control | Wasm | Process | Container |
-|---------|------|---------|-----------|
-| Memory isolation | Yes (Wazero sandbox) | Yes (OS process) | Yes (cgroup) |
-| Filesystem isolation | Yes (no FS access) | Yes (srt sandbox) | Yes (overlay FS) |
-| Network isolation | Yes (no network) | Yes (proxy-only) | Yes (network policy) |
-| Resource limits | Yes (fuel metering) | Partial (OOM kill) | Yes (cgroup limits) |
-| Capability enforcement | Yes | Yes | Yes |
-| Audit logging | Yes | Yes | Yes |
-| Secret injection | Via host function | Via gRPC init | Via mounted secrets |
+| Control                | Wasm                 | Process            | Container            |
+| ---------------------- | -------------------- | ------------------ | -------------------- |
+| Memory isolation       | Yes (Wazero sandbox) | Yes (OS process)   | Yes (cgroup)         |
+| Filesystem isolation   | Yes (no FS access)   | Yes (srt sandbox)  | Yes (overlay FS)     |
+| Network isolation      | Yes (no network)     | Yes (proxy-only)   | Yes (network policy) |
+| Resource limits        | Yes (fuel metering)  | Partial (OOM kill) | Yes (cgroup limits)  |
+| Capability enforcement | Yes                  | Yes                | Yes                  |
+| Audit logging          | Yes                  | Yes                | Yes                  |
+| Secret injection       | Via host function    | Via gRPC init      | Via mounted secrets  |
 
 ### Process Tier Sandboxing Detail
 

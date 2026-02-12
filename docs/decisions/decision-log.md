@@ -363,10 +363,10 @@ Factory reads `storage.*` config, creates the right backend. Callers import only
 
 **Decision:** Two candidates identified, neither adopted yet:
 
-| Backend | Replaces | Language | Go SDK Status (early 2026) | License |
-|---------|----------|----------|---------------------------|---------|
-| LanceDB | VectorStore (sqlite-vec) | Rust | v0.1.2 (pre-1.0, not production-ready) | Apache 2.0 |
-| LadybugDB | KnowledgeStore (SQLite RDF) | C++ (fork of KuzuDB) | Moderate maturity, active development | MIT |
+| Backend   | Replaces                    | Language             | Go SDK Status (early 2026)             | License    |
+| --------- | --------------------------- | -------------------- | -------------------------------------- | ---------- |
+| LanceDB   | VectorStore (sqlite-vec)    | Rust                 | v0.1.2 (pre-1.0, not production-ready) | Apache 2.0 |
+| LadybugDB | KnowledgeStore (SQLite RDF) | C++ (fork of KuzuDB) | Moderate maturity, active development  | MIT        |
 
 **Rationale:** Both are embedded (no server), both are Apache 2.0/MIT compatible, both add CGo dependencies (already required). However:
 
@@ -453,3 +453,152 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** Sigil already requires CGO for sqlite3/sqlite-vec, but the CGO Wasm runtimes have significant build-chain problems. More importantly, Sigil plugins aren't smart contracts — the security goal is bounding runaway execution, not deterministic per-instruction billing. Context timeout is idiomatic Go, zero new dependencies, and Wazero supports it natively. Wazero's pure-Go nature remains valuable for cross-platform builds even though CGO is already required for other dependencies.
 
 **Ref:** bead `sigil-anm.10`, design `docs/plans/2026-02-11-wasm-timeout-design.md`
+
+---
+
+## D036: Provider Failover — First-Event Only, Not Mid-Stream
+
+**Question:** Should provider failover retry on mid-stream failures, or only on initial connection/first-event failures?
+
+**Options considered:**
+
+- Full mid-stream retry (buffer all events, replay conversation to fallback) — deferred: requires buffering entire stream, resending all messages to new provider, handling partial-output ambiguity (user may have already seen partial text). Significant complexity.
+- First-event-only retry (current) — chosen: catches auth errors, rate limits, and provider-down scenarios which are the most common failure modes. Clean and predictable.
+- No retry (fail immediately) — rejected: too brittle for multi-provider deployments.
+
+**Decision:** Failover retries on first-event failures only. Mid-stream failures surface to the caller as errors. Full mid-stream retry deferred as future work.
+
+**Rationale:** Most provider failures manifest immediately (auth, rate limit, 503). Mid-stream failures (network drop, timeout) are rare and would require fundamentally different architecture — buffering all events, managing partial output state, and replaying the full conversation. The complexity cost doesn't justify the edge case coverage at this stage.
+
+**Ref:** PR #12 review finding 4, bead `sigil-dxw`
+
+---
+
+## D037: User-Scoped Personal Workspace Fallback
+
+**Question:** Should unbound channels route to a shared `"personal"` workspace or a user-scoped `"personal:<userID>"` workspace?
+
+**Options considered:**
+
+- Shared `"personal"` workspace (original spec) — all users share the same fallback workspace. Simple but leaks context between users and provides no isolation.
+- User-scoped `"personal:<userID>"` (chosen) — each user gets their own isolated fallback workspace with implied membership.
+
+**Decision:** Unbound channels route to `personal:<userID>`. Design docs and plan updated to match.
+
+**Rationale:** A shared personal workspace is a security and privacy concern — users would see each other's conversation history and tool outputs. User-scoped workspaces provide proper isolation with minimal additional complexity. Membership is implied since the workspace belongs to the user.
+
+**Ref:** PR #12 review round 5 finding 4, bead `sigil-0cs`
+
+## D038: Tool Capability Dot Namespace
+
+**Question:** Should runtime tool capability checks use colon (`tool:name`) or dot (`tool.name`) as the namespace separator?
+
+**Options considered:**
+
+- Colon-separated `tool:<name>` — used in initial implementation, but colons are rejected by manifest `capPatternRe` validation (`^[a-zA-Z0-9.*_\-/]+$`), breaking least-privilege enforcement for non-wildcard grants.
+- Dot-separated `tool.<name>` (chosen) — consistent with existing `MatchCapability` dot-segment matching and the design docs' capability namespace convention.
+
+**Decision:** Runtime tool capability checks use `tool.<name>`. Manifest validation, `MatchCapability`, and the enforcer all operate on dot-segmented namespaces consistently.
+
+**Rationale:** The colon separator was an implementation artifact that conflicted with the validation regex. Aligning on dot namespaces means `tool.search`, `tool.*`, and `tool.web_search` all pass manifest validation and match correctly at runtime without requiring wildcard grants.
+
+**Ref:** PR #12 review round 6 finding 1
+
+## D039: Identity Resolver User-Scoped Pairing Verification
+
+**Superseded by D042.** Pairing was fully removed from the identity resolver.
+
+**Original decision:** Resolver used `GetByUser(user.ID)` and filtered for matching `channelType` + active status. This was superseded in round 7 when pairing enforcement moved entirely to `ChannelRouter.AuthorizeInbound()`, making the resolver a pure identity lookup.
+
+**Ref:** PR #12 review round 6 finding 2, superseded by round 7 finding 1
+
+## D040: Tool Loop Iteration Limit Returns Error
+
+**Question:** Should the tool loop return success or an error when it exhausts its iteration limit with tool calls still pending?
+
+**Decision:** The tool loop now returns `CodeAgentLoopFailure` when `maxToolLoopIterations` is reached with unresolved tool calls, instead of silently returning success.
+
+**Rationale:** Returning success with incomplete orchestration is misleading and diverges from the design intent ("continue until done or limit hit"). An explicit error lets callers distinguish between clean completion and truncated execution.
+
+**Ref:** PR #12 review round 6 finding 3, `docs/design/08-agent-core.md` §Multi-Turn Tool Orchestration
+
+## D041: Temperature Zero via Pointer Type
+
+**Question:** How should providers handle `temperature=0` (deterministic) when the Go zero value for `float32` is also `0`?
+
+**Decision:** `ChatOptions.Temperature` is now `*float32`. A nil pointer means "not set" (use provider default); a non-nil pointer sends the exact value, including `0`.
+
+**Rationale:** The previous `> 0` guard silently dropped `temperature=0`, making deterministic output impossible. The pointer type is the standard Go idiom for optional numeric fields and matches the pattern used by the Anthropic, OpenAI, and Google SDKs themselves.
+
+**Ref:** PR #12 review round 6 finding 4
+
+## D042: Channel-Level Pairing Enforcement (Moved from Identity Resolver)
+
+**Question:** Should pairing verification live in the identity resolver or the channel router?
+
+**Options considered:**
+
+- Keep pairing in identity resolver, pass channel mode — simple but muddies identity/authorization boundary. Every identity lookup requires pairing state, even for open channels.
+- Move to channel router (chosen) — channel router knows the pairing mode per-channel and can skip pairing for open channels. Resolver becomes a pure identity lookup. Pairing is scoped to specific channel instances (channelType + channelID), not just channel type.
+
+**Decision:** Pairing enforcement moved from `identity.Resolver` to `plugin.ChannelRouter.AuthorizeInbound()`. The resolver now performs only user identity lookup. The channel router applies mode-aware authorization: open channels skip pairing entirely, closed channels deny all, allowlist channels check membership + active pairing for the specific channel instance.
+
+**Rationale:** Identity resolution (who is this user?) and channel authorization (can this user interact here?) are separate concerns. Mixing them caused three bugs: (1) open-mode channels couldn't allow unpaired users, (2) a pairing on one channel of a type (e.g., Telegram bot A) could satisfy checks for a different channel of the same type (bot B), (3) the resolver required `PairingStore` even when the channel mode made pairing irrelevant.
+
+**Ref:** PR #12 review round 7 finding 1
+
+## D043: Pre-Stream Chat Failure Health Reporting via HealthReporter Interface
+
+**Question:** How should the agent loop mark providers unhealthy when `Chat()` returns an error before creating a stream?
+
+**Options considered:**
+
+- Add `RecordFailure()` to the `Provider` interface — breaks the interface for all implementors including plugin providers.
+- Optional `HealthReporter` interface (chosen) — providers that embed `HealthTracker` implement the interface. The agent loop type-asserts and calls `RecordFailure()`. Non-implementing providers (e.g., future plugin providers) degrade gracefully.
+- Per-attempt exclusion set in `Route()` — more explicit but requires `Router` interface changes and duplicates the circuit-breaker logic already in `HealthTracker`.
+
+**Decision:** Added `provider.HealthReporter` interface (`RecordFailure()`, `RecordSuccess()`). All 4 built-in providers implement it. On pre-stream `Chat()` errors, `callLLM` calls `RecordFailure()` via type assertion. The existing `HealthTracker` cooldown (30s) acts as a circuit breaker with automatic half-open recovery.
+
+**Rationale:** In-stream errors already triggered `RecordFailure()` (via the streaming goroutine), but pre-stream errors bypassed it because the goroutine never started. This caused failover retries to keep selecting the same broken primary provider. The optional interface pattern preserves backward compatibility while closing the health tracking gap.
+
+**Ref:** PR #12 review round 7 finding 2
+
+## D044: Tool Definitions Sent to Providers
+
+**Question:** How should the agent loop provide tool schemas (names, parameters) to LLM providers for function-calling?
+
+**Decision:** `ToolRegistry` extended with `GetToolDefinitions() []provider.ToolDefinition`. Each `Register()` call now accepts a `provider.ToolDefinition` alongside the plugin name. The agent loop populates `ChatRequest.Tools` from the registry before calling the provider.
+
+**Rationale:** Without tool definitions in the `ChatRequest`, providers had no tool schemas to present to the LLM, so the model could never generate tool calls. The registry is the natural home for this data since it already maps tool names to plugins.
+
+**Ref:** PR #12 review round 8 finding 1
+
+## D045: Workspace-Scoped Pairing Authorization
+
+**Question:** Should `AuthorizeInbound` check workspace scope when verifying pairings?
+
+**Decision:** `AuthorizeInbound` now requires a `workspaceID` parameter and checks that the pairing matches the specific workspace in addition to channel type, channel ID, and active status.
+
+**Rationale:** Without workspace scoping, a pairing on workspace A could authorize access to workspace B through the same channel, violating workspace isolation boundaries.
+
+**Ref:** PR #12 review round 8 finding 2
+
+## D046: Config Schema — Workspace Bindings and Tool Deny Rules
+
+**Question:** Should the config schema include `bindings` and `deny` fields that the design docs and example config reference?
+
+**Decision:** Added `Bindings []BindingConfig` to `WorkspaceConfig` and `Deny []string` to `ToolsConfig`. These fields were already described in the design docs and example config but missing from the Go structs, causing silent ignore on parse.
+
+**Rationale:** The schema should match what users can configure. Missing struct fields meant valid YAML was silently dropped by Viper unmarshalling.
+
+**Ref:** PR #12 review round 8 finding 3
+
+## D047: Per-Attempt Provider Exclusion in RouteWithBudget
+
+**Question:** How should failover avoid re-selecting a provider that already failed in the current turn?
+
+**Decision:** `RouteWithBudget` accepts an `exclude []string` parameter. The agent loop tracks provider names across retry attempts and passes them to the router, which skips excluded providers in both primary and failover selection.
+
+**Rationale:** The `HealthReporter` circuit breaker operates on a 30s cooldown window — too coarse for within-turn retries. A provider that fails on attempt 1 stays "available" to the health check and gets re-selected on attempt 2. The exclusion list ensures deterministic failover progression without requiring all providers to implement `HealthReporter`.
+
+**Ref:** PR #12 review round 8 finding 4

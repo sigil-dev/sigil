@@ -12,6 +12,7 @@
 ## Bug Fix Verification (sigil-anm.15)
 
 Both fixes from commit `bc92ddf` verified:
+
 - `draining → error` in transition table with full lifecycle path test
 - `stopping → error` in transition table with full lifecycle path test
 - Concurrency test: 50 goroutines race on running→draining, exactly 1 winner

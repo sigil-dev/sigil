@@ -9,6 +9,7 @@
 All API elements present: `Enforcer`, `NewEnforcer`, `RegisterPlugin`, `UnregisterPlugin`, `Check`, `CheckRequest`.
 
 Four-way check logic correctly implements all gates in specified order:
+
 1. Plugin allow set must contain the capability
 2. Plugin deny set must NOT contain the capability
 3. Workspace allow set must contain the capability
@@ -21,6 +22,7 @@ Fail-closed: unregistered plugins denied. Audit logging on every decision path.
 5 of 8 spec-required tests present. 4 extra tests added (beneficial).
 
 **Missing spec tests:**
+
 - `AllowThreeWayIntersection` -- Holistic intersection verification
 - `UserWithNoPermissions` -- Empty permission set edge case (security-critical)
 - `AuditLogging` -- Standalone audit entry verification (partially covered inline)
@@ -31,8 +33,8 @@ Fail-closed: unregistered plugins denied. Audit logging on every decision path.
 
 ## Suggestions
 
-| # | Finding | Recommendation | Resolution |
-|---|---------|----------------|------------|
-| S1 | Nil audit store guard | `NewEnforcer(nil)` silently disables audit. Require non-nil or document. | **Closed:** sigil-anm.17 (slog.Warn on nil, enforcement continues) |
-| S2 | Global audit ID counter | Move `auditIDCounter` into `Enforcer` struct for isolation | **Closed:** sigil-anm.17 (per-enforcer atomic counter) |
-| S3 | Actor field semantics | `Actor` set to plugin name; revisit when user identity enters the check flow | **Closed:** sigil-anm.17 (doc comment + Phase 4 TODO) |
+| #  | Finding                 | Recommendation                                                               | Resolution                                                         |
+| -- | ----------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| S1 | Nil audit store guard   | `NewEnforcer(nil)` silently disables audit. Require non-nil or document.     | **Closed:** sigil-anm.17 (slog.Warn on nil, enforcement continues) |
+| S2 | Global audit ID counter | Move `auditIDCounter` into `Enforcer` struct for isolation                   | **Closed:** sigil-anm.17 (per-enforcer atomic counter)             |
+| S3 | Actor field semantics   | `Actor` set to plugin name; revisit when user identity enters the check flow | **Closed:** sigil-anm.17 (doc comment + Phase 4 TODO)              |

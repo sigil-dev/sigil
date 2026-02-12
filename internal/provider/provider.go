@@ -41,8 +41,19 @@ type Router interface {
 	// Returns the provider and resolved model ID.
 	Route(ctx context.Context, workspaceID, modelName string) (Provider, string, error)
 
+	// RouteWithBudget selects a provider and enforces token budget constraints.
+	// Callers should prefer this over Route when budget context is available.
+	// The exclude list contains provider names to skip (already-tried providers
+	// in the current failover sequence).
+	RouteWithBudget(ctx context.Context, workspaceID, modelName string, budget *Budget, exclude []string) (Provider, string, error)
+
 	// RegisterProvider adds a provider to the router.
 	RegisterProvider(name string, provider Provider) error
+
+	// MaxAttempts returns the maximum number of provider attempts the router
+	// supports (primary + failover candidates). Used by the agent loop to
+	// cap its retry count.
+	MaxAttempts() int
 
 	// Close shuts down all registered providers.
 	Close() error
@@ -59,7 +70,7 @@ type ChatRequest struct {
 
 // ChatOptions contains model configuration.
 type ChatOptions struct {
-	Temperature   float32
+	Temperature   *float32
 	MaxTokens     int
 	StopSequences []string
 	Stream        bool
@@ -138,4 +149,15 @@ type ProviderStatus struct {
 	Available bool
 	Provider  string
 	Message   string
+}
+
+// HealthReporter is an optional interface that providers can implement to
+// expose circuit-breaker health signals. When a provider implements this
+// interface, the agent loop calls RecordFailure on pre-stream Chat() errors
+// so the router's failover chain can skip unhealthy providers. The existing
+// HealthTracker already implements cooldown-based recovery (circuit breaker
+// half-open state), so providers become eligible for retry after the cooldown.
+type HealthReporter interface {
+	RecordFailure()
+	RecordSuccess()
 }

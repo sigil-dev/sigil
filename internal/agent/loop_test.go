@@ -71,12 +71,12 @@ func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
 		Hooks: &agent.LoopHooks{
-			OnReceive:  record("receive"),
-			OnPrepare:  record("prepare"),
-			OnCallLLM:  record("call_llm"),
-			OnProcess:  record("process"),
-			OnRespond:  record("respond"),
-			OnAudit:    record("audit"),
+			OnReceive: record("receive"),
+			OnPrepare: record("prepare"),
+			OnCallLLM: record("call_llm"),
+			OnProcess: record("process"),
+			OnRespond: record("respond"),
+			OnAudit:   record("audit"),
 		},
 	})
 
@@ -368,10 +368,16 @@ func TestAgentLoop_NoDuplicateUserMessage(t *testing.T) {
 
 	assert.Equal(t, 1, userMsgCount, "user message should appear exactly once, not duplicated")
 
-	// Verify message order: system → user.
-	assert.Equal(t, store.MessageRoleSystem, messages[0].Role, "first message should be system prompt")
-	assert.Equal(t, store.MessageRoleUser, messages[1].Role, "second message should be user message")
-	assert.Equal(t, "test message", messages[1].Content, "user message content should match")
+	// System prompt should be sent via ChatRequest.SystemPrompt, not as a message.
+	assert.NotEmpty(t, capturer.capturedSystemPrompt, "system prompt should be set")
+	assert.Equal(t, "You are a helpful assistant.", capturer.capturedSystemPrompt)
+
+	// Messages should not contain a system role message; first message should be user.
+	for _, msg := range messages {
+		assert.NotEqual(t, store.MessageRoleSystem, msg.Role, "system prompt should not be in messages array")
+	}
+	assert.Equal(t, store.MessageRoleUser, messages[0].Role, "first message should be user message")
+	assert.Equal(t, "test message", messages[0].Content, "user message content should match")
 }
 
 // ---------------------------------------------------------------------------
@@ -602,9 +608,105 @@ func TestAgentLoop_RouterNonBudgetFailure(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Nil(t, out)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
-		"expected CodeAgentLoopFailure, got %s", sigilerr.CodeOf(err))
-	assert.Contains(t, err.Error(), "routing provider")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderAllUnavailable),
+		"expected CodeProviderAllUnavailable, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "all providers failed")
+}
+
+func TestAgentLoop_BudgetWiredThroughSessionTokens(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Set session token budget — within limits.
+	session.TokenBudget.MaxPerSession = 10000
+	session.TokenBudget.UsedSession = 500
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	budgetRouter := &mockProviderRouterBudgetAware{provider: &mockProvider{}}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: budgetRouter,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Verify the router received the session's budget.
+	captured := budgetRouter.getCapturedBudget()
+	require.NotNil(t, captured, "RouteWithBudget should have been called with a budget")
+	assert.Equal(t, 10000, captured.MaxSessionTokens)
+	assert.Equal(t, 500, captured.UsedSessionTokens)
+}
+
+func TestAgentLoop_BudgetWiredEnforcesLimit(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Set session token budget — exceeded.
+	session.TokenBudget.MaxPerSession = 1000
+	session.TokenBudget.UsedSession = 1000
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	budgetRouter := &mockProviderRouterBudgetAware{provider: &mockProvider{}}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: budgetRouter,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded),
+		"expected CodeProviderBudgetExceeded, got %s", sigilerr.CodeOf(err))
+}
+
+func TestAgentLoop_InvalidModelRefNotMasked(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouterInvalidModelRef{},
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	// The error code should be invalid_model_ref, NOT all_unavailable.
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderInvalidModelRef),
+		"expected CodeProviderInvalidModelRef, got %s", sigilerr.CodeOf(err))
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeProviderAllUnavailable),
+		"invalid_model_ref should NOT be wrapped as all_unavailable")
 }
 
 // ---------------------------------------------------------------------------
@@ -619,11 +721,12 @@ type mockProviderToolCall struct {
 	toolCall *provider.ToolCall
 }
 
-func (p *mockProviderToolCall) Name() string                         { return "mock-tool-call" }
-func (p *mockProviderToolCall) Available(_ context.Context) bool     { return true }
+func (p *mockProviderToolCall) Name() string                     { return "mock-tool-call" }
+func (p *mockProviderToolCall) Available(_ context.Context) bool { return true }
 func (p *mockProviderToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-tool-call"}, nil
 }
+
 func (p *mockProviderToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
@@ -678,7 +781,7 @@ func TestAgentLoop_ToolCallDispatch(t *testing.T) {
 	}
 
 	enforcer := security.NewEnforcer(nil)
-	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool:*"), security.NewCapabilitySet())
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
 	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
@@ -699,8 +802,8 @@ func TestAgentLoop_ToolCallDispatch(t *testing.T) {
 		WorkspaceID:     "ws-1",
 		UserID:          "user-1",
 		Content:         "What is the weather in London?",
-		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
-		UserPermissions: security.NewCapabilitySet("tool:*"),
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, out)
@@ -755,8 +858,8 @@ func TestAgentLoop_ToolCallDenied(t *testing.T) {
 		WorkspaceID:     "ws-1",
 		UserID:          "user-1",
 		Content:         "Use the dangerous tool",
-		WorkspaceAllow:  security.NewCapabilitySet("tool:*"),
-		UserPermissions: security.NewCapabilitySet("tool:*"),
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
 	})
 	require.NoError(t, err, "denied tool should not fail the entire turn")
 	require.NotNil(t, out)
@@ -824,11 +927,12 @@ type mockProviderToolCallWithText struct {
 	textContent string
 }
 
-func (p *mockProviderToolCallWithText) Name() string                         { return "mock-tool-text" }
-func (p *mockProviderToolCallWithText) Available(_ context.Context) bool     { return true }
+func (p *mockProviderToolCallWithText) Name() string                     { return "mock-tool-text" }
+func (p *mockProviderToolCallWithText) Available(_ context.Context) bool { return true }
 func (p *mockProviderToolCallWithText) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-tool-text"}, nil
 }
+
 func (p *mockProviderToolCallWithText) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
@@ -880,11 +984,12 @@ func (m *mockSessionStoreWindowError) GetActiveWindow(_ context.Context, _ strin
 // mockProviderChatError is a provider whose Chat() method returns an error.
 type mockProviderChatError struct{}
 
-func (p *mockProviderChatError) Name() string                         { return "mock-chat-error" }
-func (p *mockProviderChatError) Available(_ context.Context) bool     { return true }
+func (p *mockProviderChatError) Name() string                     { return "mock-chat-error" }
+func (p *mockProviderChatError) Available(_ context.Context) bool { return true }
 func (p *mockProviderChatError) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-chat-error"}, nil
 }
+
 func (p *mockProviderChatError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
@@ -901,8 +1006,231 @@ func (r *mockProviderRouterGenericError) Route(_ context.Context, _, _ string) (
 	return nil, "", assert.AnError
 }
 
+func (r *mockProviderRouterGenericError) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
+	return nil, "", assert.AnError
+}
+
 func (r *mockProviderRouterGenericError) RegisterProvider(_ string, _ provider.Provider) error {
 	return nil
 }
 
-func (r *mockProviderRouterGenericError) Close() error { return nil }
+func (r *mockProviderRouterGenericError) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterGenericError) Close() error     { return nil }
+
+// ---------------------------------------------------------------------------
+// Budget accounting tests
+// ---------------------------------------------------------------------------
+
+func TestAgentLoop_UsageAccountedAfterLLMCall(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Set initial budget with limits.
+	session.TokenBudget.MaxPerSession = 100000
+	session.TokenBudget.UsedSession = 0
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(), // returns Usage{InputTokens:10, OutputTokens:5}
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Verify token counters were incremented (10 input + 5 output = 15 total).
+	updated, err := ss.GetSession(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 15, updated.TokenBudget.UsedSession, "UsedSession should be incremented by total tokens")
+	assert.Equal(t, 15, updated.TokenBudget.UsedHour, "UsedHour should be incremented by total tokens")
+	assert.Equal(t, 15, updated.TokenBudget.UsedDay, "UsedDay should be incremented by total tokens")
+}
+
+func TestAgentLoop_UsageAccountedInToolLoop(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	session.TokenBudget.MaxPerSession = 100000
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	// Tool call provider: first call emits tool call (10+2=12 tokens),
+	// second call emits text (20+8=28 tokens). Total = 40.
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-1",
+			Name:      "get_weather",
+			Arguments: `{"city":"London"}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "weather?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Verify cumulative usage: initial call (12) + tool loop re-call (28) = 40.
+	updated, err := ss.GetSession(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 40, updated.TokenBudget.UsedSession, "UsedSession should accumulate across tool loop iterations")
+}
+
+// ---------------------------------------------------------------------------
+// Failover cap test
+// ---------------------------------------------------------------------------
+
+func TestAgentLoop_FailoverCapMatchesRouterChainLength(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Router that returns MaxAttempts=3 but always fails routing.
+	router := &mockProviderRouterWithAttempts{maxAttempts: 3}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+
+	// The router should have been called exactly maxAttempts times (3).
+	assert.Equal(t, 3, router.callCount(), "loop should try exactly MaxAttempts() providers")
+}
+
+// mockProviderRouterWithAttempts is a router that tracks RouteWithBudget calls
+// and returns a provider that fails on Chat() to trigger retry.
+type mockProviderRouterWithAttempts struct {
+	maxAttempts int
+	mu          sync.Mutex
+	calls       int
+}
+
+func (r *mockProviderRouterWithAttempts) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return &mockProviderChatError{}, "mock-model", nil
+}
+
+func (r *mockProviderRouterWithAttempts) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return &mockProviderChatError{}, "mock-model", nil
+}
+
+func (r *mockProviderRouterWithAttempts) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+
+func (r *mockProviderRouterWithAttempts) MaxAttempts() int { return r.maxAttempts }
+func (r *mockProviderRouterWithAttempts) Close() error     { return nil }
+
+func (r *mockProviderRouterWithAttempts) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// mockProviderChatErrorWithHealth is a provider whose Chat() fails and
+// implements provider.HealthReporter to track RecordFailure calls.
+type mockProviderChatErrorWithHealth struct {
+	mu           sync.Mutex
+	failureCount int
+}
+
+func (p *mockProviderChatErrorWithHealth) Name() string                     { return "mock-health-error" }
+func (p *mockProviderChatErrorWithHealth) Available(_ context.Context) bool { return true }
+func (p *mockProviderChatErrorWithHealth) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-health-error"}, nil
+}
+func (p *mockProviderChatErrorWithHealth) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderChatErrorWithHealth) Close() error { return nil }
+func (p *mockProviderChatErrorWithHealth) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	return nil, assert.AnError
+}
+func (p *mockProviderChatErrorWithHealth) RecordFailure() {
+	p.mu.Lock()
+	p.failureCount++
+	p.mu.Unlock()
+}
+func (p *mockProviderChatErrorWithHealth) RecordSuccess() {}
+
+func (p *mockProviderChatErrorWithHealth) getFailureCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failureCount
+}
+
+func TestAgentLoop_ChatFailureCallsRecordFailure(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	healthProv := &mockProviderChatErrorWithHealth{}
+	router := &mockProviderRouter{provider: healthProv}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+
+	// RecordFailure should have been called for the pre-stream Chat() error.
+	assert.Equal(t, 1, healthProv.getFailureCount(),
+		"RecordFailure should be called on pre-stream Chat() error")
+}

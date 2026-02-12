@@ -2,24 +2,24 @@
 
 ## Toolchain
 
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| **Taskfile.dev** | Build orchestration | All build/test/lint commands |
-| **GoReleaser** | Cross-compile, SBOM, Docker, GitHub releases | CGo-enabled builds |
-| **Release-please** | Automated versioning, changelog, release PRs | Handles semver |
-| **Cocogitto** | Conventional commit validation only | Does NOT handle versioning |
-| **Lefthook** | Git hooks (lint, format, license, commit-msg) | Parallel pre-commit |
-| **Cosign** | Keyless signing + attestation (GitHub OIDC) | Signs checksums + Docker |
-| **Syft** | SBOM generation (CycloneDX + SPDX) | Dual format |
-| **Zensical** | Documentation site | uv-managed |
-| **rumdl** | Markdown linting | Rust binary, no Node.js |
-| **dprint** | Code formatting (non-markdown) | TOML, JSON, etc. |
-| **golangci-lint** | Go linting | Standard |
-| **gofumpt** | Go formatting | Stricter than gofmt |
-| **yamlfmt** | YAML formatting + linting | |
-| **actionlint** | GitHub Actions linting | |
-| **addlicense** | SPDX license header management | Auto-added on commit |
-| **buf** | Protobuf toolchain | Lint + generate |
+| Tool               | Purpose                                       | Notes                        |
+| ------------------ | --------------------------------------------- | ---------------------------- |
+| **Taskfile.dev**   | Build orchestration                           | All build/test/lint commands |
+| **GoReleaser**     | Cross-compile, SBOM, Docker, GitHub releases  | CGo-enabled builds           |
+| **Release-please** | Automated versioning, changelog, release PRs  | Handles semver               |
+| **Cocogitto**      | Conventional commit validation only           | Does NOT handle versioning   |
+| **Lefthook**       | Git hooks (lint, format, license, commit-msg) | Parallel pre-commit          |
+| **Cosign**         | Keyless signing + attestation (GitHub OIDC)   | Signs checksums + Docker     |
+| **Syft**           | SBOM generation (CycloneDX + SPDX)            | Dual format                  |
+| **Zensical**       | Documentation site                            | uv-managed                   |
+| **rumdl**          | Markdown linting                              | Rust binary, no Node.js      |
+| **dprint**         | Code formatting (non-markdown)                | TOML, JSON, etc.             |
+| **golangci-lint**  | Go linting                                    | Standard                     |
+| **gofumpt**        | Go formatting                                 | Stricter than gofmt          |
+| **yamlfmt**        | YAML formatting + linting                     |                              |
+| **actionlint**     | GitHub Actions linting                        |                              |
+| **addlicense**     | SPDX license header management                | Auto-added on commit         |
+| **buf**            | Protobuf toolchain                            | Lint + generate              |
 
 ## Repository Structure
 
@@ -180,30 +180,30 @@ Key differences from holomush:
 
 ## Distribution Channels
 
-| Channel | Method | Target |
-|---------|--------|--------|
-| **Homebrew** | `brew install sigil` | macOS/Linux power users |
-| **curl installer** | `curl -fsSL install.example.com \| sh` | Quick setup |
-| **Go install** | `go install ...@latest` | Go developers |
-| **Docker** | `docker run sigil` | Container users |
-| **Tauri app** | `.dmg` / `.msi` / `.AppImage` | Desktop users |
-| **GitHub Releases** | Pre-built binaries | Everyone |
+| Channel             | Method                                 | Target                  |
+| ------------------- | -------------------------------------- | ----------------------- |
+| **Homebrew**        | `brew install sigil`                   | macOS/Linux power users |
+| **curl installer**  | `curl -fsSL install.example.com \| sh` | Quick setup             |
+| **Go install**      | `go install ...@latest`                | Go developers           |
+| **Docker**          | `docker run sigil`                     | Container users         |
+| **Tauri app**       | `.dmg` / `.msi` / `.AppImage`          | Desktop users           |
+| **GitHub Releases** | Pre-built binaries                     | Everyone                |
 
 ## Key Dependency Choices
 
-| Purpose | Library | Rationale |
-|---------|---------|-----------|
-| CLI | cobra + viper | Industry standard, config watching |
-| HTTP/API | huma (on chi) | OpenAPI 3.1 from Go types |
-| Proto | buf | Best proto tooling |
-| Plugins | hashicorp/go-plugin | Proven, gRPC-based |
-| Wasm | tetratelabs/wazero | Pure Go, no CGo, fast |
-| Sandbox | Custom (srt-inspired) | OS-native: bwrap + seatbelt |
-| Database | mattn/go-sqlite3 | CGo required anyway |
-| Vector | asg017/sqlite-vec | SQLite extension |
-| FTS | SQLite FTS5 | Built-in |
-| Tailscale | tailscale.com/tsnet | Embedded Tailscale node |
-| LLM SDKs | anthropic-sdk-go, openai-go, Google genai | Official SDKs |
-| Logging | log/slog | stdlib, structured |
-| Errors | samber/oops | Structured error context |
-| Testing | stdlib + testify | Keep it simple |
+| Purpose   | Library                                   | Rationale                          |
+| --------- | ----------------------------------------- | ---------------------------------- |
+| CLI       | cobra + viper                             | Industry standard, config watching |
+| HTTP/API  | huma (on chi)                             | OpenAPI 3.1 from Go types          |
+| Proto     | buf                                       | Best proto tooling                 |
+| Plugins   | hashicorp/go-plugin                       | Proven, gRPC-based                 |
+| Wasm      | tetratelabs/wazero                        | Pure Go, no CGo, fast              |
+| Sandbox   | Custom (srt-inspired)                     | OS-native: bwrap + seatbelt        |
+| Database  | mattn/go-sqlite3                          | CGo required anyway                |
+| Vector    | asg017/sqlite-vec                         | SQLite extension                   |
+| FTS       | SQLite FTS5                               | Built-in                           |
+| Tailscale | tailscale.com/tsnet                       | Embedded Tailscale node            |
+| LLM SDKs  | anthropic-sdk-go, openai-go, Google genai | Official SDKs                      |
+| Logging   | log/slog                                  | stdlib, structured                 |
+| Errors    | samber/oops                               | Structured error context           |
+| Testing   | stdlib + testify                          | Keep it simple                     |

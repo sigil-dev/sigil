@@ -106,31 +106,31 @@ All tests use real Wasm modules from `testdata/` fixtures (compiled from `.wat` 
 
 ### Test Fixtures
 
-| File | Source | Exports |
-|------|--------|---------|
-| `testdata/add.wasm` | `add.wat` | `add(i32, i32) -> i32` |
+| File                          | Source              | Exports                     |
+| ----------------------------- | ------------------- | --------------------------- |
+| `testdata/add.wasm`           | `add.wat`           | `add(i32, i32) -> i32`      |
 | `testdata/infinite_loop.wasm` | `infinite_loop.wat` | `loop()` — never terminates |
 
 ### Test Cases
 
-| Test | Validates |
-|------|-----------|
-| `TestWasmHost_LoadAndCallModule` | Create host → load module → call exported function → verify result → close |
-| `TestWasmHost_ModuleIsolation` | Two modules on same host have independent state; closing one doesn't affect the other |
-| `TestWasmHost_ExecTimeoutEnforced` | Host with `WithExecTimeout(50ms)` → load infinite loop → call → assert error (context deadline exceeded) |
-| `TestWasmHost_LoadModule_EmptyName` | `LoadModule("", ...)` and `LoadModule("  ", ...)` return validation error |
+| Test                                | Validates                                                                                                |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `TestWasmHost_LoadAndCallModule`    | Create host → load module → call exported function → verify result → close                               |
+| `TestWasmHost_ModuleIsolation`      | Two modules on same host have independent state; closing one doesn't affect the other                    |
+| `TestWasmHost_ExecTimeoutEnforced`  | Host with `WithExecTimeout(50ms)` → load infinite loop → call → assert error (context deadline exceeded) |
+| `TestWasmHost_LoadModule_EmptyName` | `LoadModule("", ...)` and `LoadModule("  ", ...)` return validation error                                |
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `internal/plugin/wasm/host.go` | Rewrite: apply options, use `NewRuntimeWithConfig`, add `WithExecTimeout`, `ExecTimeout()`, `CallWithTimeout`, empty-name guard |
-| `internal/plugin/wasm/host_test.go` | Rewrite: 4 test cases using `testdata/` fixtures |
-| `internal/plugin/wasm/testdata/add.wat` | New: minimal add function |
-| `internal/plugin/wasm/testdata/add.wasm` | New: compiled fixture |
-| `internal/plugin/wasm/testdata/infinite_loop.wat` | New: infinite loop function |
-| `internal/plugin/wasm/testdata/infinite_loop.wasm` | New: compiled fixture |
-| `docs/decisions/decision-log.md` | Append D035 |
+| File                                               | Change                                                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/plugin/wasm/host.go`                     | Rewrite: apply options, use `NewRuntimeWithConfig`, add `WithExecTimeout`, `ExecTimeout()`, `CallWithTimeout`, empty-name guard |
+| `internal/plugin/wasm/host_test.go`                | Rewrite: 4 test cases using `testdata/` fixtures                                                                                |
+| `internal/plugin/wasm/testdata/add.wat`            | New: minimal add function                                                                                                       |
+| `internal/plugin/wasm/testdata/add.wasm`           | New: compiled fixture                                                                                                           |
+| `internal/plugin/wasm/testdata/infinite_loop.wat`  | New: infinite loop function                                                                                                     |
+| `internal/plugin/wasm/testdata/infinite_loop.wasm` | New: compiled fixture                                                                                                           |
+| `docs/decisions/decision-log.md`                   | Append D035                                                                                                                     |
 
 ## What Does NOT Change
 
