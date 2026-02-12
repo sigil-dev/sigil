@@ -23,7 +23,7 @@
 
 ## Repository Structure
 
-```
+```text
 project-root/
 +-- Taskfile.yaml
 +-- go.mod / go.sum
@@ -171,6 +171,7 @@ commit-msg:
 ## GoReleaser Configuration
 
 Key differences from holomush:
+
 - `CGO_ENABLED=1` for sigil binary (sqlite3/sqlite-vec)
 - `CGO_ENABLED=0` for plugin binaries (no C deps)
 - Plugin binaries built alongside core

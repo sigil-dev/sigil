@@ -54,19 +54,13 @@ if echo "$COMMAND" | grep -qE 'git\s+push\s+(origin\s+)?main(\s|$)'; then
   exit 0
 fi
 
-# --- Rule: Prevent force push (allow --force-with-lease on non-protected branches) ---
+# --- Rule: Prevent force push ---
 if echo "$COMMAND" | grep -qE 'git\s+push\s+.*(\s-f\b|\s--force\b)'; then
-  # Allow --force-with-lease on non-protected branches
-  if echo "$COMMAND" | grep -qE '\s--force-with-lease\b' \
-     && ! echo "$COMMAND" | grep -qE 'git\s+push\s+(origin\s+)?(main|beads-sync)(\s|$)'; then
-    : # allow force-with-lease on feature branches
-  else
-    jq -n '{
-      "decision": "block",
-      "reason": "Force push is not allowed. Use `git push --force-with-lease` on feature branches (not main or beads-sync) after confirming with the user."
-    }'
-    exit 0
-  fi
+  jq -n '{
+    "decision": "block",
+    "reason": "Force push is not allowed. It can destroy remote history. If you need to update a PR branch, use `git push --force-with-lease` after confirming with the user."
+  }'
+  exit 0
 fi
 
 # --- Rule: Enforce uv over pip ---

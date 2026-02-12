@@ -634,6 +634,7 @@ The Provider interface from Phase 1 already has all necessary methods for multi-
 **Step 3: Verify interface sufficiency**
 
 Confirm the interface supports:
+
 - Provider identification via `Name()`
 - Availability checks for failover via `Available()`
 - Model discovery via `ListModels()`

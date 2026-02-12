@@ -91,7 +91,7 @@ storage:
 
 ## Execution Tiers
 
-```
+```text
          Isolation ------------------------------------------->
          Overhead  ------------------------------------------->
 
@@ -130,7 +130,7 @@ Filesystem: allow-only for writes, deny-only for reads. Network: allow-only, rou
 
 ## Plugin Lifecycle (Hot-Reload)
 
-```
+```text
 Config change or CLI/UI trigger
   |
   v

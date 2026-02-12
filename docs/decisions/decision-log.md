@@ -25,6 +25,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Decision:** HashiCorp go-plugin with three execution tiers (Wasm, process, container)
 
 **Options considered:**
+
 - In-process plugins (like OpenClaw's TypeScript modules) -- rejected: no isolation
 - go-plugin only (like holomush) -- too limited for untrusted plugins
 - Container-only -- too heavy for simple tools
@@ -38,6 +39,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Question:** How to integrate messaging platforms (Telegram, WhatsApp, etc.)?
 
 **Options considered:**
+
 - Go-native channels (Go libraries for each platform)
 - Channel plugins (channels are plugins via go-plugin)
 - Hybrid (core channels in Go, niche channels as plugins)
@@ -53,6 +55,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Question:** Where does the AI agent loop live?
 
 **Options considered:**
+
 - Agent-as-core (embedded in gateway)
 - Agent-as-plugin (agent runtime is a plugin)
 - Thin agent core + plugin tools
@@ -68,6 +71,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Question:** How to invoke LLMs from multiple providers?
 
 **Options considered:**
+
 - Direct provider SDKs in core
 - Unified proxy (LiteLLM/OpenRouter)
 - Provider-as-plugin interface
@@ -94,6 +98,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Question:** How should the SvelteKit UI communicate with the Go gateway?
 
 **Options considered:**
+
 - WebSocket (custom protocol)
 - ConnectRPC (typed RPC, proto-based)
 - REST + SSE (standard HTTP)
@@ -120,6 +125,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Question:** How to isolate process-tier plugins (go-plugin subprocess)?
 
 **Options considered:**
+
 - No isolation (like OpenClaw)
 - Docker containers for everything
 - OS-level sandboxing (bubblewrap/sandbox-exec)
@@ -137,6 +143,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Decision:** Tiered memory model with agent-controlled retrieval
 
 **Tiers:**
+
 1. Active window (last N messages in LLM context)
 2. Recent messages (SQLite FTS5, searchable)
 3. Auto-generated summaries
@@ -174,6 +181,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Decision:** Yes, with a required tag (`tag:agent-node`)
 
 **Three-layer auth:**
+
 1. Tailscale ACL -- can this device reach the gateway?
 2. Tag check -- does it have `tag:agent-node`?
 3. Workspace binding -- which workspaces can it access?
@@ -237,6 +245,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Question:** Which markdown linter?
 
 **Options considered:**
+
 - markdownlint-cli2 (Node.js)
 - dprint markdown plugin
 - rumdl (Rust)
@@ -276,6 +285,7 @@ Each decision records: the question, options considered, choice made, and ration
 **Question:** What to name the project?
 
 **Options considered:**
+
 - Talon -- spiritual successor to "claw". Rejected: Talon Voice (voice coding tool) dominates the namespace. Multiple other conflicts (mailgun/talon, optiv/Talon).
 - Loom -- weaves things together. Rejected: Atlassian's Loom video product is a household name in dev tools.
 - Sigil -- protective mark, seal of authority.
@@ -412,3 +422,34 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** Late validation produces confusing errors deep in startup or at runtime. Fail-fast at load time gives clear, actionable error messages before any side effects. This is consistent with the security-first design — invalid configuration should never reach the runtime.
 
 **Ref:** PR #5 review suggestion 5, bead `sigil-fuw.31`
+
+---
+
+## D034: Standardize Structured Errors on pkg/errors + samber/oops
+
+**Question:** How should Sigil represent and classify runtime errors across packages and API boundaries?
+
+**Decision:** Use `pkg/errors` as the stable public error API, implemented on top of `samber/oops`, and replace production `fmt.Errorf` call sites with typed error codes.
+
+**Rationale:** A shared, code-first taxonomy improves observability and client behavior consistency while preserving wrapped causes for `errors.Is` checks. `pkg/errors` provides machine-readable codes (for example `store.entity.get.not_found`), structured fields, classification helpers, and HTTP-status mapping. This establishes a stable contract for internal services and plugin-facing surfaces while keeping contextual debugging data in the wrapped error chain.
+
+**Ref:** bead `sigil-fuw.37`
+
+---
+
+## D035: Wasm Execution Bounding — Context Timeout over Fuel Metering
+
+**Question:** How should the Wasm execution tier bound plugin execution? The spec called for instruction-level fuel metering, but Wazero doesn't support it natively.
+
+**Options considered:**
+
+- Wasmtime-go (CGO, native fuel metering) — rejected: no precompiled arm64/darwin binaries, adds CI build complexity
+- Wasmer-go (CGO) — rejected: unmaintained since 2021, incomplete arm64/darwin support
+- Wasm bytecode injection (go-wasm-metering) — rejected: abandoned project (2019), instruction-level billing unnecessary for gateway plugins
+- Keep Wazero + context-based timeout — chosen
+
+**Decision:** Keep Wazero. Use `context.WithTimeout` + `WithCloseOnContextDone(true)` instead of fuel metering. Replace `WithFuelLimit`/`FuelLimit` with `WithExecTimeout`/`ExecTimeout`.
+
+**Rationale:** Sigil already requires CGO for sqlite3/sqlite-vec, but the CGO Wasm runtimes have significant build-chain problems. More importantly, Sigil plugins aren't smart contracts — the security goal is bounding runaway execution, not deterministic per-instruction billing. Context timeout is idiomatic Go, zero new dependencies, and Wazero supports it natively. Wazero's pure-Go nature remains valuable for cross-platform builds even though CGO is already required for other dependencies.
+
+**Ref:** bead `sigil-anm.10`, design `docs/plans/2026-02-11-wasm-timeout-design.md`

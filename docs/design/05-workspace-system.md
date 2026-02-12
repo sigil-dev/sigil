@@ -4,7 +4,7 @@ A workspace is a scoped context with its own sessions, tools, skills, and access
 
 ## Concept
 
-```
+```text
 Gateway
   +-- Workspace: "homelab"
   |   +-- Members: sean
@@ -31,7 +31,7 @@ Gateway
 
 ## Routing Logic
 
-```
+```text
 Message arrives from Telegram group "homelab"
   -> Channel plugin: InboundMessage { chat_id: -100123, sender: @sean }
   -> Gateway router:
@@ -88,6 +88,6 @@ If the agent is corrupted in one workspace (via prompt injection in a group chat
 
 Capability scoping integrates with the enforcer:
 
-```
+```text
 plugin.caps INTERSECT workspace.tools.allow INTERSECT user.role -> ALLOW/DENY
 ```

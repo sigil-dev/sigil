@@ -8,6 +8,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash(task *), Bash(mkdir *)
 Create a new Sigil plugin with the correct structure.
 
 Ask the user (if not provided via $ARGUMENTS):
+
 1. **Plugin type**: provider, channel, tool, or skill
 2. **Plugin name**: lowercase, hyphenated (e.g., `telegram`, `web-search`)
 3. **Execution tier**: wasm, process, or container

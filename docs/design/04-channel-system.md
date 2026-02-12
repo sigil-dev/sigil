@@ -15,7 +15,7 @@ Every channel plugin implements the `Channel` gRPC service:
 
 Users MUST be approved before the agent responds (configurable):
 
-```
+```text
 Message arrives
   |
   v
