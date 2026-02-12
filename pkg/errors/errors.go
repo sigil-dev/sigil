@@ -36,10 +36,13 @@ const (
 	CodePluginDiscoveryFailure           Code = "plugin.discovery.failure"
 	CodePluginNotFound                   Code = "plugin.not_found"
 
-	CodeProviderRequestInvalid  Code = "provider.request.invalid"
-	CodeProviderResponseInvalid Code = "provider.response.invalid"
-	CodeProviderUpstreamFailure Code = "provider.upstream.failure"
-	CodeProviderBudgetExceeded  Code = "provider.budget.exceeded"
+	CodeProviderRequestInvalid    Code = "provider.request.invalid"
+	CodeProviderResponseInvalid   Code = "provider.response.invalid"
+	CodeProviderUpstreamFailure   Code = "provider.upstream.failure"
+	CodeProviderBudgetExceeded    Code = "provider.budget.exceeded"
+	CodeProviderNotFound          Code = "provider.registry.not_found"
+	CodeProviderAllUnavailable    Code = "provider.routing.all_unavailable"
+	CodeProviderNoDefault         Code = "provider.routing.no_default"
 
 	CodeAgentLoopInvalidInput         Code = "agent.loop.invalid_input"
 	CodeAgentLoopFailure             Code = "agent.loop.failure"
