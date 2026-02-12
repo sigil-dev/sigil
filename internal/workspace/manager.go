@@ -60,17 +60,14 @@ type Workspace struct {
 }
 
 // ToolAllowed reports whether the given capability is permitted by this
-// workspace's tool configuration. Deny patterns are evaluated first; if
-// the deny set matches, the tool is blocked. If an allow set is configured
-// and does not match, the tool is also blocked.
+// workspace's tool configuration. Uses fail-closed semantics: if no allow
+// patterns are configured, all tools are denied. Deny patterns are
+// evaluated first; then the allow set must explicitly permit the capability.
 func (w *Workspace) ToolAllowed(capability string) bool {
 	if w.denySet.Contains(capability) {
 		return false
 	}
-	if len(w.Config.Tools.Allow) > 0 && !w.allowSet.Contains(capability) {
-		return false
-	}
-	return true
+	return w.allowSet.Contains(capability)
 }
 
 // Manager creates, caches, and routes to workspaces.
@@ -92,12 +89,30 @@ func NewManager(dataDir string, storeCfg *store.StorageConfig) *Manager {
 	}
 }
 
-// SetConfig replaces the workspace configuration. Existing open workspaces
-// are not affected until they are re-opened.
-func (m *Manager) SetConfig(cfg Config) {
+// SetConfig replaces the workspace configuration. Returns an error if any
+// channel binding appears in more than one workspace (non-deterministic routing).
+// Existing open workspaces are not affected until they are re-opened.
+func (m *Manager) SetConfig(cfg Config) error {
+	// Validate binding uniqueness.
+	seen := make(map[string]string) // "channel:channelID" → workspaceID
+	for wsID, wsCfg := range cfg {
+		for _, b := range wsCfg.Bindings {
+			key := b.Channel + ":" + b.ChannelID
+			if existingWS, ok := seen[key]; ok {
+				return sigilerr.Errorf(
+					sigilerr.CodeWorkspaceConfigInvalid,
+					"duplicate channel binding %s/%s: bound to both %s and %s",
+					b.Channel, b.ChannelID, existingWS, wsID,
+				)
+			}
+			seen[key] = wsID
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config = cfg
+	return nil
 }
 
 // Open returns (and caches) a Workspace for the given ID. The workspace

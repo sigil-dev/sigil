@@ -267,7 +267,12 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 			if choice.FinishReason == "tool_calls" {
 				for idx, acc := range toolCalls {
 					if !json.Valid([]byte(acc.partialArgs)) {
-						acc.partialArgs = "{}"
+						p.health.RecordFailure()
+						ch <- provider.ChatEvent{
+							Type:  provider.EventTypeError,
+							Error: fmt.Sprintf("openrouter: tool call %q has invalid JSON arguments", acc.name),
+						}
+						return
 					}
 					ch <- provider.ChatEvent{
 						Type: provider.EventTypeToolCall,
@@ -306,7 +311,12 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 	// Emit any remaining tool calls that weren't flushed by a finish_reason.
 	for idx, acc := range toolCalls {
 		if !json.Valid([]byte(acc.partialArgs)) {
-			acc.partialArgs = "{}"
+			p.health.RecordFailure()
+			ch <- provider.ChatEvent{
+				Type:  provider.EventTypeError,
+				Error: fmt.Sprintf("openrouter: tool call %q has invalid JSON arguments", acc.name),
+			}
+			return
 		}
 		ch <- provider.ChatEvent{
 			Type: provider.EventTypeToolCall,

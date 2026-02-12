@@ -322,34 +322,74 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	return session, messages, nil
 }
 
+// maxProviderAttempts is the maximum number of providers to try (primary + failovers)
+// before giving up in callLLM.
+const maxProviderAttempts = 4
+
 func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.Session, messages []provider.Message) (<-chan provider.ChatEvent, error) {
 	modelName := session.ModelOverride
 	if modelName == "" {
 		modelName = "default"
 	}
 
-	prov, resolvedModel, err := l.providerRouter.Route(ctx, workspaceID, modelName)
-	if err != nil {
-		// Propagate budget errors directly so callers can handle them.
-		if sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded) {
-			return nil, err
+	var lastErr error
+	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
+		prov, resolvedModel, err := l.providerRouter.Route(ctx, workspaceID, modelName)
+		if err != nil {
+			if sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded) {
+				return nil, err
+			}
+			lastErr = err
+			break
 		}
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "routing provider for workspace %s", workspaceID)
+
+		req := provider.ChatRequest{
+			Model:        resolvedModel,
+			Messages:     messages,
+			SystemPrompt: defaultSystemPrompt,
+			Options:      provider.ChatOptions{Stream: true},
+		}
+
+		eventCh, err := prov.Chat(ctx, req)
+		if err != nil {
+			lastErr = sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "chat call to %s", prov.Name())
+			continue
+		}
+
+		// Peek at the first event to detect immediate upstream failures
+		// (auth errors, rate limits, provider down). Providers call
+		// RecordFailure() before sending the error event, so the next
+		// Route call will skip this provider via the failover chain.
+		firstEvent, ok := <-eventCh
+		if !ok {
+			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: stream closed without events", prov.Name())
+			continue
+		}
+
+		if firstEvent.Type == provider.EventTypeError {
+			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: %s", prov.Name(), firstEvent.Error)
+			// Drain remaining events so the goroutine can exit.
+			for range eventCh {
+			}
+			continue
+		}
+
+		// First event is valid — wrap it back with the rest of the stream.
+		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
+		wrappedCh <- firstEvent
+		go func() {
+			defer close(wrappedCh)
+			for ev := range eventCh {
+				wrappedCh <- ev
+			}
+		}()
+		return wrappedCh, nil
 	}
 
-	req := provider.ChatRequest{
-		Model:        resolvedModel,
-		Messages:     messages,
-		SystemPrompt: defaultSystemPrompt,
-		Options:      provider.ChatOptions{Stream: true},
+	if lastErr != nil {
+		return nil, sigilerr.Wrapf(lastErr, sigilerr.CodeProviderAllUnavailable, "all providers failed for workspace %s", workspaceID)
 	}
-
-	eventCh, err := prov.Chat(ctx, req)
-	if err != nil {
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "chat call to %s", prov.Name())
-	}
-
-	return eventCh, nil
+	return nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, "no providers available for workspace "+workspaceID)
 }
 
 func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*provider.ToolCall, *provider.Usage, error) {

@@ -111,7 +111,10 @@ func (r *Registry) RouteWithBudget(ctx context.Context, workspaceID, modelName s
 	defer r.mu.RUnlock()
 
 	// 2. Determine the ref to use.
-	ref := r.resolveRef(workspaceID, modelName)
+	ref, err := r.resolveRef(workspaceID, modelName)
+	if err != nil {
+		return nil, "", err
+	}
 	if ref == "" {
 		return nil, "", sigilerr.New(
 			sigilerr.CodeProviderNoDefault,
@@ -159,20 +162,27 @@ func (r *Registry) Close() error {
 
 // resolveRef determines which "provider/model" ref to use.
 // Caller must hold r.mu (at least RLock).
-func (r *Registry) resolveRef(workspaceID, modelName string) string {
-	// Explicit model name takes precedence if it contains a slash.
-	if modelName != "" && strings.Contains(modelName, "/") {
-		return modelName
+// Returns an error for non-qualified model names (missing "provider/" prefix).
+func (r *Registry) resolveRef(workspaceID, modelName string) (string, error) {
+	// Explicit model name must use "provider/model" format.
+	if modelName != "" && modelName != "default" {
+		if !strings.Contains(modelName, "/") {
+			return "", sigilerr.Errorf(
+				sigilerr.CodeProviderInvalidModelRef,
+				"model name %q must use provider/model format", modelName,
+			)
+		}
+		return modelName, nil
 	}
 
 	// Workspace override.
 	if workspaceID != "" {
 		if override, ok := r.overrides[workspaceID]; ok {
-			return override
+			return override, nil
 		}
 	}
 
-	return r.defaultRef
+	return r.defaultRef, nil
 }
 
 // tryRef parses a "provider/model" ref, looks up the provider, and checks

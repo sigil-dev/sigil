@@ -49,17 +49,35 @@ func (m *mockUserStore) Delete(context.Context, string) error                   
 
 // --- Mock PairingStore ---
 
+// mockPairingStore returns an active pairing for any channel lookup.
 type mockPairingStore struct{}
 
 func (m *mockPairingStore) Create(context.Context, *store.Pairing) error { return nil }
-func (m *mockPairingStore) GetByChannel(context.Context, string, string) (*store.Pairing, error) {
-	return nil, nil
+func (m *mockPairingStore) GetByChannel(_ context.Context, channelType, channelID string) (*store.Pairing, error) {
+	return &store.Pairing{
+		ID:          "pairing-1",
+		ChannelType: channelType,
+		ChannelID:   channelID,
+		Status:      store.PairingStatusActive,
+	}, nil
 }
 
 func (m *mockPairingStore) GetByUser(context.Context, string) ([]*store.Pairing, error) {
 	return nil, nil
 }
 func (m *mockPairingStore) Delete(context.Context, string) error { return nil }
+
+// mockNoPairingStore returns ErrNotFound for all pairing lookups.
+type mockNoPairingStore struct{}
+
+func (m *mockNoPairingStore) Create(context.Context, *store.Pairing) error { return nil }
+func (m *mockNoPairingStore) GetByChannel(context.Context, string, string) (*store.Pairing, error) {
+	return nil, fmt.Errorf("no pairing: %w", store.ErrNotFound)
+}
+func (m *mockNoPairingStore) GetByUser(context.Context, string) ([]*store.Pairing, error) {
+	return nil, nil
+}
+func (m *mockNoPairingStore) Delete(context.Context, string) error { return nil }
 
 // --- Tests ---
 
@@ -112,6 +130,23 @@ func TestResolver_BackendFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, identity.CodeIdentityBackendFailure))
 	assert.False(t, sigilerr.HasCode(err, identity.CodeIdentityUserNotFound))
+}
+
+func TestResolver_PairingRequired(t *testing.T) {
+	user := &store.User{
+		ID:   "user-1",
+		Name: "Alice",
+		Role: "member",
+		Identities: []store.UserIdentity{
+			{UserID: "user-1", Platform: "telegram", PlatformUserID: "tg-alice", DisplayName: "Alice TG"},
+		},
+	}
+	users := newMockUserStore(user)
+	r := identity.NewResolver(users, &mockNoPairingStore{})
+
+	_, err := r.Resolve(context.Background(), "telegram", "tg-alice")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, identity.CodeIdentityPairingRequired))
 }
 
 func TestResolver_ResolvePlatformUser_MultiplePlatforms(t *testing.T) {

@@ -608,9 +608,9 @@ func TestAgentLoop_RouterNonBudgetFailure(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Nil(t, out)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
-		"expected CodeAgentLoopFailure, got %s", sigilerr.CodeOf(err))
-	assert.Contains(t, err.Error(), "routing provider")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderAllUnavailable),
+		"expected CodeProviderAllUnavailable, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "all providers failed")
 }
 
 // ---------------------------------------------------------------------------

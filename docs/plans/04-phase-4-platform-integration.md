@@ -1059,6 +1059,6 @@ After completing all 7 tasks, verify:
 - [ ] Budget enforcement denies requests exceeding limits
 - [ ] Anthropic provider sends/receives streaming chat (integration test with API key)
 - [ ] OpenAI, Google, and OpenRouter providers implement the provider interface
-- [ ] OpenRouter reuses OpenAI SDK with correct base URL (`https://openrouter.io/api/v1`)
+- [ ] OpenRouter reuses OpenAI SDK with correct base URL (`https://openrouter.ai/api/v1`)
 
 Only proceed to Phase 5 after all checks pass.

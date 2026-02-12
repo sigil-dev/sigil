@@ -54,7 +54,7 @@ func TestManager_RouteMessage(t *testing.T) {
 			},
 		},
 	}
-	m.SetConfig(cfg)
+	require.NoError(t, m.SetConfig(cfg))
 
 	// Route a message from a bound channel.
 	ws, err := m.Route(context.Background(), workspace.RouteRequest{
@@ -86,7 +86,7 @@ func TestManager_MembershipCheck(t *testing.T) {
 			},
 		},
 	}
-	m.SetConfig(cfg)
+	require.NoError(t, m.SetConfig(cfg))
 
 	// Non-member should be denied.
 	_, err := m.Route(context.Background(), workspace.RouteRequest{
@@ -110,7 +110,7 @@ func TestManager_ToolAllowlist(t *testing.T) {
 			},
 		},
 	}
-	m.SetConfig(cfg)
+	require.NoError(t, m.SetConfig(cfg))
 
 	ws, err := m.Open(context.Background(), "tooled")
 	require.NoError(t, err)
