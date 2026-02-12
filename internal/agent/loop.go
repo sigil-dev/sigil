@@ -332,11 +332,21 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		modelName = "default"
 	}
 
+	// Build budget from session token limits so the router can enforce them.
+	budget := &provider.Budget{
+		MaxSessionTokens:  session.TokenBudget.MaxPerSession,
+		UsedSessionTokens: session.TokenBudget.UsedSession,
+	}
+
 	var lastErr error
 	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
-		prov, resolvedModel, err := l.providerRouter.Route(ctx, workspaceID, modelName)
+		prov, resolvedModel, err := l.providerRouter.RouteWithBudget(ctx, workspaceID, modelName, budget)
 		if err != nil {
-			if sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded) {
+			// Propagate specific routing errors directly instead of masking
+			// them as "all providers unavailable".
+			if sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded) ||
+				sigilerr.HasCode(err, sigilerr.CodeProviderInvalidModelRef) ||
+				sigilerr.HasCode(err, sigilerr.CodeProviderNoDefault) {
 				return nil, err
 			}
 			lastErr = err
@@ -375,6 +385,12 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		}
 
 		// First event is valid — wrap it back with the rest of the stream.
+		// NOTE: Failover only covers first-event failures (auth errors, rate
+		// limits, provider down). Mid-stream failures are not retried because
+		// replaying the full conversation to a fallback provider requires
+		// buffering all events and resending all messages — significant
+		// complexity with partial-output ambiguity. Mid-stream errors surface
+		// to the caller via processEvents. See sigil-dxw for tracking.
 		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
 		wrappedCh <- firstEvent
 		go func() {

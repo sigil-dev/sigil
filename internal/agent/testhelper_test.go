@@ -231,6 +231,10 @@ func (r *mockProviderRouter) Route(_ context.Context, _, _ string) (provider.Pro
 	return r.provider, "mock-model", nil
 }
 
+func (r *mockProviderRouter) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
+	return r.provider, "mock-model", nil
+}
+
 func (r *mockProviderRouter) RegisterProvider(_ string, _ provider.Provider) error { return nil }
 func (r *mockProviderRouter) Close() error                                         { return nil }
 
@@ -243,6 +247,10 @@ func newMockProviderRouter() *mockProviderRouter {
 type mockProviderRouterBudgetExceeded struct{}
 
 func (r *mockProviderRouterBudgetExceeded) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded for workspace")
+}
+
+func (r *mockProviderRouterBudgetExceeded) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
 	return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded for workspace")
 }
 
@@ -362,6 +370,51 @@ func (p *mockProviderCapturing) getCapturedMessages() []provider.Message {
 func newMockProviderRouterCapturing(capturer *mockProviderCapturing) *mockProviderRouter {
 	return &mockProviderRouter{provider: capturer}
 }
+
+// mockProviderRouterBudgetAware routes normally but enforces budget via RouteWithBudget.
+// It also captures the budget passed to RouteWithBudget for assertions.
+type mockProviderRouterBudgetAware struct {
+	provider      provider.Provider
+	mu            sync.Mutex
+	capturedBudget *provider.Budget
+}
+
+func (r *mockProviderRouterBudgetAware) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return r.provider, "mock-model", nil
+}
+
+func (r *mockProviderRouterBudgetAware) RouteWithBudget(_ context.Context, _, _ string, budget *provider.Budget) (provider.Provider, string, error) {
+	r.mu.Lock()
+	r.capturedBudget = budget
+	r.mu.Unlock()
+	if budget != nil && budget.MaxSessionTokens > 0 && budget.UsedSessionTokens >= budget.MaxSessionTokens {
+		return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded")
+	}
+	return r.provider, "mock-model", nil
+}
+
+func (r *mockProviderRouterBudgetAware) RegisterProvider(_ string, _ provider.Provider) error { return nil }
+func (r *mockProviderRouterBudgetAware) Close() error                                         { return nil }
+
+func (r *mockProviderRouterBudgetAware) getCapturedBudget() *provider.Budget {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.capturedBudget
+}
+
+// mockProviderRouterInvalidModelRef always returns an invalid-model-ref error.
+type mockProviderRouterInvalidModelRef struct{}
+
+func (r *mockProviderRouterInvalidModelRef) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return nil, "", sigilerr.New(sigilerr.CodeProviderInvalidModelRef, "model name must use provider/model format")
+}
+
+func (r *mockProviderRouterInvalidModelRef) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
+	return nil, "", sigilerr.New(sigilerr.CodeProviderInvalidModelRef, "model name must use provider/model format")
+}
+
+func (r *mockProviderRouterInvalidModelRef) RegisterProvider(_ string, _ provider.Provider) error { return nil }
+func (r *mockProviderRouterInvalidModelRef) Close() error                                         { return nil }
 
 // ---------------------------------------------------------------------------
 // Audit store mock

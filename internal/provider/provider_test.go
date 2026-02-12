@@ -219,6 +219,11 @@ func TestProviderInterface_RouterContract(t *testing.T) {
 		_ = routeFunc(nil) // compiles only if signature is correct
 	})
 
+	t.Run("RouteWithBudget signature accepts budget parameter", func(t *testing.T) {
+		type routeWithBudgetFunc func(ctx context.Context, workspaceID, modelName string, budget *provider.Budget) (provider.Provider, string, error)
+		_ = routeWithBudgetFunc(nil)
+	})
+
 	t.Run("RegisterProvider signature accepts name and Provider", func(t *testing.T) {
 		type registerFunc func(name string, provider provider.Provider) error
 		_ = registerFunc(nil)

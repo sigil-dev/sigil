@@ -613,6 +613,102 @@ func TestAgentLoop_RouterNonBudgetFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "all providers failed")
 }
 
+func TestAgentLoop_BudgetWiredThroughSessionTokens(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Set session token budget — within limits.
+	session.TokenBudget.MaxPerSession = 10000
+	session.TokenBudget.UsedSession = 500
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	budgetRouter := &mockProviderRouterBudgetAware{provider: &mockProvider{}}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: budgetRouter,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Verify the router received the session's budget.
+	captured := budgetRouter.getCapturedBudget()
+	require.NotNil(t, captured, "RouteWithBudget should have been called with a budget")
+	assert.Equal(t, 10000, captured.MaxSessionTokens)
+	assert.Equal(t, 500, captured.UsedSessionTokens)
+}
+
+func TestAgentLoop_BudgetWiredEnforcesLimit(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Set session token budget — exceeded.
+	session.TokenBudget.MaxPerSession = 1000
+	session.TokenBudget.UsedSession = 1000
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	budgetRouter := &mockProviderRouterBudgetAware{provider: &mockProvider{}}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: budgetRouter,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded),
+		"expected CodeProviderBudgetExceeded, got %s", sigilerr.CodeOf(err))
+}
+
+func TestAgentLoop_InvalidModelRefNotMasked(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouterInvalidModelRef{},
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	// The error code should be invalid_model_ref, NOT all_unavailable.
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderInvalidModelRef),
+		"expected CodeProviderInvalidModelRef, got %s", sigilerr.CodeOf(err))
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeProviderAllUnavailable),
+		"invalid_model_ref should NOT be wrapped as all_unavailable")
+}
+
 // ---------------------------------------------------------------------------
 // Tool dispatch mock providers
 // ---------------------------------------------------------------------------
@@ -907,6 +1003,10 @@ func (p *mockProviderChatError) Chat(_ context.Context, _ provider.ChatRequest) 
 type mockProviderRouterGenericError struct{}
 
 func (r *mockProviderRouterGenericError) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return nil, "", assert.AnError
+}
+
+func (r *mockProviderRouterGenericError) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget) (provider.Provider, string, error) {
 	return nil, "", assert.AnError
 }
 

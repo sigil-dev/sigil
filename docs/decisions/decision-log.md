@@ -453,3 +453,21 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** Sigil already requires CGO for sqlite3/sqlite-vec, but the CGO Wasm runtimes have significant build-chain problems. More importantly, Sigil plugins aren't smart contracts — the security goal is bounding runaway execution, not deterministic per-instruction billing. Context timeout is idiomatic Go, zero new dependencies, and Wazero supports it natively. Wazero's pure-Go nature remains valuable for cross-platform builds even though CGO is already required for other dependencies.
 
 **Ref:** bead `sigil-anm.10`, design `docs/plans/2026-02-11-wasm-timeout-design.md`
+
+---
+
+## D036: Provider Failover — First-Event Only, Not Mid-Stream
+
+**Question:** Should provider failover retry on mid-stream failures, or only on initial connection/first-event failures?
+
+**Options considered:**
+
+- Full mid-stream retry (buffer all events, replay conversation to fallback) — deferred: requires buffering entire stream, resending all messages to new provider, handling partial-output ambiguity (user may have already seen partial text). Significant complexity.
+- First-event-only retry (current) — chosen: catches auth errors, rate limits, and provider-down scenarios which are the most common failure modes. Clean and predictable.
+- No retry (fail immediately) — rejected: too brittle for multi-provider deployments.
+
+**Decision:** Failover retries on first-event failures only. Mid-stream failures surface to the caller as errors. Full mid-stream retry deferred as future work.
+
+**Rationale:** Most provider failures manifest immediately (auth, rate limit, 503). Mid-stream failures (network drop, timeout) are rare and would require fundamentally different architecture — buffering all events, managing partial output state, and replaying the full conversation. The complexity cost doesn't justify the edge case coverage at this stage.
+
+**Ref:** PR #12 review finding 4, bead `sigil-dxw`

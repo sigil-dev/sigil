@@ -41,6 +41,10 @@ type Router interface {
 	// Returns the provider and resolved model ID.
 	Route(ctx context.Context, workspaceID, modelName string) (Provider, string, error)
 
+	// RouteWithBudget selects a provider and enforces token budget constraints.
+	// Callers should prefer this over Route when budget context is available.
+	RouteWithBudget(ctx context.Context, workspaceID, modelName string, budget *Budget) (Provider, string, error)
+
 	// RegisterProvider adds a provider to the router.
 	RegisterProvider(name string, provider Provider) error
 
