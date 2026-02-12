@@ -65,7 +65,7 @@ tasks:
       - task: lint:markdown
       - task: lint:yaml
       # TODO: restore when UI exists
-      - task: ui:check
+      #- task: ui:check
   lint:go:
     desc: Lint Go code
     cmds:
