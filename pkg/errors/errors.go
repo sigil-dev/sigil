@@ -35,6 +35,7 @@ const (
 	CodePluginLifecycleTransitionInvalid Code = "plugin.lifecycle.transition.invalid"
 	CodePluginDiscoveryFailure           Code = "plugin.discovery.failure"
 	CodePluginNotFound                   Code = "plugin.not_found"
+	CodePluginChannelNotFound            Code = "plugin.channel.not_found"
 
 	CodeProviderRequestInvalid  Code = "provider.request.invalid"
 	CodeProviderResponseInvalid Code = "provider.response.invalid"
