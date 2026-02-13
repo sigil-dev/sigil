@@ -4,7 +4,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -27,15 +29,47 @@ func newWorkspaceCmd() *cobra.Command {
 }
 
 func newWorkspaceListCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all workspaces",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			// TODO: Connect to gateway API once server is implemented.
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), "No workspaces configured")
-			return err
-		},
+		RunE:  runWorkspaceList,
 	}
+
+	cmd.Flags().String("address", "127.0.0.1:18789", "gateway address")
+
+	return cmd
+}
+
+func runWorkspaceList(cmd *cobra.Command, _ []string) error {
+	addr, _ := cmd.Flags().GetString("address")
+	out := cmd.OutOrStdout()
+
+	gw := newGatewayClient(addr)
+	var body struct {
+		Workspaces []struct {
+			ID          string `json:"id"`
+			Description string `json:"description"`
+		} `json:"workspaces"`
+	}
+	if err := gw.getJSON("/api/v1/workspaces", &body); err != nil {
+		if errors.Is(err, ErrGatewayNotRunning) {
+			_, _ = fmt.Fprintf(out, "Gateway at %s is not running (connection refused)\n", addr)
+			return nil
+		}
+		return fmt.Errorf("listing workspaces: %w", err)
+	}
+
+	if len(body.Workspaces) == 0 {
+		_, _ = fmt.Fprintln(out, "No workspaces found")
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "ID\tDESCRIPTION")
+	for _, ws := range body.Workspaces {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\n", ws.ID, ws.Description)
+	}
+	return tw.Flush()
 }
 
 func newWorkspaceCreateCmd() *cobra.Command {

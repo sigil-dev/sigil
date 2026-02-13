@@ -76,7 +76,7 @@ func TestStatusCommand_Help(t *testing.T) {
 
 func TestStatusCommand_HealthyGateway(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		if r.URL.Path != "/api/v1/status" {
 			http.NotFound(w, r)
 			return
 		}
@@ -85,9 +85,9 @@ func TestStatusCommand_HealthyGateway(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	old := statusClient
-	statusClient = srv.Client()
-	defer func() { statusClient = old }()
+	old := defaultHTTPClient
+	defaultHTTPClient = srv.Client()
+	defer func() { defaultHTTPClient = old }()
 
 	// Extract host:port from test server URL (strip "http://").
 	addr := srv.URL[len("http://"):]
