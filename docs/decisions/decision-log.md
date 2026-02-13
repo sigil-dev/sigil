@@ -643,6 +643,8 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 
 ## D050: ErrNotFound Sentinel for REST Error Differentiation
 
+> **Superseded by D054.** The sentinel pattern described below was replaced with `sigilerr.CodeServerEntityNotFound` + `server.IsNotFound()` in PR #13 round 6. See D054 for current approach.
+
 **Question:** How should REST GET handlers distinguish "entity not found" (404) from internal errors (500)?
 
 **Options considered:**
@@ -651,9 +653,9 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 - Custom error types with interface assertion — more complex than needed for a single distinction.
 - Sentinel error with `errors.Is()` (chosen) — idiomatic Go, simple, extensible.
 
-**Decision:** All service implementations wrap not-found errors with `server.ErrNotFound` sentinel. GET handlers use `errors.Is(err, ErrNotFound)` to return 404; all other errors return 500. This matches the existing pattern in `handleReloadPlugin` and is now applied consistently to `handleGetWorkspace`, `handleGetSession`, and `handleGetPlugin`.
+**Decision:** ~~All service implementations wrap not-found errors with `server.ErrNotFound` sentinel. GET handlers use `errors.Is(err, ErrNotFound)` to return 404; all other errors return 500.~~ Superseded — see D054.
 
-**Rationale:** Mapping all service errors to 404 (the original behavior) masks internal failures — a database connection error would appear as "not found" to the client, making debugging impossible. The sentinel pattern is already established in the codebase (`server.ErrNotFound` existed for reload) and is standard Go idiom.
+**Rationale:** Mapping all service errors to 404 (the original behavior) masks internal failures — a database connection error would appear as "not found" to the client, making debugging impossible. This rationale still applies; only the mechanism changed.
 
 **Ref:** PR #13 review round 4
 
@@ -673,7 +675,7 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 
 **Decision:** Keep `/api/v1/status`. The plan is not retroactively edited; this deviation is documented here.
 
-**Rationale:** `/health` is a minimal liveness probe (returns 200 OK with no payload) intended for load balancers and orchestrators. `/api/v1/status` returns richer gateway status information (version, uptime, component health) that is actually useful for the `sigil status` CLI command. Using the richer endpoint gives operators actionable output.
+**Rationale:** `/health` is a minimal liveness probe (returns 200 OK with no payload) intended for load balancers and orchestrators. `/api/v1/status` is the designated gateway status endpoint for CLI and operator use. In Phase 5 it returns `{"status": "ok"}` as a stub; future phases will enrich the response with version, uptime, and component health per the design doc. The endpoint choice is correct even though the response is not yet enriched — the CLI is wired to the right path for when richer data is added.
 
 **Ref:** PR #13 review round 5
 
@@ -686,3 +688,42 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** Design docs describe what the system will eventually do. Phase scoping is handled in plan docs and decision log entries. Adding phase annotations to every design doc section would create maintenance burden and clutter the architectural narrative.
 
 **Ref:** PR #13 review round 5
+
+## D054: Replace Error Sentinels with sigilerr Structured Error Codes
+
+**Question:** D050 introduced `server.ErrNotFound` as a sentinel checked via `errors.Is()`. The rest of the codebase uses `sigilerr` structured error codes with `sigilerr.HasCode()`. Should the server layer follow the same pattern?
+
+**Decision:** Replace `server.ErrNotFound` sentinel with `sigilerr.CodeServerEntityNotFound`. Route handlers use `server.IsNotFound(err)` (which calls `sigilerr.HasCode`) instead of `errors.Is(err, ErrNotFound)`. Service adapters return `sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, ...)`. The plugin adapter translates `CodePluginNotFound` → `CodeServerEntityNotFound` at the boundary.
+
+**Rationale:** Using two error classification mechanisms (sentinels + error codes) in the same codebase creates translation gaps at boundaries. The plugin manager returned `CodePluginNotFound` but the server expected a sentinel, so adapters had to bridge them manually — and the initial implementation missed this, causing 404s to surface as 500s. A single mechanism (`sigilerr.HasCode`) eliminates this class of bug. Supersedes D050.
+
+**Ref:** PR #13 review round 6
+
+## D055: Session List Returns Empty Array in Phase 5
+
+**Question:** `sessionServiceAdapter.List` returns an empty array and nil error. Should it return a "not implemented" error instead, or is the empty array acceptable?
+
+**Decision:** Return empty array. This is semantically correct — there are zero sessions because the agent loop is not yet wired. The adapter comment documents the deferral. An empty list is not misleading; it accurately reflects the system state in Phase 5.
+
+**Rationale:** Returning an error would break the API contract (`GET /api/v1/workspaces/{id}/sessions` should return a list, possibly empty). Clients consuming the API would need special "not implemented" error handling that adds no value and would be removed when sessions are wired in a later phase. The in-code comment in `wire.go` plus this decision provide sufficient documentation.
+
+**Ref:** PR #13 review round 7
+
+## D056: Mandate sigilerr Structured Errors for All Production Code
+
+**Question:** The codebase has ~67 remaining `fmt.Errorf`/`errors.New` sites in production code alongside ~284 `sigilerr` sites. Should we mandate structured errors everywhere?
+
+**Decision:** Yes. All production Go code (excluding generated code in `internal/gen/`) MUST use `sigilerr` for error creation. Specifically:
+
+- **MUST** use `sigilerr.Errorf`, `sigilerr.New`, `sigilerr.Wrap`, or `sigilerr.Wrapf` instead of `fmt.Errorf` or `errors.New`.
+- **MUST** use `sigilerr.HasCode` for error classification instead of `errors.Is` with sentinels.
+- **MUST** assign an appropriate error code from `pkg/errors` for every error site.
+- **SHOULD** add new error codes to `pkg/errors/errors.go` when no existing code fits.
+- **MAY** use `fmt.Errorf` in test files for creating mock/stub errors that don't participate in error classification.
+- Existing sentinel vars (e.g., `store.ErrNotFound`, `store.ErrConflict`) will be replaced with `IsXxx()` helpers using `sigilerr.HasCode`, following the pattern established in D054.
+
+**Rationale:** Mixed error patterns create translation gaps at subsystem boundaries (demonstrated by the 404→500 bug in PR #13). Structured errors provide machine-readable codes, structured context (via `sigilerr.Field`), and consistent classification. The `samber/oops` foundation already supports all needed patterns. A single error mechanism across the codebase eliminates an entire class of boundary bugs and enables future error reporting/observability.
+
+**Migration tracked in:** sigil-c99
+
+**Ref:** PR #13 review round 7
