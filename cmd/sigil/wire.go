@@ -91,6 +91,10 @@ func WireGateway(cfg *config.Config, dataDir string) (*Gateway, error) {
 		Users:      &userServiceAdapter{store: gs.Users()},
 	})
 
+	// Register stub stream handler so chat endpoints return a helpful
+	// message instead of 503. Will be replaced by real agent loop.
+	srv.RegisterStreamHandler(&stubStreamHandler{})
+
 	return &Gateway{
 		Server:           srv,
 		GatewayStore:     gs,
@@ -218,6 +222,21 @@ func (a *sessionServiceAdapter) Get(_ context.Context, _, _ string) (*server.Ses
 // userServiceAdapter bridges GatewayStore users to the server's UserService.
 type userServiceAdapter struct {
 	store store.UserStore
+}
+
+// stubStreamHandler returns a placeholder message until a real agent loop is wired.
+type stubStreamHandler struct{}
+
+func (h *stubStreamHandler) HandleStream(_ context.Context, _ server.ChatStreamRequest, events chan<- server.SSEEvent) {
+	events <- server.SSEEvent{
+		Event: "text_delta",
+		Data:  `{"text":"Agent not yet configured. Please set up a provider and workspace."}`,
+	}
+	events <- server.SSEEvent{
+		Event: "done",
+		Data:  `{}`,
+	}
+	close(events)
 }
 
 func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, error) {
