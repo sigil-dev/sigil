@@ -48,7 +48,7 @@ sigil
 +-- version
 ```
 
-**Phase 5 scope**: `start`, `status`, `version`, `workspace list`, `plugin list`, `session list`, `chat` (stub), `doctor` (stub). Remaining commands (`channel`, `skill`, `node`, `user`, `config`, full `doctor` subcommands, and CRUD operations on workspace/plugin/session) are deferred to later phases.
+**Phase 5 scope**: `start`, `status`, `version`, `workspace list`, `plugin list`, `session list`, `chat` (stub), `doctor` (stub). Remaining commands (`channel`, `skill`, `node`, `user`, `config`, full `doctor` subcommands, and CRUD operations on workspace/plugin/session) are deferred to Phase 6 (Advanced Features). Tracked in `sigil-n6m`.
 
 ### Viper Config Resolution (standard precedence)
 
