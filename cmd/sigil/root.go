@@ -4,6 +4,7 @@
 package main
 
 import (
+	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -41,10 +42,14 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
-// initViper binds Cobra flags to Viper keys so the standard precedence
+// initViper sets up the global Viper with defaults, env bindings, flag
+// bindings, and optional config file so the standard precedence
 // (flag > env > file > defaults) is handled uniformly.
 func initViper(cmd *cobra.Command) error {
 	v := viper.GetViper()
+
+	config.SetDefaults(v)
+	config.SetupEnv(v)
 
 	if cfgFile, _ := cmd.Flags().GetString("config"); cfgFile != "" {
 		v.SetConfigFile(cfgFile)

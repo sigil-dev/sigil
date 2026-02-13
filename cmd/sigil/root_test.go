@@ -5,6 +5,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,4 +72,44 @@ func TestStatusCommand_Help(t *testing.T) {
 	err := root.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "status")
+}
+
+func TestStatusCommand_HealthyGateway(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer srv.Close()
+
+	old := statusClient
+	statusClient = srv.Client()
+	defer func() { statusClient = old }()
+
+	// Extract host:port from test server URL (strip "http://").
+	addr := srv.URL[len("http://"):]
+
+	root := NewRootCmd()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{"status", "--address", addr})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "ok")
+}
+
+func TestStatusCommand_GatewayDown(t *testing.T) {
+	// Use an address that will refuse connections.
+	root := NewRootCmd()
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetArgs([]string{"status", "--address", "127.0.0.1:1"})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "not running")
 }

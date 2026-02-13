@@ -92,12 +92,8 @@ type ToolsConfig struct {
 	Deny  []string `mapstructure:"deny"`
 }
 
-// Load reads configuration from the given path (or defaults) with
-// environment variable overrides (prefix SIGIL_).
-func Load(path string) (*Config, error) {
-	v := viper.New()
-
-	// Defaults
+// SetDefaults applies Sigil's default configuration values to v.
+func SetDefaults(v *viper.Viper) {
 	v.SetDefault("networking.mode", "local")
 	v.SetDefault("networking.listen", "127.0.0.1:18789")
 	v.SetDefault("storage.backend", "sqlite")
@@ -108,20 +104,19 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("models.default", "anthropic/claude-sonnet-4-5")
 	v.SetDefault("models.budgets.per_session_tokens", 100000)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
+}
 
-	// Environment
+// SetupEnv configures environment variable binding on v with prefix SIGIL_.
+func SetupEnv(v *viper.Viper) {
 	v.SetEnvPrefix("SIGIL")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+}
 
-	// File
-	if path != "" {
-		v.SetConfigFile(path)
-		if err := v.ReadInConfig(); err != nil {
-			return nil, sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config %s: %w", path, err)
-		}
-	}
-
+// FromViper unmarshals and validates a Config from an already-configured
+// Viper instance. Use this when flags and env vars are bound to v externally
+// (e.g. from Cobra CLI flag bindings).
+func FromViper(v *viper.Viper) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeConfigParseInvalidFormat, "unmarshalling config: %w", err)
@@ -132,6 +127,25 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// Load reads configuration from the given path (or defaults) with
+// environment variable overrides (prefix SIGIL_).
+// For CLI usage where flags are bound to a shared Viper, prefer FromViper.
+func Load(path string) (*Config, error) {
+	v := viper.New()
+
+	SetDefaults(v)
+	SetupEnv(v)
+
+	if path != "" {
+		v.SetConfigFile(path)
+		if err := v.ReadInConfig(); err != nil {
+			return nil, sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config %s: %w", path, err)
+		}
+	}
+
+	return FromViper(v)
 }
 
 // Validate checks the configuration for logical errors.

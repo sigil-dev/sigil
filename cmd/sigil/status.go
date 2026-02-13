@@ -4,7 +4,12 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -22,13 +27,46 @@ func newStatusCmd() *cobra.Command {
 	return cmd
 }
 
+// statusClient is the HTTP client used for health checks. Overridden in tests.
+var statusClient = &http.Client{
+	Timeout: 5 * time.Second,
+}
+
 func runStatus(cmd *cobra.Command, _ []string) error {
 	addr, _ := cmd.Flags().GetString("address")
+	out := cmd.OutOrStdout()
 
-	// TODO: HTTP call to /health endpoint once server is implemented (Task 1/7).
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Checking status at %s...\n", addr); err != nil {
-		return err
+	resp, err := statusClient.Get("http://" + addr + "/health")
+	if err != nil {
+		if isConnRefused(err) {
+			_, _ = fmt.Fprintf(out, "Gateway at %s is not running (connection refused)\n", addr)
+			return nil
+		}
+		return fmt.Errorf("health check failed: %w", err)
 	}
-	_, err := fmt.Fprintln(cmd.OutOrStdout(), "Gateway is not running (connection refused)")
-	return err
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		_, _ = fmt.Fprintf(out, "Gateway at %s returned status %d\n", addr, resp.StatusCode)
+		return nil
+	}
+
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		_, _ = fmt.Fprintf(out, "Gateway at %s is reachable but returned invalid response\n", addr)
+		return nil
+	}
+
+	_, _ = fmt.Fprintf(out, "Gateway at %s: %s\n", addr, body.Status)
+	return nil
+}
+
+func isConnRefused(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op == "dial"
+	}
+	return false
 }

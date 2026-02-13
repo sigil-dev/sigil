@@ -29,23 +29,18 @@ func newStartCmd() *cobra.Command {
 }
 
 func runStart(cmd *cobra.Command, _ []string) error {
-	cfgPath, _ := cmd.Flags().GetString("config")
+	v := viper.GetViper()
 
-	cfg, err := config.Load(cfgPath)
+	cfg, err := config.FromViper(v)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Apply any flag/env overrides that Viper resolved.
-	if listen := viper.GetString("networking.listen"); listen != "" {
-		cfg.Networking.Listen = listen
-	}
-
-	if viper.GetBool("verbose") {
+	if v.GetBool("verbose") {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	}
 
-	dataDir := viper.GetString("data_dir")
+	dataDir := v.GetString("data_dir")
 	if dataDir == "" {
 		home, _ := os.UserHomeDir()
 		dataDir = filepath.Join(home, ".sigil")

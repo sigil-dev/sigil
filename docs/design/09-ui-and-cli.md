@@ -51,8 +51,8 @@ sigil
 ### Viper Config Resolution (standard precedence)
 
 1. CLI flags (highest)
-2. Environment variables (`GATEWAY_*`)
-3. Config file (`gateway.yaml`)
+2. Environment variables (`SIGIL_*`)
+3. Config file (`sigil.yaml`)
 4. Defaults (lowest)
 
 ### Doctor Command
