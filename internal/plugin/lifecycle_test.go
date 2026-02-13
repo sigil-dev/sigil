@@ -62,6 +62,22 @@ func TestNewInstanceFromConfig(t *testing.T) {
 	assert.Equal(t, plugin.StateDiscovered, inst.State())
 }
 
+func TestCapabilities_ReturnsDefensiveCopy(t *testing.T) {
+	cfg := plugin.InstanceConfig{
+		Name:         "test",
+		Type:         "tool",
+		Capabilities: []string{"tool.exec", "tool.read"},
+		InitialState: plugin.StateDiscovered,
+	}
+	inst := plugin.NewInstanceFromConfig(cfg)
+
+	caps := inst.Capabilities()
+	caps[0] = "admin:*"
+
+	assert.Equal(t, []string{"tool.exec", "tool.read"}, inst.Capabilities(),
+		"mutating returned slice must not affect internal state")
+}
+
 func TestNewInstanceFromConfig_EmptyCapabilities(t *testing.T) {
 	cfg := plugin.InstanceConfig{
 		Name:         "simple-tool",

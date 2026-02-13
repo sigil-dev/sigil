@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/sigil-dev/sigil/internal/server"
 )
@@ -23,7 +24,7 @@ func main() {
 		outPath = os.Args[1]
 	}
 
-	if err := os.MkdirAll("api/openapi", 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "error creating output dir: %v\n", err)
 		os.Exit(1)
 	}

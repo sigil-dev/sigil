@@ -53,6 +53,7 @@ func New(cfg Config) (*Server, error) {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
 	r.Use(corsMiddleware(cfg.CORSOrigins))
+	r.Use(authMiddleware)
 
 	// Huma API with OpenAPI spec
 	humaConfig := huma.DefaultConfig("Sigil Gateway", "0.1.0")

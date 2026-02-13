@@ -159,11 +159,16 @@ func (i *Instance) Tier() string {
 	return i.tier
 }
 
-// Capabilities returns the granted capability patterns.
+// Capabilities returns a copy of the granted capability patterns.
 func (i *Instance) Capabilities() []string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	return i.capabilities
+	if i.capabilities == nil {
+		return nil
+	}
+	out := make([]string, len(i.capabilities))
+	copy(out, i.capabilities)
+	return out
 }
 
 // State returns the current plugin state.

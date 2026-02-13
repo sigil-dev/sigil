@@ -56,6 +56,15 @@ func initViper(cmd *cobra.Command) error {
 		if err := v.ReadInConfig(); err != nil {
 			return err
 		}
+	} else {
+		// Auto-discover sigil.yaml from standard locations.
+		v.SetConfigName("sigil")
+		v.SetConfigType("yaml")
+		v.AddConfigPath(".")
+		v.AddConfigPath("$HOME/.config/sigil")
+		v.AddConfigPath("/etc/sigil")
+		// Ignore "config file not found" — defaults and env vars still apply.
+		_ = v.ReadInConfig()
 	}
 
 	// Bind persistent flags to viper keys.

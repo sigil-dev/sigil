@@ -37,7 +37,7 @@ func (m *mockWorkspaceService) Get(_ context.Context, id string) (*server.Worksp
 			Members:     []string{"user-1"},
 		}, nil
 	}
-	return nil, fmt.Errorf("workspace %q not found", id)
+	return nil, fmt.Errorf("workspace %q: %w", id, server.ErrNotFound)
 }
 
 type mockPluginService struct{}
@@ -55,7 +55,7 @@ func (m *mockPluginService) Get(_ context.Context, name string) (*server.PluginD
 			Status: "running", Tier: "process", Capabilities: []string{"provider.chat"},
 		}, nil
 	}
-	return nil, fmt.Errorf("plugin %q not found", name)
+	return nil, fmt.Errorf("plugin %q: %w", name, server.ErrNotFound)
 }
 
 func (m *mockPluginService) Reload(_ context.Context, name string) error {
@@ -86,7 +86,7 @@ func (m *mockSessionService) Get(_ context.Context, _, sessionID string) (*serve
 			ID: "sess-1", WorkspaceID: "homelab", Status: "active", MessageCount: 5,
 		}, nil
 	}
-	return nil, fmt.Errorf("session %q not found", sessionID)
+	return nil, fmt.Errorf("session %q: %w", sessionID, server.ErrNotFound)
 }
 
 type mockUserService struct{}

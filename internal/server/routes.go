@@ -199,7 +199,10 @@ func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWo
 func (s *Server) handleGetWorkspace(ctx context.Context, input *getWorkspaceInput) (*getWorkspaceOutput, error) {
 	ws, err := s.services.Workspaces.Get(ctx, input.ID)
 	if err != nil {
-		return nil, huma.Error404NotFound(fmt.Sprintf("workspace %q not found", input.ID))
+		if errors.Is(err, ErrNotFound) {
+			return nil, huma.Error404NotFound(fmt.Sprintf("workspace %q not found", input.ID))
+		}
+		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting workspace %q", input.ID), err)
 	}
 	return &getWorkspaceOutput{Body: *ws}, nil
 }
@@ -217,7 +220,10 @@ func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInpu
 func (s *Server) handleGetSession(ctx context.Context, input *getSessionInput) (*getSessionOutput, error) {
 	session, err := s.services.Sessions.Get(ctx, input.ID, input.SessionID)
 	if err != nil {
-		return nil, huma.Error404NotFound(fmt.Sprintf("session %q not found", input.SessionID))
+		if errors.Is(err, ErrNotFound) {
+			return nil, huma.Error404NotFound(fmt.Sprintf("session %q not found", input.SessionID))
+		}
+		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting session %q", input.SessionID), err)
 	}
 	return &getSessionOutput{Body: *session}, nil
 }
@@ -235,7 +241,10 @@ func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPlugi
 func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*getPluginOutput, error) {
 	p, err := s.services.Plugins.Get(ctx, input.Name)
 	if err != nil {
-		return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
+		if errors.Is(err, ErrNotFound) {
+			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
+		}
+		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting plugin %q", input.Name), err)
 	}
 	return &getPluginOutput{Body: *p}, nil
 }

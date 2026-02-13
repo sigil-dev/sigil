@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -32,7 +33,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	// TODO: Connect to gateway SSE endpoint once server is implemented.
 	if len(args) > 0 {
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "[%s] You: %s\n", workspace, args[0])
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "[%s] You: %s\n", workspace, strings.Join(args, " "))
 		return err
 	}
 
