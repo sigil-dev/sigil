@@ -42,7 +42,7 @@ Add script to `ui/package.json`:
 ```json
 {
   "scripts": {
-    "generate:api": "openapi-typescript ../api/openapi/spec.yaml -o src/lib/api/generated/schema.d.ts",
+    "generate:api": "openapi-typescript ../api/openapi/spec.json -o src/lib/api/generated/schema.d.ts",
     "dev": "vite dev",
     "build": "vite build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"

@@ -65,6 +65,13 @@ func (m *mockPluginService) Reload(_ context.Context, name string) error {
 	return fmt.Errorf("plugin %q not found", name)
 }
 
+// errorPluginService returns a non-"not found" error from Reload to test 5xx mapping.
+type errorPluginService struct{ mockPluginService }
+
+func (m *errorPluginService) Reload(_ context.Context, _ string) error {
+	return fmt.Errorf("connection refused")
+}
+
 type mockSessionService struct{}
 
 func (m *mockSessionService) List(_ context.Context, _ string) ([]server.SessionSummary, error) {
@@ -197,6 +204,34 @@ func TestRoutes_ReloadPlugin(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestRoutes_ReloadPlugin_NotFound(t *testing.T) {
+	srv := newTestServerWithData(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/nonexistent/reload", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestRoutes_ReloadPlugin_InternalError(t *testing.T) {
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &errorPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/failing/reload", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	// Non-"not found" errors must produce 500, not 404.
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 func TestRoutes_SendMessage(t *testing.T) {

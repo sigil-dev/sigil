@@ -161,17 +161,25 @@ func TestSSE_JSONResponse_InvalidEventData(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// The response must be valid JSON even when event data is plain text.
+	type jsonEvent struct {
+		Event string          `json:"event"`
+		Data  json.RawMessage `json:"data"`
+	}
 	var resp struct {
-		Events []json.RawMessage `json:"events"`
+		Events []jsonEvent `json:"events"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
 	assert.Len(t, resp.Events, 2)
 
+	// Events should include their type.
+	assert.Equal(t, "text_delta", resp.Events[0].Event)
+	assert.Equal(t, "done", resp.Events[1].Event)
+
 	// The plain text event should be wrapped as a JSON string.
-	assert.Equal(t, `"plain text not json"`, string(resp.Events[0]))
+	assert.Equal(t, `"plain text not json"`, string(resp.Events[0].Data))
 	// The valid JSON event should pass through unchanged.
-	assert.Equal(t, `{}`, string(resp.Events[1]))
+	assert.Equal(t, `{}`, string(resp.Events[1].Data))
 }
 
 func TestSSE_JSONResponse(t *testing.T) {
@@ -191,10 +199,18 @@ func TestSSE_JSONResponse(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
+	type jsonEvent struct {
+		Event string          `json:"event"`
+		Data  json.RawMessage `json:"data"`
+	}
 	var resp struct {
-		Events []json.RawMessage `json:"events"`
+		Events []jsonEvent `json:"events"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Len(t, resp.Events, 2)
+
+	// Events must include their type alongside data.
+	assert.Equal(t, "text_delta", resp.Events[0].Event)
+	assert.Equal(t, "done", resp.Events[1].Event)
 }

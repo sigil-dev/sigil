@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -241,7 +242,10 @@ func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*
 
 func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput) (*reloadPluginOutput, error) {
 	if err := s.services.Plugins.Reload(ctx, input.Name); err != nil {
-		return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
+		if strings.Contains(err.Error(), "not found") {
+			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
+		}
+		return nil, huma.Error500InternalServerError(fmt.Sprintf("reloading plugin %q", input.Name), err)
 	}
 	out := &reloadPluginOutput{}
 	out.Body.Status = "reloaded"
@@ -252,6 +256,12 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 	if s.streamHandler == nil {
 		return nil, huma.Error503ServiceUnavailable("agent not configured")
 	}
+
+	// Derive a cancellable context so we can signal the stream handler to stop
+	// on early return (e.g. error event), preventing goroutine leaks.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	ch := make(chan SSEEvent, 16)
 	go s.streamHandler.HandleStream(ctx, ChatStreamRequest{
 		Content:     input.Body.Content,
@@ -279,6 +289,13 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 				sessionID = extractSessionID(event.Data, sessionID)
 			case "error":
 				msg := extractErrorMessage(event.Data)
+				// Cancel context and drain remaining events to unblock the
+				// stream handler goroutine before returning.
+				cancel()
+				go func() {
+					for range ch {
+					}
+				}()
 				return nil, huma.Error502BadGateway(msg)
 			}
 		case <-ctx.Done():

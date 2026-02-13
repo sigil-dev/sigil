@@ -48,6 +48,8 @@ sigil
 +-- version
 ```
 
+**Phase 5 scope**: `start`, `status`, `version`, `workspace list`, `plugin list`, `session list`, `chat` (stub), `doctor` (stub). Remaining commands (`channel`, `skill`, `node`, `user`, `config`, full `doctor` subcommands, and CRUD operations on workspace/plugin/session) are deferred to later phases.
+
 ### Viper Config Resolution (standard precedence)
 
 1. CLI flags (highest)

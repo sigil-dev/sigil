@@ -94,8 +94,19 @@ func (s *Server) registerSSERoute() {
 							Properties: map[string]*huma.Schema{
 								"events": {
 									Type:        "array",
-									Description: "Collected events as JSON objects",
-									Items:       &huma.Schema{Type: "object"},
+									Description: "Collected events with type and data",
+									Items: &huma.Schema{
+										Type: "object",
+										Properties: map[string]*huma.Schema{
+											"event": {
+												Type:        "string",
+												Description: "Event type (text_delta, session_id, error, done)",
+											},
+											"data": {
+												Description: "Event payload",
+											},
+										},
+									},
 								},
 							},
 						},
@@ -157,23 +168,29 @@ func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStream
 	}
 }
 
+// jsonEvent pairs an event type with its data payload for JSON responses.
+type jsonEvent struct {
+	Event string          `json:"event"`
+	Data  json.RawMessage `json:"data"`
+}
+
 func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStreamRequest) {
 	ch := make(chan SSEEvent, 16)
 	go s.streamHandler.HandleStream(r.Context(), req, ch)
 
-	var events []json.RawMessage
+	var events []jsonEvent
 	for event := range ch {
 		raw := []byte(event.Data)
 		if !json.Valid(raw) {
 			// Wrap non-JSON text as a JSON string so the response stays valid.
 			raw, _ = json.Marshal(event.Data)
 		}
-		events = append(events, raw)
+		events = append(events, jsonEvent{Event: event.Event, Data: raw})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := struct {
-		Events []json.RawMessage `json:"events"`
+		Events []jsonEvent `json:"events"`
 	}{Events: events}
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
