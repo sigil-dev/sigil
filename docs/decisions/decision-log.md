@@ -602,3 +602,57 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** The `HealthReporter` circuit breaker operates on a 30s cooldown window — too coarse for within-turn retries. A provider that fails on attempt 1 stays "available" to the health check and gets re-selected on attempt 2. The exclusion list ensures deterministic failover progression without requiring all providers to implement `HealthReporter`.
 
 **Ref:** PR #12 review round 8 finding 4
+
+---
+
+## D048: Config File Auto-Discovery
+
+**Question:** Should the CLI require `--config` to load a config file, or auto-discover from standard locations?
+
+**Options considered:**
+
+- Explicit only (`--config` required) — original implementation. Simple but diverges from the design doc's "standard precedence" (flag > env > file > defaults) which implies automatic file discovery.
+- Auto-discovery with standard paths (chosen) — search `.`, `$HOME/.config/sigil/`, `/etc/sigil/` for `sigil.yaml`. Missing file is silently ignored.
+- Auto-discovery with XDG_CONFIG_HOME — more correct on Linux but adds complexity for a single search path.
+
+**Decision:** Auto-discover `sigil.yaml` from `.`, `$HOME/.config/sigil/`, `/etc/sigil/` when `--config` is not explicitly provided. Missing file is silently ignored — defaults and environment variables still apply. Explicit `--config` takes full priority.
+
+**Rationale:** The design doc (§9 CLI, Viper Config Resolution) specifies "Config file (`sigil.yaml`)" as tier 3 in the precedence chain, implying automatic loading. Requiring `--config` for every invocation would break the expected ergonomics of `sigil start` with a config file in the current directory. The three search paths follow common Go CLI conventions (Viper, Cobra ecosystem).
+
+**Ref:** PR #13 review round 4, `docs/design/09-ui-and-cli.md`
+
+---
+
+## D049: Auth Middleware — Stub Now, Full ABAC Deferred
+
+**Question:** REST endpoints lack authentication and ABAC enforcement. Should the security model be implemented in the Phase 5 CLI PR, or deferred?
+
+**Options considered:**
+
+- Full ABAC in Phase 5 — rejected: scope creep; the security model depends on identity resolution, workspace membership, and capability enforcement which are separate subsystems.
+- No auth at all — rejected: leaves no extension point for future auth integration and doesn't acknowledge the gap.
+- Pass-through stub middleware (chosen) — wires `authMiddleware` into the chi stack now, logs requests at debug level, passes everything through. Full implementation tracked separately.
+
+**Decision:** Add a pass-through `authMiddleware` stub wired into the chi middleware stack. Full token validation and ABAC capability checks deferred to the security phase (tracked in `sigil-9s6`).
+
+**Rationale:** The middleware stub establishes the extension point in the correct position in the middleware chain (after CORS, before route handlers). When real auth is implemented, it replaces the stub body without changing the server wiring. The default binding to `127.0.0.1` provides the baseline security boundary until proper auth is added.
+
+**Ref:** PR #13 review round 4, `sigil-9s6`, `docs/design/03-security-model.md`
+
+---
+
+## D050: ErrNotFound Sentinel for REST Error Differentiation
+
+**Question:** How should REST GET handlers distinguish "entity not found" (404) from internal errors (500)?
+
+**Options considered:**
+
+- String matching on error messages — fragile, breaks when error messages change.
+- Custom error types with interface assertion — more complex than needed for a single distinction.
+- Sentinel error with `errors.Is()` (chosen) — idiomatic Go, simple, extensible.
+
+**Decision:** All service implementations wrap not-found errors with `server.ErrNotFound` sentinel. GET handlers use `errors.Is(err, ErrNotFound)` to return 404; all other errors return 500. This matches the existing pattern in `handleReloadPlugin` and is now applied consistently to `handleGetWorkspace`, `handleGetSession`, and `handleGetPlugin`.
+
+**Rationale:** Mapping all service errors to 404 (the original behavior) masks internal failures — a database connection error would appear as "not found" to the client, making debugging impossible. The sentinel pattern is already established in the codebase (`server.ErrNotFound` existed for reload) and is standard Go idiom.
+
+**Ref:** PR #13 review round 4
