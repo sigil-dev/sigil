@@ -5,6 +5,9 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
 
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/spf13/cobra"
@@ -38,13 +41,26 @@ func runStart(cmd *cobra.Command, _ []string) error {
 		cfg.Networking.Listen = listen
 	}
 
-	verbose := viper.GetBool("verbose")
+	if viper.GetBool("verbose") {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	}
 
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Starting sigil on %s (verbose=%t)\n", cfg.Networking.Listen, verbose)
+	dataDir := viper.GetString("data_dir")
+	if dataDir == "" {
+		home, _ := os.UserHomeDir()
+		dataDir = filepath.Join(home, ".sigil")
+	}
+
+	gw, err := WireGateway(cfg, dataDir)
+	if err != nil {
+		return fmt.Errorf("wiring gateway: %w", err)
+	}
+	defer func() { _ = gw.Close() }()
+
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Sigil listening on %s\n", cfg.Networking.Listen)
 	if err != nil {
 		return err
 	}
 
-	// TODO: Wire gateway subsystems and start HTTP server (Task 7).
-	return nil
+	return gw.Start(cmd.Context())
 }
