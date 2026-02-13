@@ -146,7 +146,7 @@ type workspaceServiceAdapter struct {
 
 func (a *workspaceServiceAdapter) List(_ context.Context) ([]server.WorkspaceSummary, error) {
 	if a.cfg.Workspaces == nil {
-		return nil, nil
+		return []server.WorkspaceSummary{}, nil
 	}
 	out := make([]server.WorkspaceSummary, 0, len(a.cfg.Workspaces))
 	for id, ws := range a.cfg.Workspaces {
@@ -184,8 +184,10 @@ func (a *pluginServiceAdapter) List(_ context.Context) ([]server.PluginSummary, 
 	out := make([]server.PluginSummary, len(instances))
 	for i, inst := range instances {
 		out[i] = server.PluginSummary{
-			Name:   inst.Name(),
-			Status: inst.State().String(),
+			Name:    inst.Name(),
+			Type:    inst.Type(),
+			Version: inst.Version(),
+			Status:  inst.State().String(),
 		}
 	}
 	return out, nil
@@ -196,9 +198,17 @@ func (a *pluginServiceAdapter) Get(_ context.Context, name string) (*server.Plug
 	if err != nil {
 		return nil, err
 	}
+	caps := inst.Capabilities()
+	if caps == nil {
+		caps = []string{}
+	}
 	return &server.PluginDetail{
-		Name:   inst.Name(),
-		Status: inst.State().String(),
+		Name:         inst.Name(),
+		Type:         inst.Type(),
+		Version:      inst.Version(),
+		Status:       inst.State().String(),
+		Tier:         inst.Tier(),
+		Capabilities: caps,
 	}, nil
 }
 
@@ -212,7 +222,7 @@ type sessionServiceAdapter struct {
 }
 
 func (a *sessionServiceAdapter) List(_ context.Context, _ string) ([]server.SessionSummary, error) {
-	return nil, nil // Sessions require an open workspace; deferred to agent loop integration.
+	return []server.SessionSummary{}, nil // Sessions require an open workspace; deferred to agent loop integration.
 }
 
 func (a *sessionServiceAdapter) Get(_ context.Context, _, _ string) (*server.SessionDetail, error) {

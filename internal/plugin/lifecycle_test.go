@@ -43,6 +43,55 @@ func TestLifecycleState_Transitions(t *testing.T) {
 	}
 }
 
+func TestNewInstanceFromConfig(t *testing.T) {
+	cfg := plugin.InstanceConfig{
+		Name:         "anthropic",
+		Type:         "provider",
+		Version:      "1.2.3",
+		Tier:         "process",
+		Capabilities: []string{"llm.chat", "llm.complete"},
+		InitialState: plugin.StateDiscovered,
+	}
+	inst := plugin.NewInstanceFromConfig(cfg)
+
+	assert.Equal(t, "anthropic", inst.Name())
+	assert.Equal(t, "provider", inst.Type())
+	assert.Equal(t, "1.2.3", inst.Version())
+	assert.Equal(t, "process", inst.Tier())
+	assert.Equal(t, []string{"llm.chat", "llm.complete"}, inst.Capabilities())
+	assert.Equal(t, plugin.StateDiscovered, inst.State())
+}
+
+func TestNewInstanceFromConfig_EmptyCapabilities(t *testing.T) {
+	cfg := plugin.InstanceConfig{
+		Name:         "simple-tool",
+		Type:         "tool",
+		Version:      "0.1.0",
+		Tier:         "wasm",
+		Capabilities: nil,
+		InitialState: plugin.StateDiscovered,
+	}
+	inst := plugin.NewInstanceFromConfig(cfg)
+
+	assert.Equal(t, "simple-tool", inst.Name())
+	assert.Equal(t, "tool", inst.Type())
+	assert.Equal(t, "0.1.0", inst.Version())
+	assert.Equal(t, "wasm", inst.Tier())
+	assert.Empty(t, inst.Capabilities())
+}
+
+func TestNewInstance_BackwardCompatibility(t *testing.T) {
+	// NewInstance should still work, with empty type/version/tier/capabilities.
+	inst := plugin.NewInstance("legacy", plugin.StateRunning)
+
+	assert.Equal(t, "legacy", inst.Name())
+	assert.Equal(t, plugin.StateRunning, inst.State())
+	assert.Equal(t, "", inst.Type())
+	assert.Equal(t, "", inst.Version())
+	assert.Equal(t, "", inst.Tier())
+	assert.Empty(t, inst.Capabilities())
+}
+
 func TestPluginInstance_StateTransition(t *testing.T) {
 	inst := plugin.NewInstance("telegram", plugin.StateDiscovered)
 
