@@ -55,6 +55,20 @@ func TestServer_OpenAPISpec(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "openapi")
 }
 
+func TestServer_OpenAPISpecIncludesChatStream(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	body := w.Body.String()
+	assert.Contains(t, body, "/api/v1/chat/stream", "OpenAPI spec must include SSE streaming endpoint path")
+	assert.Contains(t, body, "chat-stream", "OpenAPI spec must include chat-stream operation ID")
+}
+
 func TestServer_CORSHeaders(t *testing.T) {
 	srv := newTestServer(t)
 

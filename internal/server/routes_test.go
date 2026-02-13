@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sigil-dev/sigil/internal/server"
 	"github.com/stretchr/testify/assert"
@@ -228,6 +230,127 @@ func TestRoutes_SendMessage(t *testing.T) {
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "Hello world", resp.Content)
+}
+
+func TestRoutes_SendMessage_SessionFromStream(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "session_id", Data: `{"session_id":"sess-new-123"}`},
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "text_delta", Data: `{"text":" there"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+
+	// Request with NO session_id — backend creates one.
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Content   string `json:"content"`
+		SessionID string `json:"session_id"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "Hello there", resp.Content)
+	assert.Equal(t, "sess-new-123", resp.SessionID, "should return session ID from stream, not request")
+}
+
+func TestRoutes_SendMessage_ErrorEvent(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `{"text":"partial"}`},
+		{Event: "error", Data: `{"error":"provider_error","message":"rate limit exceeded"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	// Should NOT return 200 with partial content — must surface the error.
+	assert.GreaterOrEqual(t, w.Code, 500, "error event must produce a server error status")
+	assert.Contains(t, w.Body.String(), "rate limit exceeded")
+}
+
+// hangingStreamHandler blocks until release is closed, simulating a handler
+// that never finishes.
+type hangingStreamHandler struct {
+	release chan struct{}
+	mu      sync.Mutex
+	started bool
+}
+
+func (h *hangingStreamHandler) HandleStream(_ context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	h.mu.Lock()
+	h.started = true
+	h.mu.Unlock()
+	<-h.release
+	close(ch)
+}
+
+func TestRoutes_SendMessage_ContextCancelled(t *testing.T) {
+	handler := &hangingStreamHandler{release: make(chan struct{})}
+	defer close(handler.release) // unblock goroutine on test cleanup
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	// Attach a context that cancels after 100ms.
+	ctx, cancel := context.WithTimeout(req.Context(), 100*time.Millisecond)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		srv.Handler().ServeHTTP(w, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Handler returned — good.
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleSendMessage hung instead of respecting context cancellation")
+	}
+
+	// Should return a timeout/error status, not 200.
+	assert.GreaterOrEqual(t, w.Code, 400, "cancelled context must produce an error status")
 }
 
 func TestRoutes_ListUsers(t *testing.T) {

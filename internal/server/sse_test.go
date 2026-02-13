@@ -143,6 +143,37 @@ func TestSSE_CompoundAcceptHeader(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
 }
 
+func TestSSE_JSONResponse_InvalidEventData(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: "plain text not json"},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestSSEServer(t, events)
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No Accept: text/event-stream — should get JSON.
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// The response must be valid JSON even when event data is plain text.
+	var resp struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
+	assert.Len(t, resp.Events, 2)
+
+	// The plain text event should be wrapped as a JSON string.
+	assert.Equal(t, `"plain text not json"`, string(resp.Events[0]))
+	// The valid JSON event should pass through unchanged.
+	assert.Equal(t, `{}`, string(resp.Events[1]))
+}
+
 func TestSSE_JSONResponse(t *testing.T) {
 	events := []server.SSEEvent{
 		{Event: "text_delta", Data: `{"text":"response"}`},

@@ -260,16 +260,61 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 	}, ch)
 
 	var content string
-	for event := range ch {
-		if event.Event == "text_delta" {
-			content += extractText(event.Data)
+	sessionID := input.Body.SessionID
+
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				// Channel closed — stream finished.
+				out := &sendMessageOutput{}
+				out.Body.Content = content
+				out.Body.SessionID = sessionID
+				return out, nil
+			}
+			switch event.Event {
+			case "text_delta":
+				content += extractText(event.Data)
+			case "session_id":
+				sessionID = extractSessionID(event.Data, sessionID)
+			case "error":
+				msg := extractErrorMessage(event.Data)
+				return nil, huma.Error502BadGateway(msg)
+			}
+		case <-ctx.Done():
+			return nil, huma.Error504GatewayTimeout("request timed out")
 		}
 	}
+}
 
-	out := &sendMessageOutput{}
-	out.Body.Content = content
-	out.Body.SessionID = input.Body.SessionID
-	return out, nil
+// extractSessionID parses a session_id event payload and returns the session ID.
+// Falls back to the provided fallback if parsing fails.
+func extractSessionID(data string, fallback string) string {
+	var payload struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal([]byte(data), &payload); err != nil || payload.SessionID == "" {
+		return fallback
+	}
+	return payload.SessionID
+}
+
+// extractErrorMessage parses an error event payload and returns a human-readable message.
+func extractErrorMessage(data string) string {
+	var payload struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		return data
+	}
+	if payload.Message != "" {
+		return payload.Message
+	}
+	if payload.Error != "" {
+		return payload.Error
+	}
+	return "unknown stream error"
 }
 
 // extractText parses a JSON text_delta payload and returns the text field.

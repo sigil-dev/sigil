@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 // SSEEvent represents a single server-sent event.
@@ -37,6 +39,73 @@ func (s *Server) RegisterStreamHandler(h StreamHandler) {
 
 func (s *Server) registerSSERoute() {
 	s.router.Post("/api/v1/chat/stream", s.handleChatStream)
+
+	// Register the operation in the OpenAPI spec manually. The SSE streaming
+	// handler needs raw http.ResponseWriter access, so it cannot use Huma's
+	// standard handler signature. We keep the chi route above for actual
+	// request handling and add the spec entry here for documentation.
+	minContentLen := 1
+	s.api.OpenAPI().AddOperation(&huma.Operation{
+		OperationID: "chat-stream",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/chat/stream",
+		Summary:     "Stream a chat response via SSE",
+		Description: "Send a message and receive a streaming response. Set Accept: text/event-stream for SSE, otherwise receives a JSON array of events.",
+		Tags:        []string{"chat"},
+		RequestBody: &huma.RequestBody{
+			Required: true,
+			Content: map[string]*huma.MediaType{
+				"application/json": {
+					Schema: &huma.Schema{
+						Type:     "object",
+						Required: []string{"content"},
+						Properties: map[string]*huma.Schema{
+							"content": {
+								Type:        "string",
+								MinLength:   &minContentLen,
+								Description: "Message content",
+							},
+							"workspace_id": {
+								Type:        "string",
+								Description: "Target workspace",
+							},
+							"session_id": {
+								Type:        "string",
+								Description: "Optional session to resume",
+							},
+						},
+					},
+				},
+			},
+		},
+		Responses: map[string]*huma.Response{
+			"200": {
+				Description: "Streaming response (SSE or JSON depending on Accept header)",
+				Content: map[string]*huma.MediaType{
+					"text/event-stream": {
+						Schema: &huma.Schema{
+							Type:        "string",
+							Description: "Server-sent event stream",
+						},
+					},
+					"application/json": {
+						Schema: &huma.Schema{
+							Type: "object",
+							Properties: map[string]*huma.Schema{
+								"events": {
+									Type:        "array",
+									Description: "Collected events as JSON objects",
+									Items:       &huma.Schema{Type: "object"},
+								},
+							},
+						},
+					},
+				},
+			},
+			"422": {Description: "Validation error (missing content)"},
+			"503": {Description: "Stream handler not configured"},
+		},
+	})
 }
 
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +163,12 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 
 	var events []json.RawMessage
 	for event := range ch {
-		events = append(events, json.RawMessage(event.Data))
+		raw := []byte(event.Data)
+		if !json.Valid(raw) {
+			// Wrap non-JSON text as a JSON string so the response stays valid.
+			raw, _ = json.Marshal(event.Data)
+		}
+		events = append(events, raw)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
