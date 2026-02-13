@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -247,12 +248,12 @@ func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput)
 	return out, nil
 }
 
-func (s *Server) handleSendMessage(_ context.Context, input *sendMessageInput) (*sendMessageOutput, error) {
+func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput) (*sendMessageOutput, error) {
 	if s.streamHandler == nil {
 		return nil, huma.Error503ServiceUnavailable("agent not configured")
 	}
 	ch := make(chan SSEEvent, 16)
-	go s.streamHandler.HandleStream(context.Background(), ChatStreamRequest{
+	go s.streamHandler.HandleStream(ctx, ChatStreamRequest{
 		Content:     input.Body.Content,
 		WorkspaceID: input.Body.WorkspaceID,
 		SessionID:   input.Body.SessionID,
@@ -261,7 +262,7 @@ func (s *Server) handleSendMessage(_ context.Context, input *sendMessageInput) (
 	var content string
 	for event := range ch {
 		if event.Event == "text_delta" {
-			content += event.Data
+			content += extractText(event.Data)
 		}
 	}
 
@@ -269,6 +270,18 @@ func (s *Server) handleSendMessage(_ context.Context, input *sendMessageInput) (
 	out.Body.Content = content
 	out.Body.SessionID = input.Body.SessionID
 	return out, nil
+}
+
+// extractText parses a JSON text_delta payload and returns the text field.
+// Falls back to the raw string if parsing fails.
+func extractText(data string) string {
+	var delta struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(data), &delta); err != nil {
+		return data
+	}
+	return delta.Text
 }
 
 func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOutput, error) {

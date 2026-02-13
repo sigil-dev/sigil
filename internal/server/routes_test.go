@@ -199,7 +199,8 @@ func TestRoutes_ReloadPlugin(t *testing.T) {
 
 func TestRoutes_SendMessage(t *testing.T) {
 	events := []server.SSEEvent{
-		{Event: "text_delta", Data: `{"text":"Hi"}`},
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "text_delta", Data: `{"text":" world"}`},
 		{Event: "done", Data: `{}`},
 	}
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
@@ -219,6 +220,14 @@ func TestRoutes_SendMessage(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Content   string `json:"content"`
+		SessionID string `json:"session_id"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "Hello world", resp.Content)
 }
 
 func TestRoutes_ListUsers(t *testing.T) {

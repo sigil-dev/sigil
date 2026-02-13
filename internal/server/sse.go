@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // SSEEvent represents a single server-sent event.
@@ -55,7 +56,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if client wants SSE or JSON.
-	if r.Header.Get("Accept") == "text/event-stream" {
+	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
 		s.writeSSE(w, r, req)
 		return
 	}

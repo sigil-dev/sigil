@@ -124,6 +124,25 @@ func TestSSE_NoStreamHandler(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
+func TestSSE_CompoundAcceptHeader(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `{"text":"Hi"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestSSEServer(t, events)
+
+	body := `{"content": "Hi", "workspace_id": "test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream, application/json")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
+}
+
 func TestSSE_JSONResponse(t *testing.T) {
 	events := []server.SSEEvent{
 		{Event: "text_delta", Data: `{"text":"response"}`},
