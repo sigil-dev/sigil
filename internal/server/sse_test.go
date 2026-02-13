@@ -143,6 +143,32 @@ func TestSSE_CompoundAcceptHeader(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
 }
 
+func TestSSE_MultiLineData(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: "line1\nline2\nline3"},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestSSEServer(t, events)
+
+	body := `{"content": "Hi", "workspace_id": "test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Each line of multi-line data must be prefixed with "data: " per SSE spec.
+	output := w.Body.String()
+	assert.Contains(t, output, "data: line1\n")
+	assert.Contains(t, output, "data: line2\n")
+	assert.Contains(t, output, "data: line3\n")
+	// Must NOT contain the raw un-prefixed multi-line block.
+	assert.NotContains(t, output, "data: line1\nline2")
+}
+
 func TestSSE_JSONResponse_InvalidEventData(t *testing.T) {
 	events := []server.SSEEvent{
 		{Event: "text_delta", Data: "plain text not json"},

@@ -50,7 +50,7 @@ func (s *Server) registerSSERoute() {
 		Method:      http.MethodPost,
 		Path:        "/api/v1/chat/stream",
 		Summary:     "Stream a chat response via SSE",
-		Description: "Send a message and receive a streaming response. Set Accept: text/event-stream for SSE, otherwise receives a JSON array of events.",
+		Description: "Send a message and receive a streaming response. Set Accept: text/event-stream for SSE, otherwise receives a JSON object containing an events array.",
 		Tags:        []string{"chat"},
 		RequestBody: &huma.RequestBody{
 			Required: true,
@@ -159,7 +159,17 @@ func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStream
 	go s.streamHandler.HandleStream(r.Context(), req, ch)
 
 	for event := range ch {
-		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Event, event.Data); err != nil {
+		// SSE spec requires each line of a multi-line payload to be
+		// prefixed with "data: ". Split on newlines and emit each line.
+		if _, err := fmt.Fprintf(w, "event: %s\n", event.Event); err != nil {
+			return
+		}
+		for _, line := range strings.Split(event.Data, "\n") {
+			if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
+				return
+			}
+		}
+		if _, err := fmt.Fprint(w, "\n"); err != nil {
 			return
 		}
 		if flusher != nil {

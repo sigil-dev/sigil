@@ -62,7 +62,7 @@ func (m *mockPluginService) Reload(_ context.Context, name string) error {
 	if name == "anthropic" {
 		return nil
 	}
-	return fmt.Errorf("plugin %q not found", name)
+	return fmt.Errorf("plugin %q: %w", name, server.ErrNotFound)
 }
 
 // errorPluginService returns a non-"not found" error from Reload to test 5xx mapping.
@@ -386,6 +386,30 @@ func TestRoutes_SendMessage_ContextCancelled(t *testing.T) {
 
 	// Should return a timeout/error status, not 200.
 	assert.GreaterOrEqual(t, w.Code, 400, "cancelled context must produce an error status")
+}
+
+func TestRoutes_SendMessage_InvalidJSON(t *testing.T) {
+	srv := newTestServerWithData(t)
+	srv.RegisterStreamHandler(&mockStreamHandler{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(`not json`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestRoutes_SendMessage_MissingContent(t *testing.T) {
+	srv := newTestServerWithData(t)
+	srv.RegisterStreamHandler(&mockStreamHandler{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(`{"workspace_id":"homelab"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
 func TestRoutes_ListUsers(t *testing.T) {

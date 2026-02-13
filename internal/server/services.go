@@ -3,7 +3,15 @@
 
 package server
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrNotFound indicates the requested entity does not exist.
+// Service implementations should wrap this sentinel so handlers can
+// distinguish "not found" from other failures without string matching.
+var ErrNotFound = errors.New("not found")
 
 // Services holds dependencies injected into route handlers.
 // Each field is an interface so subsystems can be mocked in tests.

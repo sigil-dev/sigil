@@ -6,9 +6,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -242,7 +242,7 @@ func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*
 
 func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput) (*reloadPluginOutput, error) {
 	if err := s.services.Plugins.Reload(ctx, input.Name); err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, ErrNotFound) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
 		}
 		return nil, huma.Error500InternalServerError(fmt.Sprintf("reloading plugin %q", input.Name), err)
