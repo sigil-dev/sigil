@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -205,6 +206,7 @@ func TestSessionList_RequiresWorkspace(t *testing.T) {
 	err := root.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "workspace")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeCLIInputInvalid), "expected CodeCLIInputInvalid, got %s", sigilerr.CodeOf(err))
 }
 
 func TestSessionList_Empty(t *testing.T) {
@@ -233,4 +235,50 @@ func TestSessionList_ConnRefused(t *testing.T) {
 	err := root.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "not running")
+}
+
+// --- Gateway Client Error Code Tests ---
+
+func TestGatewayClient_ConnRefused_ReturnsCodeCLIGatewayNotRunning(t *testing.T) {
+	gw := newGatewayClient("127.0.0.1:1")
+	var dest struct{}
+	err := gw.getJSON("/health", &dest)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeCLIGatewayNotRunning), "expected CodeCLIGatewayNotRunning, got %s", sigilerr.CodeOf(err))
+}
+
+func TestGatewayClient_Non200_ReturnsCodeCLIRequestFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	old := defaultHTTPClient
+	defaultHTTPClient = srv.Client()
+	defer func() { defaultHTTPClient = old }()
+
+	gw := newGatewayClient(srv.URL[len("http://"):])
+	var dest struct{}
+	err := gw.getJSON("/test", &dest)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeCLIRequestFailure), "expected CodeCLIRequestFailure, got %s", sigilerr.CodeOf(err))
+}
+
+func TestGatewayClient_InvalidJSON_ReturnsCodeCLIResponseInvalid(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	old := defaultHTTPClient
+	defaultHTTPClient = srv.Client()
+	defer func() { defaultHTTPClient = old }()
+
+	gw := newGatewayClient(srv.URL[len("http://"):])
+	var dest struct{ Name string }
+	err := gw.getJSON("/test", &dest)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeCLIResponseInvalid), "expected CodeCLIResponseInvalid, got %s", sigilerr.CodeOf(err))
 }

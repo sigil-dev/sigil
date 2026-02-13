@@ -158,7 +158,7 @@ FROM sessions WHERE id = ?`
 		&updatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "session %s: %w", id, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "session %s: %w", id, sql.ErrNoRows)
 	}
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting session %s: %w", id, err)
@@ -216,7 +216,7 @@ updated_at = ? WHERE id = ?`
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows affected for session %s: %w", session.ID, err)
 	}
 	if rows == 0 {
-		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "session %s: %w", session.ID, store.ErrNotFound)
+		return sigilerr.New(sigilerr.CodeStoreEntityNotFound, "session "+session.ID+" not found")
 	}
 	return nil
 }
@@ -298,7 +298,7 @@ func (s *SessionStore) DeleteSession(ctx context.Context, id string) error {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows affected for session %s: %w", id, err)
 	}
 	if rows == 0 {
-		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "session %s: %w", id, store.ErrNotFound)
+		return sigilerr.New(sigilerr.CodeStoreEntityNotFound, "session "+id+" not found")
 	}
 	return nil
 }

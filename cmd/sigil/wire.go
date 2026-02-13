@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,13 +37,13 @@ func WireGateway(cfg *config.Config, dataDir string) (*Gateway, error) {
 
 	// Ensure the data directory exists.
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating data directory: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating data directory: %w", err)
 	}
 
 	// 1. Gateway store (users, pairings, audit log).
 	gs, err := store.NewGatewayStore(storeCfg, dataDir)
 	if err != nil {
-		return nil, fmt.Errorf("creating gateway store: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating gateway store: %w", err)
 	}
 
 	// 2. Security enforcer.
@@ -70,7 +69,7 @@ func WireGateway(cfg *config.Config, dataDir string) (*Gateway, error) {
 		}
 		if err := wsMgr.SetConfig(wsCfg); err != nil {
 			_ = gs.Close()
-			return nil, fmt.Errorf("setting workspace config: %w", err)
+			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "setting workspace config: %w", err)
 		}
 	}
 
@@ -81,7 +80,7 @@ func WireGateway(cfg *config.Config, dataDir string) (*Gateway, error) {
 	})
 	if err != nil {
 		_ = gs.Close()
-		return nil, fmt.Errorf("creating server: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
 
 	// Wire service adapters for REST endpoints.
@@ -217,7 +216,7 @@ func (a *pluginServiceAdapter) Get(_ context.Context, name string) (*server.Plug
 }
 
 func (a *pluginServiceAdapter) Reload(_ context.Context, _ string) error {
-	return fmt.Errorf("plugin reload not yet implemented")
+	return sigilerr.New(sigilerr.CodeCLISetupFailure, "plugin reload not yet implemented")
 }
 
 // sessionServiceAdapter bridges workspace sessions to the server's SessionService.

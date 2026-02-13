@@ -6,7 +6,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Config holds HTTP server configuration.
@@ -38,7 +38,7 @@ type Server struct {
 // New creates a Server with chi router, huma API, health endpoint, and CORS.
 func New(cfg Config) (*Server, error) {
 	if cfg.ListenAddr == "" {
-		return nil, fmt.Errorf("listen address is required")
+		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "listen address is required")
 	}
 	if cfg.ReadTimeout == 0 {
 		cfg.ReadTimeout = 30 * time.Second
@@ -98,7 +98,7 @@ func (s *Server) API() huma.API {
 func (s *Server) Start(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.cfg.ListenAddr)
 	if err != nil {
-		return fmt.Errorf("listening on %s: %w", s.cfg.ListenAddr, err)
+		return sigilerr.Errorf(sigilerr.CodeServerStartFailure, "listening on %s: %w", s.cfg.ListenAddr, err)
 	}
 
 	srv := &http.Server{
@@ -121,7 +121,7 @@ func (s *Server) Start(ctx context.Context) error {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutting down: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeServerShutdownFailure, "shutting down: %w", err)
 	}
 
 	return <-errCh

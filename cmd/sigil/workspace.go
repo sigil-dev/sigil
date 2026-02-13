@@ -4,10 +4,10 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"text/tabwriter"
 
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -49,11 +49,11 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 		} `json:"workspaces"`
 	}
 	if err := gw.getJSON("/api/v1/workspaces", &body); err != nil {
-		if errors.Is(err, ErrGatewayNotRunning) {
+		if sigilerr.HasCode(err, sigilerr.CodeCLIGatewayNotRunning) {
 			_, _ = fmt.Fprintf(out, "Gateway at %s is not running (connection refused)\n", addr)
 			return nil
 		}
-		return fmt.Errorf("listing workspaces: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "listing workspaces: %w", err)
 	}
 
 	if len(body.Workspaces) == 0 {

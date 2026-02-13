@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-dev/sigil/internal/config"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -33,7 +34,7 @@ func runStart(cmd *cobra.Command, _ []string) error {
 
 	cfg, err := config.FromViper(v)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "loading config: %w", err)
 	}
 
 	if v.GetBool("verbose") {
@@ -48,7 +49,7 @@ func runStart(cmd *cobra.Command, _ []string) error {
 
 	gw, err := WireGateway(cfg, dataDir)
 	if err != nil {
-		return fmt.Errorf("wiring gateway: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "wiring gateway: %w", err)
 	}
 	defer func() { _ = gw.Close() }()
 

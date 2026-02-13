@@ -6,15 +6,13 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"time"
-)
 
-// ErrGatewayNotRunning indicates the gateway refused the connection.
-var ErrGatewayNotRunning = errors.New("gateway is not running (connection refused)")
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+)
 
 // defaultHTTPClient is the package-level HTTP client used by gateway commands.
 // Overridden in tests via httptest.
@@ -37,24 +35,24 @@ func newGatewayClient(addr string) *gatewayClient {
 }
 
 // getJSON performs a GET request and decodes the JSON response into dest.
-// Returns ErrGatewayNotRunning on connection refused.
+// Returns an error with CodeCLIGatewayNotRunning on connection refused.
 func (c *gatewayClient) getJSON(path string, dest interface{}) error {
 	resp, err := c.http.Get(c.baseURL + path)
 	if err != nil {
 		if isDialError(err) {
-			return ErrGatewayNotRunning
+			return sigilerr.New(sigilerr.CodeCLIGatewayNotRunning, "gateway is not running (connection refused)")
 		}
-		return fmt.Errorf("request failed: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("gateway returned status %d: %s", resp.StatusCode, string(body))
+		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "gateway returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
-		return fmt.Errorf("invalid response: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeCLIResponseInvalid, "invalid response: %w", err)
 	}
 	return nil
 }

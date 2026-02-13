@@ -4,10 +4,10 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"text/tabwriter"
 
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -42,7 +42,7 @@ func newSessionListCmd() *cobra.Command {
 func runSessionList(cmd *cobra.Command, _ []string) error {
 	workspace, _ := cmd.Flags().GetString("workspace")
 	if workspace == "" {
-		return fmt.Errorf("--workspace flag is required")
+		return sigilerr.New(sigilerr.CodeCLIInputInvalid, "--workspace flag is required")
 	}
 
 	addr, _ := cmd.Flags().GetString("address")
@@ -57,11 +57,11 @@ func runSessionList(cmd *cobra.Command, _ []string) error {
 		} `json:"sessions"`
 	}
 	if err := gw.getJSON("/api/v1/workspaces/"+workspace+"/sessions", &body); err != nil {
-		if errors.Is(err, ErrGatewayNotRunning) {
+		if sigilerr.HasCode(err, sigilerr.CodeCLIGatewayNotRunning) {
 			_, _ = fmt.Fprintf(out, "Gateway at %s is not running (connection refused)\n", addr)
 			return nil
 		}
-		return fmt.Errorf("listing sessions: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "listing sessions: %w", err)
 	}
 
 	if len(body.Sessions) == 0 {

@@ -4,9 +4,9 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +32,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 		Status string `json:"status"`
 	}
 	if err := gw.getJSON("/api/v1/status", &body); err != nil {
-		if errors.Is(err, ErrGatewayNotRunning) {
+		if sigilerr.HasCode(err, sigilerr.CodeCLIGatewayNotRunning) {
 			_, _ = fmt.Fprintf(out, "Gateway at %s is not running (connection refused)\n", addr)
 			return nil
 		}

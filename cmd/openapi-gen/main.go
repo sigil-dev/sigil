@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-dev/sigil/internal/server"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 func main() {
@@ -44,7 +45,7 @@ func generateSpec() ([]byte, error) {
 		ListenAddr: "127.0.0.1:0",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating server: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
 
 	// Register routes with nil services — we only need the spec, not working handlers.

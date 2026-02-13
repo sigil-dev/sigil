@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/plugin"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,6 +68,8 @@ func TestSeatbeltProfile_PathInjection_WriteAllow(t *testing.T) {
 			profile, err := generateSeatbeltProfile(manifest)
 			if tt.wantErr {
 				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxPathInvalid),
+					"path injection error should have CodePluginSandboxPathInvalid")
 			} else {
 				require.NoError(t, err)
 				assert.NotContains(t, profile, "(allow default)")
@@ -87,6 +90,8 @@ func TestSeatbeltProfile_PathInjection_ReadDeny(t *testing.T) {
 	}
 	_, err := generateSeatbeltProfile(manifest)
 	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxPathInvalid),
+		"read deny path injection error should have CodePluginSandboxPathInvalid")
 }
 
 // --- Seatbelt single-path-per-filter ---
@@ -160,6 +165,8 @@ func TestSeatbeltProfile_NetworkInvalidPort(t *testing.T) {
 	}
 	_, err := generateSeatbeltProfile(manifest)
 	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxNetworkInvalid),
+		"invalid port error should have CodePluginSandboxNetworkInvalid")
 }
 
 func TestSeatbeltProfile_NetworkNoPort(t *testing.T) {
@@ -174,6 +181,8 @@ func TestSeatbeltProfile_NetworkNoPort(t *testing.T) {
 	}
 	_, err := generateSeatbeltProfile(manifest)
 	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxNetworkInvalid),
+		"no port error should have CodePluginSandboxNetworkInvalid")
 }
 
 func TestSeatbeltProfile_NetworkPortOutOfRange(t *testing.T) {
@@ -199,6 +208,8 @@ func TestSeatbeltProfile_NetworkPortOutOfRange(t *testing.T) {
 			_, err := generateSeatbeltProfile(manifest)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "out of range")
+			assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxNetworkInvalid),
+				"port out of range error should have CodePluginSandboxNetworkInvalid")
 		})
 	}
 }
@@ -247,6 +258,8 @@ func TestValidateSandboxPath(t *testing.T) {
 			err := validateSandboxPath(tt.path)
 			if tt.wantErr {
 				assert.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxPathInvalid),
+					"path validation error should have CodePluginSandboxPathInvalid")
 			} else {
 				assert.NoError(t, err)
 			}
@@ -269,6 +282,8 @@ func TestGenerateArgs_UnsupportedOS(t *testing.T) {
 	_, err := GenerateArgs(manifest, "/path/to/binary")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "plan9")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxUnsupported),
+		"unsupported OS error should have CodePluginSandboxUnsupported")
 }
 
 func TestGenerateArgs_EmptySandboxConfig(t *testing.T) {
@@ -363,6 +378,8 @@ func TestBwrapArgs_RejectDashDashPaths(t *testing.T) {
 			_, err := generateBwrapArgs(manifest, "/path/to/binary")
 			if tt.wantErr {
 				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxPathInvalid),
+					"bwrap dash path error should have CodePluginSandboxPathInvalid")
 			} else {
 				require.NoError(t, err)
 			}
@@ -402,6 +419,8 @@ func TestExpandPath_ErrorOnHomeDirFailure(t *testing.T) {
 	_, err := expandPath("~/some/path")
 	require.Error(t, err, "should return error when home dir unavailable")
 	assert.Contains(t, err.Error(), "home directory unavailable")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxSetupFailure),
+		"home dir failure should have CodePluginSandboxSetupFailure")
 }
 
 // --- Item 3: binaryPath validation ---
@@ -445,6 +464,8 @@ func TestGenerateArgs_BinaryPathValidation(t *testing.T) {
 				_, err := GenerateArgs(manifest, tt.binaryPath)
 				require.Error(t, err, "OS=%s binaryPath=%q should error", osName, tt.binaryPath)
 				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxPathInvalid),
+					"binaryPath validation error should have CodePluginSandboxPathInvalid")
 			}
 		})
 	}
@@ -478,6 +499,8 @@ func TestGenerateArgs_BinaryPathInjection(t *testing.T) {
 			_, err := GenerateArgs(manifest, tt.binaryPath)
 			require.Error(t, err, "binaryPath %q should be rejected", tt.binaryPath)
 			assert.Contains(t, err.Error(), "invalid binaryPath")
+			assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxPathInvalid),
+				"binaryPath injection error should have CodePluginSandboxPathInvalid")
 		})
 	}
 }
@@ -536,6 +559,8 @@ func TestGenerateArgs_ContainerTierReturnsError(t *testing.T) {
 	require.Error(t, err, "container tier must return an error")
 	assert.Contains(t, err.Error(), "container")
 	assert.Contains(t, err.Error(), "not yet implemented")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginSandboxUnsupported),
+		"container tier error should have CodePluginSandboxUnsupported")
 }
 
 // --- ~user path expansion ---

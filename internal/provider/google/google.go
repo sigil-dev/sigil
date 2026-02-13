@@ -6,12 +6,12 @@ package google
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"google.golang.org/genai"
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Config holds Google provider configuration.
@@ -29,7 +29,7 @@ type Provider struct {
 // New creates a new Google provider. Returns an error if the API key is missing.
 func New(cfg Config) (*Provider, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("google: missing api_key in config")
+		return nil, sigilerr.New(sigilerr.CodeProviderRequestInvalid, "google: missing api_key in config", sigilerr.FieldProvider("google"))
 	}
 
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
@@ -37,7 +37,7 @@ func New(cfg Config) (*Provider, error) {
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("google: creating client: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "google: creating client")
 	}
 
 	return &Provider{
@@ -107,7 +107,7 @@ func (p *Provider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	contents, err := convertMessages(req.Messages)
 	if err != nil {
-		return nil, fmt.Errorf("google: converting messages: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "google: converting messages")
 	}
 
 	config := buildConfig(req)
@@ -200,7 +200,7 @@ func convertMessages(msgs []provider.Message) ([]*genai.Content, error) {
 			// System messages are handled via SystemInstruction in config.
 			continue
 		default:
-			return nil, fmt.Errorf("google: unsupported message role %q", msg.Role)
+			return nil, sigilerr.Errorf(sigilerr.CodeProviderRequestInvalid, "google: unsupported message role %q", msg.Role)
 		}
 	}
 

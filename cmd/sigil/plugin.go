@@ -4,10 +4,10 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"text/tabwriter"
 
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -51,11 +51,11 @@ func runPluginList(cmd *cobra.Command, _ []string) error {
 		} `json:"plugins"`
 	}
 	if err := gw.getJSON("/api/v1/plugins", &body); err != nil {
-		if errors.Is(err, ErrGatewayNotRunning) {
+		if sigilerr.HasCode(err, sigilerr.CodeCLIGatewayNotRunning) {
 			_, _ = fmt.Fprintf(out, "Gateway at %s is not running (connection refused)\n", addr)
 			return nil
 		}
-		return fmt.Errorf("listing plugins: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "listing plugins: %w", err)
 	}
 
 	if len(body.Plugins) == 0 {

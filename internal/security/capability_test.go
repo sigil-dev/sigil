@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/security"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +83,7 @@ func TestMatchCapabilitySegmentBounds(t *testing.T) {
 		_, err := security.MatchCapability(longString, "a")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "exceeds maximum")
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityCapabilityInvalid), "expected CodeSecurityCapabilityInvalid, got %s", sigilerr.CodeOf(err))
 	})
 
 	t.Run("capability exceeds segment limit", func(t *testing.T) {
@@ -89,6 +91,7 @@ func TestMatchCapabilitySegmentBounds(t *testing.T) {
 		_, err := security.MatchCapability("a", longString)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "exceeds maximum")
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityCapabilityInvalid), "expected CodeSecurityCapabilityInvalid, got %s", sigilerr.CodeOf(err))
 	})
 
 	t.Run("exactly 32 segments is allowed", func(t *testing.T) {

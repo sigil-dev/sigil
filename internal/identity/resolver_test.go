@@ -6,7 +6,6 @@ package identity_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/identity"
@@ -38,7 +37,7 @@ func (m *mockUserStore) GetByExternalID(_ context.Context, provider, externalID 
 	if u, ok := m.users[key]; ok {
 		return u, nil
 	}
-	return nil, fmt.Errorf("user not found for %s: %w", key, store.ErrNotFound)
+	return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user not found for %s", key)
 }
 
 func (m *mockUserStore) Create(context.Context, *store.User) error                   { return nil }
@@ -81,7 +80,8 @@ func TestResolver_UnknownUser(t *testing.T) {
 	_, err := r.Resolve(context.Background(), "telegram", "nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "user not found")
-	assert.True(t, sigilerr.HasCode(err, identity.CodeIdentityUserNotFound))
+	assert.True(t, sigilerr.IsNotFound(err),
+		"expected not-found error, got code %s", sigilerr.CodeOf(err))
 }
 
 // mockErrorUserStore is a UserStore that always returns a backend error.

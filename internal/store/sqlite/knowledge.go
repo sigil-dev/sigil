@@ -210,7 +210,7 @@ WHERE workspace = ? AND subject = ? AND (predicate = 'type' OR predicate = 'name
 	}
 
 	if !found {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "entity %s in workspace %s: %w", id, workspaceID, store.ErrNotFound)
+		return nil, sigilerr.New(sigilerr.CodeStoreEntityNotFound, "entity "+id+" in workspace "+workspaceID+" not found")
 	}
 
 	if len(ent.Properties) == 0 {
@@ -334,7 +334,7 @@ func (k *KnowledgeStore) lookupWorkspace(ctx context.Context, entityID string) (
 	err := k.db.QueryRowContext(ctx, q, entityID).Scan(&ws)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "entity %s: %w", entityID, store.ErrNotFound)
+			return "", sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "entity %s: %w", entityID, sql.ErrNoRows)
 		}
 		return "", sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "looking up workspace for entity %s: %w", entityID, err)
 	}
@@ -631,7 +631,7 @@ SELECT DISTINCT node FROM reachable`)
 		ent, err := k.GetEntity(ctx, workspace, id)
 		if err != nil {
 			// Only skip if entity not found; propagate DB errors
-			if errors.Is(err, store.ErrNotFound) {
+			if sigilerr.IsNotFound(err) {
 				continue // Node might not be a full entity
 			}
 			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting entity %s during traversal: %w", id, err)

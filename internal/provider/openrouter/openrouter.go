@@ -16,6 +16,7 @@ import (
 	"github.com/openai/openai-go/shared"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 const baseURL = "https://openrouter.ai/api/v1"
@@ -36,7 +37,7 @@ type Provider struct {
 // New creates a new OpenRouter provider. Returns an error if the API key is missing.
 func New(cfg Config) (*Provider, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("openrouter: missing api_key in config")
+		return nil, sigilerr.New(sigilerr.CodeProviderRequestInvalid, "openrouter: missing api_key in config", sigilerr.FieldProvider("openrouter"))
 	}
 
 	base := baseURL
@@ -126,7 +127,7 @@ func (p *Provider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	params, err := buildParams(req)
 	if err != nil {
-		return nil, fmt.Errorf("openrouter: building request params: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "openrouter: building request params")
 	}
 
 	eventCh := make(chan provider.ChatEvent, 100)
@@ -205,7 +206,7 @@ func convertMessages(msgs []provider.Message, systemPrompt string) ([]openaisdk.
 		case store.MessageRoleSystem:
 			result = append(result, openaisdk.SystemMessage(msg.Content))
 		default:
-			return nil, fmt.Errorf("openrouter: unsupported message role %q", msg.Role)
+			return nil, sigilerr.Errorf(sigilerr.CodeProviderRequestInvalid, "openrouter: unsupported message role %q", msg.Role)
 		}
 	}
 

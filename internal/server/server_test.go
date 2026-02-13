@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/server"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,6 +31,13 @@ func TestServer_New(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.NotNil(t, srv)
+}
+
+func TestServer_New_EmptyListenAddr(t *testing.T) {
+	_, err := server.New(server.Config{})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerConfigInvalid), "expected CodeServerConfigInvalid, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "listen address is required")
 }
 
 func TestServer_HealthEndpoint(t *testing.T) {
