@@ -12,6 +12,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/plugin"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
 	"github.com/sigil-dev/sigil/internal/server"
@@ -161,11 +162,11 @@ func (a *workspaceServiceAdapter) List(_ context.Context) ([]server.WorkspaceSum
 
 func (a *workspaceServiceAdapter) Get(_ context.Context, id string) (*server.WorkspaceDetail, error) {
 	if a.cfg.Workspaces == nil {
-		return nil, fmt.Errorf("workspace %q not found", id)
+		return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "workspace %q not found", id)
 	}
 	ws, ok := a.cfg.Workspaces[id]
 	if !ok {
-		return nil, fmt.Errorf("workspace %q not found", id)
+		return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "workspace %q not found", id)
 	}
 	return &server.WorkspaceDetail{
 		ID:          id,
@@ -196,6 +197,9 @@ func (a *pluginServiceAdapter) List(_ context.Context) ([]server.PluginSummary, 
 func (a *pluginServiceAdapter) Get(_ context.Context, name string) (*server.PluginDetail, error) {
 	inst, err := a.mgr.Get(name)
 	if err != nil {
+		if sigilerr.HasCode(err, sigilerr.CodePluginNotFound) {
+			return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "plugin %q not found", name)
+		}
 		return nil, err
 	}
 	caps := inst.Capabilities()
@@ -225,8 +229,8 @@ func (a *sessionServiceAdapter) List(_ context.Context, _ string) ([]server.Sess
 	return []server.SessionSummary{}, nil // Sessions require an open workspace; deferred to agent loop integration.
 }
 
-func (a *sessionServiceAdapter) Get(_ context.Context, _, _ string) (*server.SessionDetail, error) {
-	return nil, fmt.Errorf("session lookup requires workspace context")
+func (a *sessionServiceAdapter) Get(_ context.Context, _, sessionID string) (*server.SessionDetail, error) {
+	return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "session %q not found", sessionID)
 }
 
 // userServiceAdapter bridges GatewayStore users to the server's UserService.

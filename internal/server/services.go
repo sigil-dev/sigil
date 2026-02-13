@@ -5,13 +5,16 @@ package server
 
 import (
 	"context"
-	"errors"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
-// ErrNotFound indicates the requested entity does not exist.
-// Service implementations should wrap this sentinel so handlers can
-// distinguish "not found" from other failures without string matching.
-var ErrNotFound = errors.New("not found")
+// IsNotFound reports whether err carries the server.entity.not_found code.
+// Service implementations should return sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, ...)
+// so handlers can distinguish "not found" from internal failures.
+func IsNotFound(err error) bool {
+	return sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound)
+}
 
 // Services holds dependencies injected into route handlers.
 // Each field is an interface so subsystems can be mocked in tests.

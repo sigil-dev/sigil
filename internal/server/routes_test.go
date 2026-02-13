@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/server"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +38,7 @@ func (m *mockWorkspaceService) Get(_ context.Context, id string) (*server.Worksp
 			Members:     []string{"user-1"},
 		}, nil
 	}
-	return nil, fmt.Errorf("workspace %q: %w", id, server.ErrNotFound)
+	return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "workspace %q not found", id)
 }
 
 type mockPluginService struct{}
@@ -55,14 +56,14 @@ func (m *mockPluginService) Get(_ context.Context, name string) (*server.PluginD
 			Status: "running", Tier: "process", Capabilities: []string{"provider.chat"},
 		}, nil
 	}
-	return nil, fmt.Errorf("plugin %q: %w", name, server.ErrNotFound)
+	return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "plugin %q not found", name)
 }
 
 func (m *mockPluginService) Reload(_ context.Context, name string) error {
 	if name == "anthropic" {
 		return nil
 	}
-	return fmt.Errorf("plugin %q: %w", name, server.ErrNotFound)
+	return sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "plugin %q not found", name)
 }
 
 // errorPluginService returns a non-"not found" error from Reload to test 5xx mapping.
@@ -86,7 +87,7 @@ func (m *mockSessionService) Get(_ context.Context, _, sessionID string) (*serve
 			ID: "sess-1", WorkspaceID: "homelab", Status: "active", MessageCount: 5,
 		}, nil
 	}
-	return nil, fmt.Errorf("session %q: %w", sessionID, server.ErrNotFound)
+	return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "session %q not found", sessionID)
 }
 
 type mockUserService struct{}

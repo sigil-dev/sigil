@@ -6,7 +6,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -199,7 +198,7 @@ func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWo
 func (s *Server) handleGetWorkspace(ctx context.Context, input *getWorkspaceInput) (*getWorkspaceOutput, error) {
 	ws, err := s.services.Workspaces.Get(ctx, input.ID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if IsNotFound(err) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("workspace %q not found", input.ID))
 		}
 		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting workspace %q", input.ID), err)
@@ -220,7 +219,7 @@ func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInpu
 func (s *Server) handleGetSession(ctx context.Context, input *getSessionInput) (*getSessionOutput, error) {
 	session, err := s.services.Sessions.Get(ctx, input.ID, input.SessionID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if IsNotFound(err) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("session %q not found", input.SessionID))
 		}
 		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting session %q", input.SessionID), err)
@@ -241,7 +240,7 @@ func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPlugi
 func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*getPluginOutput, error) {
 	p, err := s.services.Plugins.Get(ctx, input.Name)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if IsNotFound(err) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
 		}
 		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting plugin %q", input.Name), err)
@@ -251,7 +250,7 @@ func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*
 
 func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput) (*reloadPluginOutput, error) {
 	if err := s.services.Plugins.Reload(ctx, input.Name); err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if IsNotFound(err) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
 		}
 		return nil, huma.Error500InternalServerError(fmt.Sprintf("reloading plugin %q", input.Name), err)

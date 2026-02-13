@@ -60,6 +60,7 @@ const (
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
 	CodeServerInternalFailure  Code = "server.internal.failure"
+	CodeServerEntityNotFound   Code = "server.entity.not_found"
 )
 
 // Field is a structured key/value context attached to an error.

@@ -122,16 +122,16 @@ func (s *Server) registerSSERoute() {
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	var req ChatStreamRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		jsonError(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
 	if req.Content == "" {
-		http.Error(w, `{"error":"content is required"}`, http.StatusUnprocessableEntity)
+		jsonError(w, `{"error":"content is required"}`, http.StatusUnprocessableEntity)
 		return
 	}
 
 	if s.streamHandler == nil {
-		http.Error(w, `{"error":"stream handler not configured"}`, http.StatusServiceUnavailable)
+		jsonError(w, `{"error":"stream handler not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -206,4 +206,11 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		http.Error(w, `{"error":"encoding response"}`, http.StatusInternalServerError)
 	}
+}
+
+// jsonError writes an HTTP error response with Content-Type: application/json.
+func jsonError(w http.ResponseWriter, body string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = fmt.Fprint(w, body)
 }
