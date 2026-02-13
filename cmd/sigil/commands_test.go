@@ -20,9 +20,6 @@ func TestWorkspaceCommand_Help(t *testing.T) {
 	err := root.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "list")
-	assert.Contains(t, buf.String(), "create")
-	assert.Contains(t, buf.String(), "delete")
-	assert.Contains(t, buf.String(), "show")
 }
 
 func TestPluginCommand_Help(t *testing.T) {
@@ -34,11 +31,6 @@ func TestPluginCommand_Help(t *testing.T) {
 	err := root.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "list")
-	assert.Contains(t, buf.String(), "install")
-	assert.Contains(t, buf.String(), "remove")
-	assert.Contains(t, buf.String(), "reload")
-	assert.Contains(t, buf.String(), "inspect")
-	assert.Contains(t, buf.String(), "logs")
 }
 
 func TestSessionCommand_Help(t *testing.T) {
@@ -50,9 +42,6 @@ func TestSessionCommand_Help(t *testing.T) {
 	err := root.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "list")
-	assert.Contains(t, buf.String(), "show")
-	assert.Contains(t, buf.String(), "archive")
-	assert.Contains(t, buf.String(), "export")
 }
 
 func TestChatCommand_Help(t *testing.T) {

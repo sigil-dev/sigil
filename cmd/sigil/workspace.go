@@ -15,14 +15,11 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workspace",
 		Short: "Manage workspaces",
-		Long:  "List, create, delete, and inspect workspaces.",
+		Long:  "List workspaces. Additional commands (create, delete, show) will be added in Phase 6.",
 	}
 
 	cmd.AddCommand(
 		newWorkspaceListCmd(),
-		newWorkspaceCreateCmd(),
-		newWorkspaceDeleteCmd(),
-		newWorkspaceShowCmd(),
 	)
 
 	return cmd
@@ -72,45 +69,3 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 	return tw.Flush()
 }
 
-func newWorkspaceCreateCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "create [name]",
-		Short: "Create a new workspace",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Connect to gateway API once server is implemented.
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Created workspace %q\n", args[0])
-			return err
-		},
-	}
-
-	cmd.Flags().String("description", "", "workspace description")
-
-	return cmd
-}
-
-func newWorkspaceDeleteCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete [name]",
-		Short: "Delete a workspace",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Connect to gateway API once server is implemented.
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Deleted workspace %q\n", args[0])
-			return err
-		},
-	}
-}
-
-func newWorkspaceShowCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "show [name]",
-		Short: "Show workspace details",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Connect to gateway API once server is implemented.
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Workspace: %s\n", args[0])
-			return err
-		},
-	}
-}
