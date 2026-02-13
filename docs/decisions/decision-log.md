@@ -656,3 +656,33 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** Mapping all service errors to 404 (the original behavior) masks internal failures — a database connection error would appear as "not found" to the client, making debugging impossible. The sentinel pattern is already established in the codebase (`server.ErrNotFound` existed for reload) and is standard Go idiom.
 
 **Ref:** PR #13 review round 4
+
+## D051: Phase 5 CLI Scope — List-Only Subcommands, CRUD Deferred
+
+**Question:** Phase 5 plan specifies full CRUD subcommands (workspace create/delete/show, plugin install/remove/reload/inspect/logs, session show/archive/export) and full doctor diagnostics, but the implementation provides only `list` subcommands and stubs. Should the plan be updated or the commands implemented?
+
+**Decision:** Keep the plan as-is (plans are not retroactively edited). The implementation correctly follows the design doc scope (design/09-ui-and-cli.md) which explicitly limits Phase 5 to: `start`, `status`, `version`, `workspace list`, `plugin list`, `session list`, `chat` (stub), `doctor` (stub). Full CRUD and doctor diagnostics are deferred to Phase 6 (Advanced Features), tracked in `sigil-n6m`.
+
+**Rationale:** The design doc is the authoritative scope definition. The plan document described the full target state; the design doc subsequently narrowed Phase 5 scope. Changing plans retroactively obscures the original intent. Documenting the deferral here maintains traceability.
+
+**Ref:** PR #13 review round 5
+
+## D052: Status Command Calls /api/v1/status, Not /health
+
+**Question:** Phase 5 plan says `sigil status` calls `/health`, but the implementation calls `/api/v1/status`. Which endpoint should the CLI use?
+
+**Decision:** Keep `/api/v1/status`. The plan is not retroactively edited; this deviation is documented here.
+
+**Rationale:** `/health` is a minimal liveness probe (returns 200 OK with no payload) intended for load balancers and orchestrators. `/api/v1/status` returns richer gateway status information (version, uptime, component health) that is actually useful for the `sigil status` CLI command. Using the richer endpoint gives operators actionable output.
+
+**Ref:** PR #13 review round 5
+
+## D053: Doctor Command — Stub in Phase 5, Full Diagnostics Deferred
+
+**Question:** The design doc's "Doctor Command" section describes full diagnostics (binary health, plugin processes, provider API keys, channel connections, node connectivity, disk space, Tailscale status), but Phase 5 implements only a stub. Should the design doc clarify this phasing?
+
+**Decision:** The design doc describes the complete target state, not per-phase scope. Phase 5 delivers `doctor` as a registered command with placeholder output. Full diagnostic checks are deferred to Phase 6 alongside the remaining CLI commands, tracked in `sigil-n6m`. The design doc is not modified; this decision documents the phased rollout.
+
+**Rationale:** Design docs describe what the system will eventually do. Phase scoping is handled in plan docs and decision log entries. Adding phase annotations to every design doc section would create maintenance burden and clutter the architectural narrative.
+
+**Ref:** PR #13 review round 5
