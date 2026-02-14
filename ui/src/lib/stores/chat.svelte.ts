@@ -90,7 +90,8 @@ export class ChatStore {
         groups.push({ id: ws.id, description: ws.description, sessions });
       }
       this.workspaceGroups = groups;
-    } catch {
+    } catch (error) {
+      console.error("Failed to load sidebar:", error);
       this.error = "Failed to load sidebar data";
     } finally {
       this.sidebarLoading = false;
@@ -225,7 +226,12 @@ export class ChatStore {
           } else if (line.startsWith("event:")) {
             eventType = line.slice(6).trim();
           } else if (line.startsWith("data:")) {
-            dataLines.push(line.slice(5).trimStart());
+            // Per SSE spec: strip exactly one leading space if present (U+0020)
+            let value = line.slice(5);
+            if (value.length > 0 && value.charCodeAt(0) === 0x20) {
+              value = value.slice(1);
+            }
+            dataLines.push(value);
           }
         }
       }

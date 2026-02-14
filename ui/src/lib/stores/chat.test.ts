@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parseSSEEventData, parseSSEStream } from "./sse-parser";
 
 describe("parseSSEEventData", () => {
   it("extracts text from JSON-wrapped text_delta events", () => {
-    const result = parseSSEEventData("text_delta", '{"text":"Hello"}');
+    const result = parseSSEEventData("text_delta", "{\"text\":\"Hello\"}");
     expect(result).toEqual({ type: "text_delta", text: "Hello" });
   });
 
   it("extracts session_id from JSON-wrapped session_id events", () => {
-    const result = parseSSEEventData("session_id", '{"session_id":"sess-123"}');
+    const result = parseSSEEventData("session_id", "{\"session_id\":\"sess-123\"}");
     expect(result).toEqual({ type: "session_id", sessionId: "sess-123" });
   });
 
   it("parses tool_call events with name and input", () => {
-    const data = '{"name":"web-search","input":{"query":"test"}}';
+    const data = "{\"name\":\"web-search\",\"input\":{\"query\":\"test\"}}";
     const result = parseSSEEventData("tool_call", data);
     expect(result).toEqual({
       type: "tool_call",
@@ -26,7 +26,7 @@ describe("parseSSEEventData", () => {
   });
 
   it("parses tool_result events with name and result", () => {
-    const data = '{"name":"web-search","result":{"url":"https://example.com"}}';
+    const data = "{\"name\":\"web-search\",\"result\":{\"url\":\"https://example.com\"}}";
     const result = parseSSEEventData("tool_result", data);
     expect(result).toEqual({
       type: "tool_result",
@@ -89,5 +89,35 @@ describe("parseSSEStream", () => {
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("text_delta");
+  });
+
+  it("strips exactly one leading space after 'data:' per SSE spec", () => {
+    const raw = "event: text_delta\ndata: value\n\n";
+    const events = parseSSEStream(raw);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("text_delta");
+    if (events[0].type === "text_delta") {
+      expect(events[0].text).toBe("value");
+    }
+  });
+
+  it("preserves additional leading spaces after the first one", () => {
+    const raw = "event: text_delta\ndata:  value\n\n";
+    const events = parseSSEStream(raw);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("text_delta");
+    if (events[0].type === "text_delta") {
+      expect(events[0].text).toBe(" value");
+    }
+  });
+
+  it("handles no leading space after colon", () => {
+    const raw = "event: text_delta\ndata:value\n\n";
+    const events = parseSSEStream(raw);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("text_delta");
+    if (events[0].type === "text_delta") {
+      expect(events[0].text).toBe("value");
+    }
   });
 });

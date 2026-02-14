@@ -196,7 +196,9 @@ pub fn run() {
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 // Clean up sidecar on app exit
-                let _ = stop_sidecar(app_handle);
+                if let Err(e) = stop_sidecar(app_handle) {
+                    eprintln!("Failed to stop sidecar on exit: {}", e);
+                }
             }
         });
 }

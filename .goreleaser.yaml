@@ -91,7 +91,6 @@ dockers:
     build_flag_templates:
       - "--platform=linux/arm64"
     goarch: arm64
-
 docker_manifests:
   - name_template: "ghcr.io/sigil-dev/sigil:{{ .Version }}"
     image_templates:

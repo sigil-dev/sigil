@@ -21,8 +21,9 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
       try {
         const parsed = JSON.parse(data) as { text: string };
         return { type: "text_delta", text: parsed.text };
-      } catch {
+      } catch (error) {
         // Fall back to raw text if not JSON (e.g., multi-line data)
+        console.warn("Failed to parse text_delta JSON, using raw text:", error);
         return { type: "text_delta", text: data };
       }
     }
@@ -76,8 +77,9 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
         if (parsed.text !== undefined) {
           return { type: "text_delta", text: parsed.text };
         }
-      } catch {
+      } catch (error) {
         // Not JSON — use raw data as text
+        console.warn("Unknown SSE event type, treating as text_delta:", eventType);
       }
       return { type: "text_delta", text: data };
   }
@@ -107,7 +109,12 @@ export function parseSSEStream(raw: string): ParsedSSEEvent[] {
     } else if (line.startsWith("event:")) {
       eventType = line.slice(6).trim();
     } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trimStart());
+      // Per SSE spec: strip exactly one leading space if present (U+0020)
+      let value = line.slice(5);
+      if (value.length > 0 && value.charCodeAt(0) === 0x20) {
+        value = value.slice(1);
+      }
+      dataLines.push(value);
     }
     // Ignore comments (lines starting with :) and other fields
   }

@@ -60,3 +60,6 @@ site/.venv/
 
 # Plugin data
 data/
+
+# bv (beads viewer) local config and caches
+.bv/
