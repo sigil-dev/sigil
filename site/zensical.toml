@@ -1,0 +1,30 @@
+[project]
+site_name = "Sigil Documentation"
+site_description = "Secure, lightweight Go gateway for AI agents"
+site_url = "https://docs.sigil.dev"
+copyright = "Copyright &copy; 2026 Sigil Contributors"
+
+[project.theme]
+language = "en"
+
+features = [
+    "content.code.copy",
+    "content.tooltips",
+    "navigation.footer",
+    "navigation.instant",
+    "navigation.path",
+    "navigation.sections",
+    "navigation.top",
+    "navigation.tracking",
+    "search.highlight",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
