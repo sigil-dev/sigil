@@ -6,6 +6,8 @@ package plugin_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/plugin"
@@ -20,14 +22,29 @@ type mockChannelPlugin struct {
 	name      string
 	sendCount int
 	lastSent  plugin.OutboundMessage
+	mu        sync.Mutex // protects sendCount and lastSent
 }
 
 func (m *mockChannelPlugin) Name() string { return m.name }
 
 func (m *mockChannelPlugin) Send(_ context.Context, msg plugin.OutboundMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.sendCount++
 	m.lastSent = msg
 	return nil
+}
+
+func (m *mockChannelPlugin) getSendCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sendCount
+}
+
+func (m *mockChannelPlugin) getLastSent() plugin.OutboundMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastSent
 }
 
 // --- Mock PairingStore ---
@@ -85,9 +102,10 @@ func TestChannelRouter_SendMessage(t *testing.T) {
 
 	err := router.Send(context.Background(), msg)
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.sendCount)
-	assert.Equal(t, "hello world", mock.lastSent.Content)
-	assert.Equal(t, "chat-123", mock.lastSent.ChannelID)
+	assert.Equal(t, 1, mock.getSendCount())
+	lastSent := mock.getLastSent()
+	assert.Equal(t, "hello world", lastSent.Content)
+	assert.Equal(t, "chat-123", lastSent.ChannelID)
 }
 
 func TestChannelRouter_UnregisteredChannel(t *testing.T) {
@@ -474,4 +492,60 @@ func TestAuthorizeInbound_PairOnRequest_NoPairingStore(t *testing.T) {
 	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "user", "ws-1")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
+}
+
+func TestChannelRouter_ConcurrentAccess(t *testing.T) {
+	router := plugin.NewChannelRouter(nil)
+
+	// Pre-register a channel so Get/Send have something to find.
+	router.Register("telegram", &mockChannelPlugin{name: "telegram"})
+
+	const goroutines = 10
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 3) // 3 operation types
+
+	// Concurrent Register operations (simulating hot-reload)
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				channelName := fmt.Sprintf("channel-%d", id)
+				router.Register(channelName, &mockChannelPlugin{name: channelName})
+			}
+		}(i)
+	}
+
+	// Concurrent Get operations
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_, _ = router.Get("telegram")
+			}
+		}()
+	}
+
+	// Concurrent Send operations
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = router.Send(context.Background(), plugin.OutboundMessage{
+					ChannelType: "telegram",
+					ChannelID:   "chat-1",
+					Content:     "concurrent msg",
+				})
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// If we reach here without panicking, the mutex is working correctly.
+	// Verify the router still works after concurrent access.
+	ch, err := router.Get("telegram")
+	require.NoError(t, err)
+	assert.Equal(t, "telegram", ch.Name())
 }

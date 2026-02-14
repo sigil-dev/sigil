@@ -5,6 +5,7 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -1237,4 +1238,217 @@ func TestAgentLoop_ChatFailureCallsRecordFailure(t *testing.T) {
 	// RecordFailure should have been called for the pre-stream Chat() error.
 	assert.Equal(t, 1, healthProv.getFailureCount(),
 		"RecordFailure should be called on pre-stream Chat() error")
+}
+
+// ---------------------------------------------------------------------------
+// Tool loop iteration cap tests
+// ---------------------------------------------------------------------------
+
+// mockProviderAlwaysToolCall always emits a tool call, simulating a runaway LLM.
+type mockProviderAlwaysToolCall struct {
+	mu      sync.Mutex
+	callNum int
+}
+
+func (p *mockProviderAlwaysToolCall) Name() string                     { return "mock-always-tool" }
+func (p *mockProviderAlwaysToolCall) Available(_ context.Context) bool { return true }
+func (p *mockProviderAlwaysToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-always-tool"}, nil
+}
+
+func (p *mockProviderAlwaysToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderAlwaysToolCall) Close() error { return nil }
+
+func (p *mockProviderAlwaysToolCall) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	call := p.callNum
+	p.callNum++
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, 3)
+	ch <- provider.ChatEvent{
+		Type: provider.EventTypeToolCall,
+		ToolCall: &provider.ToolCall{
+			ID:        fmt.Sprintf("tc-%d", call),
+			Name:      "infinite_tool",
+			Arguments: `{}`,
+		},
+	}
+	ch <- provider.ChatEvent{
+		Type:  provider.EventTypeDone,
+		Usage: &provider.Usage{InputTokens: 5, OutputTokens: 2},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (p *mockProviderAlwaysToolCall) getCallCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.callNum
+}
+
+func TestAgentLoop_ToolLoopIterationCapEnforced(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	alwaysToolProvider := &mockProviderAlwaysToolCall{}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("result"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: alwaysToolProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "run infinite tools",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"expected CodeAgentLoopFailure, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "exceeded maximum iterations")
+
+	// The provider should have been called 1 (initial) + 5 (loop iterations) = 6 times.
+	assert.Equal(t, 6, alwaysToolProvider.getCallCount(),
+		"provider should be called once initially plus maxToolLoopIterations times")
+}
+
+// ---------------------------------------------------------------------------
+// Multi-iteration tool loop provider and test
+// ---------------------------------------------------------------------------
+
+// mockProviderMultiToolCall emits tool calls for the first N Chat() calls,
+// then a text response. Used to test multi-iteration tool loops.
+type mockProviderMultiToolCall struct {
+	mu           sync.Mutex
+	callNum      int
+	toolCallsFor int // number of calls that emit tool calls
+}
+
+func (p *mockProviderMultiToolCall) Name() string                     { return "mock-multi-tool" }
+func (p *mockProviderMultiToolCall) Available(_ context.Context) bool { return true }
+func (p *mockProviderMultiToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-multi-tool"}, nil
+}
+func (p *mockProviderMultiToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderMultiToolCall) Close() error { return nil }
+
+func (p *mockProviderMultiToolCall) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	call := p.callNum
+	p.callNum++
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, 4)
+	if call < p.toolCallsFor {
+		// Emit tool call — each iteration uses 10 input + 3 output = 13 tokens
+		ch <- provider.ChatEvent{
+			Type: provider.EventTypeToolCall,
+			ToolCall: &provider.ToolCall{
+				ID:        fmt.Sprintf("tc-%d", call),
+				Name:      "multi_tool",
+				Arguments: `{}`,
+			},
+		}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 10, OutputTokens: 3},
+		}
+	} else {
+		// Final call: emit text — uses 20 input + 7 output = 27 tokens
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Multi-tool done."}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 20, OutputTokens: 7},
+		}
+	}
+	close(ch)
+	return ch, nil
+}
+
+func TestAgentLoop_BudgetCumulativeAcrossMultipleToolIterations(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	session.TokenBudget.MaxPerSession = 100000
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	// Provider emits tool calls for first 3 calls (initial + 2 loop iterations),
+	// then text on the 4th call (3rd loop iteration resolves).
+	// Call 0 (initial): 13 tokens (tool call)
+	// Call 1 (loop iter 1): 13 tokens (tool call)
+	// Call 2 (loop iter 2): 13 tokens (tool call)
+	// Call 3 (loop iter 3): 27 tokens (text response)
+	// Total: 13 + 13 + 13 + 27 = 66 tokens
+	multiToolProvider := &mockProviderMultiToolCall{toolCallsFor: 3}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("ok"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: multiToolProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "use tools multiple times",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, "Multi-tool done.", out.Content)
+
+	// Verify cumulative session budget: all 4 LLM calls accounted.
+	// Initial call (13) is accounted in ProcessMessage before tool loop.
+	// Loop iterations: 13 + 13 + 27 = 53 accounted inside runToolLoop.
+	// Total: 13 + 13 + 13 + 27 = 66.
+	updated, err := ss.GetSession(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 66, updated.TokenBudget.UsedSession,
+		"UsedSession should accumulate across ALL tool loop iterations, not just the final one")
+
+	// Returned usage reflects only the final LLM call (current behavior).
+	assert.Equal(t, 20, out.Usage.InputTokens, "returned usage should be from final LLM call")
+	assert.Equal(t, 7, out.Usage.OutputTokens, "returned usage should be from final LLM call")
 }

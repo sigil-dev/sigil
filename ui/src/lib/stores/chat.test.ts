@@ -110,7 +110,7 @@ describe("parseSSEStream", () => {
   });
 
   it("strips exactly one leading space after 'data:' per SSE spec", () => {
-    const raw = 'event: text_delta\ndata: {"text":"value"}\n\n';
+    const raw = "event: text_delta\ndata: {\"text\":\"value\"}\n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("text_delta");
@@ -130,7 +130,7 @@ describe("parseSSEStream", () => {
   });
 
   it("handles no leading space after colon", () => {
-    const raw = 'event: text_delta\ndata:{"text":"value"}\n\n';
+    const raw = "event: text_delta\ndata:{\"text\":\"value\"}\n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("text_delta");

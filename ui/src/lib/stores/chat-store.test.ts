@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the api module before importing ChatStore
 vi.mock("$lib/api/client", () => ({
@@ -13,8 +13,8 @@ vi.mock("$lib/api/client", () => ({
 // Mock import.meta.env
 vi.stubEnv("VITE_API_URL", "http://localhost:18789");
 
-import { ChatStore } from "./chat.svelte";
 import { api } from "$lib/api/client";
+import { ChatStore } from "./chat.svelte";
 
 // Helper to create a mock ReadableStream from SSE text
 function createSSEStream(sseText: string): ReadableStream<Uint8Array> {
@@ -50,9 +50,9 @@ describe("ChatStore", () => {
   describe("sendMessage", () => {
     it("adds user message and streams assistant response", async () => {
       const sseData = [
-        'event: session_id\ndata: {"session_id":"sess-1"}\n\n',
-        'event: text_delta\ndata: {"text":"Hello"}\n\n',
-        'event: text_delta\ndata: {"text":" world"}\n\n',
+        "event: session_id\ndata: {\"session_id\":\"sess-1\"}\n\n",
+        "event: text_delta\ndata: {\"text\":\"Hello\"}\n\n",
+        "event: text_delta\ndata: {\"text\":\" world\"}\n\n",
         "event: done\ndata: {}\n\n",
       ].join("");
 
@@ -74,7 +74,7 @@ describe("ChatStore", () => {
     it("handles HTTP error with JSON body", async () => {
       const errorResponse = new Response(
         JSON.stringify({ status: 400, detail: "Invalid workspace" }),
-        { status: 400 }
+        { status: 400 },
       );
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(errorResponse));
 
@@ -111,7 +111,7 @@ describe("ChatStore", () => {
 
     it("prevents concurrent messages while loading", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
-        mockSSEResponse('event: done\ndata: {}\n\n')
+        mockSSEResponse("event: done\ndata: {}\n\n"),
       );
       vi.stubGlobal("fetch", fetchMock);
 
@@ -129,10 +129,10 @@ describe("ChatStore", () => {
 
     it("processes tool_call and tool_result events", async () => {
       const sseData = [
-        'event: text_delta\ndata: {"text":"Let me search..."}\n\n',
-        'event: tool_call\ndata: {"name":"web-search","input":{"query":"test"}}\n\n',
-        'event: tool_result\ndata: {"name":"web-search","result":{"url":"http://example.com"}}\n\n',
-        'event: text_delta\ndata: {"text":" Found it!"}\n\n',
+        "event: text_delta\ndata: {\"text\":\"Let me search...\"}\n\n",
+        "event: tool_call\ndata: {\"name\":\"web-search\",\"input\":{\"query\":\"test\"}}\n\n",
+        "event: tool_result\ndata: {\"name\":\"web-search\",\"result\":{\"url\":\"http://example.com\"}}\n\n",
+        "event: text_delta\ndata: {\"text\":\" Found it!\"}\n\n",
         "event: done\ndata: {}\n\n",
       ].join("");
 
@@ -151,7 +151,7 @@ describe("ChatStore", () => {
 
     it("handles error event mid-stream", async () => {
       const sseData = [
-        'event: text_delta\ndata: {"text":"partial"}\n\n',
+        "event: text_delta\ndata: {\"text\":\"partial\"}\n\n",
         "event: error\ndata: rate limit exceeded\n\n",
       ].join("");
 
@@ -168,7 +168,7 @@ describe("ChatStore", () => {
 
     it("handles parse_error events from malformed server data", async () => {
       const sseData = [
-        'event: session_id\ndata: not-json\n\n',
+        "event: session_id\ndata: not-json\n\n",
         "event: done\ndata: {}\n\n",
       ].join("");
 

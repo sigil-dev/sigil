@@ -4,7 +4,7 @@
 import createClient from "openapi-fetch";
 import type { paths } from "./generated/schema";
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:18789";
+export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:18789";
 
 export const api = createClient<paths>({
   baseUrl: API_BASE,

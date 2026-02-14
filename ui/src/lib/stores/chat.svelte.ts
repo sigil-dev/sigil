@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
-import { api } from "$lib/api/client";
+import { api, API_BASE } from "$lib/api/client";
 import { logger } from "$lib/logger";
 import { parseSSEEventData } from "./sse-parser";
-
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:18789";
 
 /** Role of a chat message */
 export type MessageRole = "user" | "assistant" | "tool";
@@ -98,8 +96,10 @@ export class ChatStore {
       this.workspaceGroups = groups;
     } catch (error) {
       logger.error("Failed to load sidebar", { error });
-      if (error instanceof TypeError) {
+      if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
         this.error = "Network error — cannot reach gateway";
+      } else if (error instanceof TypeError) {
+        this.error = "Failed to load sidebar data";
       } else if (error instanceof Response || (error && typeof error === "object" && "status" in error)) {
         const status = (error as { status?: number }).status;
         this.error = `Gateway error (HTTP ${status ?? "unknown"})`;
@@ -170,7 +170,7 @@ export class ChatStore {
       if (this.sessionId) body.session_id = this.sessionId;
 
       // Note: Using raw fetch for SSE streaming endpoint instead of typed client.
-      // The openapi-fetch client doesn't properly support text/event-stream responses.
+      // As of openapi-fetch@0.x (2026-02), ReadableStream/SSE responses are not supported.
       const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
         method: "POST",
         headers: {

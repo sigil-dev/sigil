@@ -205,7 +205,7 @@
 		font-size: 0.9rem;
 	}
 
-table {
+	table {
 		width: 100%;
 		border-collapse: collapse;
 	}

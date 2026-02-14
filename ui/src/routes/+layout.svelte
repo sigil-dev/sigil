@@ -8,6 +8,7 @@
 	// Sidecar error banner state
 	let sidecarError = $state<string | null>(null);
 	let sidecarReady = $state(false);
+	let sidecarStatus = $state<string | null>(null);
 
 	onMount(() => {
 		// Only set up Tauri listeners in desktop environment
@@ -20,11 +21,12 @@
 				const { listen } = await import('@tauri-apps/api/event');
 
 				// Listen for sidecar startup errors
-				const errorUnlisten = await listen('sidecar-error', (event: any) => {
+				const errorUnlisten = await listen<string>('sidecar-error', (event) => {
 					console.error('Sidecar error:', event.payload);
 					sidecarError = typeof event.payload === 'string'
 						? event.payload
 						: 'Sigil gateway failed to start. Please check the logs.';
+					sidecarStatus = null;
 				});
 
 				// Listen for sidecar ready event
@@ -32,12 +34,25 @@
 					console.log('Sidecar ready');
 					sidecarReady = true;
 					sidecarError = null;
+					sidecarStatus = null;
+				});
+
+				// Listen for sidecar checking events
+				const checkingUnlisten = await listen<string>('sidecar-checking', (event) => {
+					sidecarStatus = event.payload;
+				});
+
+				// Listen for sidecar retry events
+				const retryUnlisten = await listen<string>('sidecar-retry', (event) => {
+					sidecarStatus = event.payload;
 				});
 
 				// Store cleanup function to be called on unmount
 				cleanup = () => {
 					errorUnlisten();
 					readyUnlisten();
+					checkingUnlisten();
+					retryUnlisten();
 				};
 			} catch (e) {
 				// Not in Tauri environment - ignore
@@ -59,6 +74,12 @@
 			{sidecarError}
 		</div>
 		<button class="error-dismiss" onclick={() => (sidecarError = null)}>×</button>
+	</div>
+{:else if sidecarStatus}
+	<div class="status-banner">
+		<div class="status-content">
+			{sidecarStatus}
+		</div>
 	</div>
 {/if}
 
@@ -103,5 +124,25 @@
 
 	.error-dismiss:hover {
 		opacity: 1;
+	}
+
+	.status-banner {
+		position: fixed;
+		top: 0;
+		left: 0;
+		right: 0;
+		background-color: #3b82f6;
+		color: white;
+		padding: 0.5rem 1rem;
+		display: flex;
+		align-items: center;
+		z-index: 9999;
+		box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+	}
+
+	.status-content {
+		flex: 1;
+		font-size: 0.875rem;
+		text-align: center;
 	}
 </style>

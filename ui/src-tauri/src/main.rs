@@ -10,6 +10,22 @@ use tauri::{
 
 use std::sync::Mutex;
 
+/// Default gateway port, matching the TypeScript client's API_BASE default.
+const DEFAULT_GATEWAY_PORT: u16 = 18789;
+
+/// Errors that can occur during sidecar lifecycle management
+#[derive(Debug, thiserror::Error)]
+enum SidecarError {
+    #[error("sidecar state lock poisoned: {0}")]
+    LockPoisoned(String),
+    #[error("failed to resolve app data directory: {0}")]
+    AppDataDir(tauri::Error),
+    #[error("failed to spawn sidecar: {0}")]
+    SpawnFailed(tauri_plugin_shell::Error),
+    #[error("sidecar process kill failed: {0}")]
+    KillFailed(std::io::Error),
+}
+
 /// Sidecar process handle stored in app state
 struct SidecarState {
     process: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
@@ -24,9 +40,12 @@ impl SidecarState {
 }
 
 /// Start the Sigil gateway sidecar process
-fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
     let state = app.state::<SidecarState>();
-    let mut process_lock = state.process.lock().map_err(|e| format!("sidecar state lock poisoned: {}", e))?;
+    let mut process_lock = state
+        .process
+        .lock()
+        .map_err(|e| SidecarError::LockPoisoned(e.to_string()))?;
 
     // Don't start if already running
     if process_lock.is_some() {
@@ -36,16 +55,19 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Get config path from app data directory
     let config_path = app
         .path()
-        .app_data_dir()?
+        .app_data_dir()
+        .map_err(SidecarError::AppDataDir)?
         .join("sigil.yaml")
         .to_string_lossy()
         .to_string();
 
     // Start sidecar with shell plugin
     let sidecar = tauri_plugin_shell::ShellExt::shell(app)
-        .sidecar("sigil")?
+        .sidecar("sigil")
+        .map_err(SidecarError::SpawnFailed)?
         .args(&["start", "--config", &config_path])
-        .spawn()?;
+        .spawn()
+        .map_err(SidecarError::SpawnFailed)?;
 
     *process_lock = Some(sidecar);
 
@@ -58,6 +80,12 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
         for (attempt, delay_ms) in delays.iter().enumerate() {
             std::thread::sleep(std::time::Duration::from_millis(*delay_ms));
+
+            // Emit checking event before each attempt
+            let _ = app_handle.emit(
+                "sidecar-checking",
+                format!("Health check attempt {}/{}", attempt + 1, delays.len()),
+            );
 
             match health_check_sidecar() {
                 Ok(true) => {
@@ -73,6 +101,14 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         attempt + 1,
                         delays.len()
                     );
+                    let _ = app_handle.emit(
+                        "sidecar-retry",
+                        format!(
+                            "Attempt {}/{} failed — not responding",
+                            attempt + 1,
+                            delays.len()
+                        ),
+                    );
                 }
                 Err(e) => {
                     eprintln!(
@@ -80,6 +116,10 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         attempt + 1,
                         delays.len(),
                         e
+                    );
+                    let _ = app_handle.emit(
+                        "sidecar-retry",
+                        format!("Attempt {}/{} error: {}", attempt + 1, delays.len(), e),
                     );
                 }
             }
@@ -101,8 +141,7 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 /// Perform health check on the sidecar gateway
 fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
     // Try to connect to the gateway's health endpoint
-    // Default port is 18789 based on client.ts
-    let health_url = "http://localhost:18789/health";
+    let health_url = format!("http://localhost:{}/health", DEFAULT_GATEWAY_PORT);
 
     // Use ureq for a simple HTTP request
     match ureq::get(health_url)
@@ -123,13 +162,16 @@ fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
 }
 
 /// Stop the Sigil gateway sidecar process
-fn stop_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
     let state = app.state::<SidecarState>();
-    let mut process_lock = state.process.lock().map_err(|e| format!("sidecar state lock poisoned: {}", e))?;
+    let mut process_lock = state
+        .process
+        .lock()
+        .map_err(|e| SidecarError::LockPoisoned(e.to_string()))?;
 
     if let Some(mut process) = process_lock.take() {
-        // CommandChild::kill() sends SIGKILL — the gateway process is terminated immediately without graceful shutdown. Any in-flight database transactions will be rolled back by SQLite. Graceful shutdown would require the gateway to implement a /shutdown endpoint.
-        process.kill()?;
+        // Terminates the gateway process immediately. Database state depends on SQLite WAL recovery. Graceful shutdown would require the gateway to implement a /shutdown endpoint.
+        process.kill().map_err(SidecarError::KillFailed)?;
         println!("Sigil gateway stopped");
     }
 
@@ -137,7 +179,7 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Restart the Sigil gateway sidecar process
-fn restart_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+fn restart_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
     stop_sidecar(app)?;
     std::thread::sleep(std::time::Duration::from_millis(500));
     start_sidecar(app)?;

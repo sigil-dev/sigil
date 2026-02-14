@@ -47,9 +47,9 @@ describe("parseSSEStream robustness", () => {
   });
 
   it("handles rapid succession of events", () => {
-    const events_raw = Array.from({ length: 50 }, (_, i) =>
-      `event: text_delta\ndata: {"text":"chunk${i}"}\n\n`
-    ).join("");
+    const events_raw = Array.from({ length: 50 }, (_, i) => `event: text_delta\ndata: {"text":"chunk${i}"}\n\n`).join(
+      "",
+    );
     const events = parseSSEStream(events_raw);
     expect(events).toHaveLength(50);
     events.forEach((e, i) => {
@@ -94,8 +94,8 @@ describe("parseSSEStream robustness", () => {
 
   it("handles tool_call followed by tool_result", () => {
     const raw = [
-      'event: tool_call\ndata: {"name":"search","input":{"q":"test"}}\n\n',
-      'event: tool_result\ndata: {"name":"search","result":{"url":"http://x.com"}}\n\n',
+      "event: tool_call\ndata: {\"name\":\"search\",\"input\":{\"q\":\"test\"}}\n\n",
+      "event: tool_result\ndata: {\"name\":\"search\",\"result\":{\"url\":\"http://x.com\"}}\n\n",
     ].join("");
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(2);
@@ -113,7 +113,7 @@ describe("parseSSEStream robustness", () => {
 
   it("surfaces error event mid-stream without losing prior events", () => {
     const raw = [
-      'event: text_delta\ndata: {"text":"partial"}\n\n',
+      "event: text_delta\ndata: {\"text\":\"partial\"}\n\n",
       "event: error\ndata: rate limit exceeded\n\n",
     ].join("");
     const events = parseSSEStream(raw);
@@ -125,32 +125,32 @@ describe("parseSSEStream robustness", () => {
 
 describe("parseSSEEventData edge cases", () => {
   it("handles empty string for session_id", () => {
-    const result = parseSSEEventData("session_id", '{"session_id":""}');
+    const result = parseSSEEventData("session_id", "{\"session_id\":\"\"}");
     expect(result).toEqual({ type: "session_id", sessionId: "" });
   });
 
   it("handles tool_call with no input field", () => {
-    const result = parseSSEEventData("tool_call", '{"name":"ping"}');
+    const result = parseSSEEventData("tool_call", "{\"name\":\"ping\"}");
     expect(result).toEqual({ type: "tool_call", name: "ping", input: undefined });
   });
 
   it("handles tool_result with no result field", () => {
-    const result = parseSSEEventData("tool_result", '{"name":"ping"}');
+    const result = parseSSEEventData("tool_result", "{\"name\":\"ping\"}");
     expect(result).toEqual({ type: "tool_result", name: "ping", result: undefined });
   });
 
   it("handles text_delta with unicode text", () => {
-    const result = parseSSEEventData("text_delta", '{"text":"Hello 🌍 café"}');
+    const result = parseSSEEventData("text_delta", "{\"text\":\"Hello 🌍 café\"}");
     expect(result).toEqual({ type: "text_delta", text: "Hello 🌍 café" });
   });
 
   it("handles text_delta with empty text", () => {
-    const result = parseSSEEventData("text_delta", '{"text":""}');
+    const result = parseSSEEventData("text_delta", "{\"text\":\"\"}");
     expect(result).toEqual({ type: "text_delta", text: "" });
   });
 
   it("handles nested JSON in tool_call input", () => {
-    const data = '{"name":"query","input":{"sql":"SELECT * FROM t","params":[1,2,3]}}';
+    const data = "{\"name\":\"query\",\"input\":{\"sql\":\"SELECT * FROM t\",\"params\":[1,2,3]}}";
     const result = parseSSEEventData("tool_call", data);
     expect(result.type).toBe("tool_call");
     if (result.type === "tool_call") {
