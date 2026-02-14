@@ -216,7 +216,7 @@ func (a *pluginServiceAdapter) Get(_ context.Context, name string) (*server.Plug
 }
 
 func (a *pluginServiceAdapter) Reload(_ context.Context, _ string) error {
-	return sigilerr.New(sigilerr.CodeCLISetupFailure, "plugin reload not yet implemented")
+	return sigilerr.New(sigilerr.CodeServerNotImplemented, "plugin reload not yet implemented")
 }
 
 // sessionServiceAdapter bridges workspace sessions to the server's SessionService.

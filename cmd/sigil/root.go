@@ -5,6 +5,7 @@ package main
 
 import (
 	"github.com/sigil-dev/sigil/internal/config"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -54,7 +55,7 @@ func initViper(cmd *cobra.Command) error {
 	if cfgFile, _ := cmd.Flags().GetString("config"); cfgFile != "" {
 		v.SetConfigFile(cfgFile)
 		if err := v.ReadInConfig(); err != nil {
-			return err
+			return sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config file: %w", err)
 		}
 	} else {
 		// Auto-discover sigil.yaml from standard locations.

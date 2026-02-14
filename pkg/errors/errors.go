@@ -72,6 +72,7 @@ const (
 	CodeServerConfigInvalid    Code = "server.config.invalid"
 	CodeServerStartFailure     Code = "server.start.failure"
 	CodeServerShutdownFailure  Code = "server.shutdown.failure"
+	CodeServerNotImplemented   Code = "server.method.not_implemented"
 
 	CodeCLIGatewayNotRunning Code = "cli.gateway.not_running"
 	CodeCLIRequestFailure    Code = "cli.request.failure"
@@ -231,6 +232,8 @@ func IsUpstreamFailure(err error) bool {
 
 func HTTPStatus(err error) int {
 	switch {
+	case HasCode(err, CodeServerNotImplemented):
+		return http.StatusNotImplemented
 	case IsNotFound(err):
 		return http.StatusNotFound
 	case IsConflict(err):
