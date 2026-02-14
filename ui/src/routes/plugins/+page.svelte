@@ -147,9 +147,7 @@
 					<th>Name</th>
 					<th>Type</th>
 					<th>Version</th>
-					<th>Tier</th>
 					<th>Status</th>
-					<th>Resources</th>
 					<th>Actions</th>
 				</tr>
 			</thead>
@@ -160,17 +158,9 @@
 						<td><span class="type-badge">{plugin.type}</span></td>
 						<td>{plugin.version}</td>
 						<td>
-							<span class="tier-badge {getTierBadgeClass((plugin as any).tier || 'process')}">
-								{(plugin as any).tier || 'process'}
-							</span>
-						</td>
-						<td>
 							<span class="status-badge {getStatusBadgeClass(plugin.status)}">
 								{plugin.status}
 							</span>
-						</td>
-						<td class="resources-cell">
-							<span class="resource-placeholder" title="Resource monitoring coming soon">&mdash;</span>
 						</td>
 						<td class="actions-cell">
 							<button onclick={() => viewDetails(plugin.name)} disabled={reloading !== null}>

@@ -213,7 +213,7 @@ Authorization: Bearer <token>
 
 ### REST Endpoints
 
-#### GET /api/v1/status
+#### GET /health
 
 Server health and status.
 

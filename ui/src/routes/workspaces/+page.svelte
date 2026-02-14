@@ -45,32 +45,6 @@
 				<a href="/workspaces/{workspace.id}" class="workspace-card">
 					<h2>{workspace.id}</h2>
 					<p>{workspace.description}</p>
-					<div class="workspace-meta">
-						<div class="meta-item">
-							<span class="meta-label">Members:</span>
-							<span class="meta-value">{(workspace as any).members?.length || 0}</span>
-						</div>
-						<div class="meta-item">
-							<span class="meta-label">Model:</span>
-							<span class="meta-value">{(workspace as any).model || '—'}</span>
-						</div>
-						<div class="meta-item">
-							<span class="meta-label">Channels:</span>
-							<span class="meta-value">{(workspace as any).channels?.length || '—'}</span>
-						</div>
-						<div class="meta-item">
-							<span class="meta-label">Nodes:</span>
-							<span class="meta-value">{(workspace as any).nodes?.length || '—'}</span>
-						</div>
-						<div class="meta-item">
-							<span class="meta-label">Tools:</span>
-							<span class="meta-value">{(workspace as any).tools?.length || '—'}</span>
-						</div>
-						<div class="meta-item">
-							<span class="meta-label">Budget:</span>
-							<span class="meta-value">{(workspace as any).budget || '—'}</span>
-						</div>
-					</div>
 				</a>
 			{/each}
 		</div>
@@ -142,30 +116,6 @@
 	.workspace-card p {
 		color: #666;
 		font-size: 0.9rem;
-		margin: 0 0 1rem 0;
-	}
-
-	.workspace-meta {
-		display: grid;
-		grid-template-columns: repeat(2, 1fr);
-		gap: 0.5rem;
-		margin-top: 1rem;
-		padding-top: 1rem;
-		border-top: 1px solid #eee;
-	}
-
-	.meta-item {
-		display: flex;
-		gap: 0.25rem;
-		font-size: 0.85rem;
-	}
-
-	.meta-label {
-		color: #999;
-		font-weight: 600;
-	}
-
-	.meta-value {
-		color: #666;
+		margin: 0;
 	}
 </style>

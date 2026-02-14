@@ -59,17 +59,23 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         match health_check_sidecar() {
             Ok(true) => {
                 println!("Sigil gateway health check passed");
-                let _ = app_handle.emit("sidecar-ready", ());
+                if let Err(e) = app_handle.emit("sidecar-ready", ()) {
+                    eprintln!("Failed to emit sidecar-ready: {}", e);
+                }
             }
             Ok(false) => {
                 let msg = "Sigil gateway failed health check - service not responding";
                 eprintln!("{}", msg);
-                let _ = app_handle.emit("sidecar-error", msg);
+                if let Err(e) = app_handle.emit("sidecar-error", msg) {
+                    eprintln!("Failed to emit sidecar-error: {}", e);
+                }
             }
             Err(e) => {
                 let msg = format!("Sigil gateway health check error: {}", e);
                 eprintln!("{}", msg);
-                let _ = app_handle.emit("sidecar-error", msg);
+                if let Err(e) = app_handle.emit("sidecar-error", msg) {
+                    eprintln!("Failed to emit sidecar-error: {}", e);
+                }
             }
         }
     });
@@ -91,7 +97,8 @@ fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
         Ok(response) => Ok(response.status() == 200),
         Err(ureq::Error::Status(code, _)) => {
             // Gateway responded but with non-200 status
-            Ok(code == 200)
+            eprintln!("Health check returned non-OK status: {}", code);
+            Ok(false)
         }
         Err(ureq::Error::Transport(_)) => {
             // Connection failed - gateway not running
@@ -163,16 +170,24 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
         } => {
             // Show main window on left click
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
+                if let Err(e) = window.show() {
+                    eprintln!("Failed to show window: {}", e);
+                }
+                if let Err(e) = window.set_focus() {
+                    eprintln!("Failed to set focus: {}", e);
+                }
             }
         }
         TrayIconEvent::MenuItemClick { id, .. } => {
             match id.as_ref() {
                 "open" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        if let Err(e) = window.show() {
+                            eprintln!("Failed to show window: {}", e);
+                        }
+                        if let Err(e) = window.set_focus() {
+                            eprintln!("Failed to set focus: {}", e);
+                        }
                     }
                 }
                 "pause" => {
@@ -203,29 +218,47 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(SidecarState::new())
         .setup(|app| {
-            // Create tray menu
-            let menu = create_tray_menu(&app.handle())?;
-
-            // Build tray icon
-            // Note: In production, use a proper icon. This is a placeholder.
-            let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-
-            let _tray = TrayIconBuilder::with_id("main")
-                .icon(icon)
-                .menu(&menu)
-                .menu_on_left_click(false)
-                .title("Sigil")
-                .on_tray_icon_event(|tray, event| {
-                    handle_tray_event(tray.app_handle(), event);
-                })
-                .build(app)?;
+            // Create tray menu and icon with graceful degradation
+            match create_tray_menu(&app.handle()) {
+                Ok(menu) => {
+                    match Image::from_bytes(include_bytes!("../icons/icon.png")) {
+                        Ok(icon) => {
+                            match TrayIconBuilder::with_id("main")
+                                .icon(icon)
+                                .menu(&menu)
+                                .menu_on_left_click(false)
+                                .title("Sigil")
+                                .on_tray_icon_event(|tray, event| {
+                                    handle_tray_event(tray.app_handle(), event);
+                                })
+                                .build(app)
+                            {
+                                Ok(_tray) => {
+                                    println!("System tray initialized");
+                                }
+                                Err(e) => {
+                                    eprintln!("System tray not available, continuing without tray: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to load tray icon, continuing without tray: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to create tray menu, continuing without tray: {}", e);
+                }
+            }
 
             // Start the Sigil gateway sidecar on app launch
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 if let Err(e) = start_sidecar(&app_handle) {
                     eprintln!("Failed to start Sigil gateway: {}", e);
-                    let _ = app_handle.emit("sidecar-error", format!("Failed to start gateway: {}", e));
+                    if let Err(emit_err) = app_handle.emit("sidecar-error", format!("Failed to start gateway: {}", e)) {
+                        eprintln!("Failed to emit sidecar-error: {}", emit_err);
+                    }
                 }
             });
 
@@ -234,7 +267,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // Hide window instead of closing on close button
-                let _ = window.hide();
+                if let Err(e) = window.hide() {
+                    eprintln!("Failed to hide window: {}", e);
+                }
                 api.prevent_close();
             }
         })

@@ -54,6 +54,16 @@ describe("parseSSEEventData", () => {
     const result = parseSSEEventData("tool_call", "bad json");
     expect(result.type).toBe("parse_error");
   });
+
+  it("returns parse_error for unknown event types", () => {
+    const result = parseSSEEventData("unknown_event", "some data");
+    expect(result).toEqual({
+      type: "parse_error",
+      eventType: "unknown_event",
+      rawData: "some data",
+      error: "Unknown event type: unknown_event",
+    });
+  });
 });
 
 describe("parseSSEStream", () => {
@@ -88,7 +98,11 @@ describe("parseSSEStream", () => {
     const raw = "data: {\"text\":\"implicit\"}\n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe("text_delta");
+    // Events with no explicit type default to "message", which is unknown
+    expect(events[0].type).toBe("parse_error");
+    if (events[0].type === "parse_error") {
+      expect(events[0].eventType).toBe("message");
+    }
   });
 
   it("strips exactly one leading space after 'data:' per SSE spec", () => {

@@ -9,13 +9,15 @@
 	let sidecarError = $state<string | null>(null);
 	let sidecarReady = $state(false);
 
-	onMount(() => {
-		// Check if we're in Tauri environment
-		if (typeof window !== 'undefined' && '__TAURI__' in window) {
-			const { listen } = (window as any).__TAURI__.event;
+	onMount(async () => {
+		// Only set up Tauri listeners in desktop environment
+		if (typeof window === 'undefined' || !('__TAURI__' in window)) return;
+
+		try {
+			const { listen } = await import('@tauri-apps/api/event');
 
 			// Listen for sidecar startup errors
-			const errorUnlisten = listen('sidecar-error', (event: any) => {
+			const errorUnlisten = await listen('sidecar-error', (event: any) => {
 				console.error('Sidecar error:', event.payload);
 				sidecarError = typeof event.payload === 'string'
 					? event.payload
@@ -23,7 +25,7 @@
 			});
 
 			// Listen for sidecar ready event
-			const readyUnlisten = listen('sidecar-ready', () => {
+			const readyUnlisten = await listen('sidecar-ready', () => {
 				console.log('Sidecar ready');
 				sidecarReady = true;
 				sidecarError = null;
@@ -31,9 +33,12 @@
 
 			// Cleanup listeners on unmount
 			return () => {
-				errorUnlisten.then((fn) => fn());
-				readyUnlisten.then((fn) => fn());
+				errorUnlisten();
+				readyUnlisten();
 			};
+		} catch (e) {
+			// Not in Tauri environment - ignore
+			console.debug('Tauri API not available:', e);
 		}
 	});
 </script>

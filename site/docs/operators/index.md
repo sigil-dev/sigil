@@ -25,7 +25,7 @@ Observability and health checking for Sigil deployments.
 
 ### Health Checks
 
-Use `sigil doctor` or the `/api/v1/status` endpoint to verify server health.
+Use `sigil doctor` or the `/health` endpoint to verify server health.
 
 ### Structured Logging
 

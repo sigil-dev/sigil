@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
+import { api } from "$lib/api/client";
 import { parseSSEEventData } from "./sse-parser";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:18789";
@@ -37,6 +38,7 @@ export interface WorkspaceGroup {
   id: string;
   description: string;
   sessions: SessionEntry[];
+  loadError?: string;
 }
 
 let nextMessageId = 0;
@@ -63,31 +65,34 @@ export class ChatStore {
   async loadSidebar(): Promise<void> {
     this.sidebarLoading = true;
     try {
-      const wsRes = await fetch(`${API_BASE}/api/v1/workspaces`);
-      if (!wsRes.ok) {
-        this.error = "Failed to load workspaces";
+      const { data: wsData, error: wsErr } = await api.GET("/api/v1/workspaces");
+      if (wsErr) {
+        this.error = wsErr.detail || "Failed to load workspaces";
         return;
       }
-      const wsData = (await wsRes.json()) as {
-        workspaces: { id: string; description: string }[] | null;
-      };
-      const workspaces = wsData.workspaces ?? [];
+      const workspaces = wsData?.workspaces ?? [];
 
       const groups: WorkspaceGroup[] = [];
       for (const ws of workspaces) {
-        const sessRes = await fetch(`${API_BASE}/api/v1/workspaces/${ws.id}/sessions`);
+        const { data: sessData, error: sessErr } = await api.GET("/api/v1/workspaces/{id}/sessions", {
+          params: { path: { id: ws.id } },
+        });
+
         let sessions: SessionEntry[] = [];
-        if (sessRes.ok) {
-          const sessData = (await sessRes.json()) as {
-            sessions: { id: string; status: string; workspace_id: string }[] | null;
-          };
-          sessions = (sessData.sessions ?? []).map((s) => ({
+        let loadError: string | undefined;
+
+        if (sessErr) {
+          console.warn(`Failed to load sessions for workspace ${ws.id}:`, sessErr);
+          loadError = sessErr.detail || "Failed to load sessions";
+        } else {
+          sessions = (sessData?.sessions ?? []).map((s) => ({
             id: s.id,
             workspaceId: s.workspace_id,
             status: s.status,
           }));
         }
-        groups.push({ id: ws.id, description: ws.description, sessions });
+
+        groups.push({ id: ws.id, description: ws.description, sessions, loadError });
       }
       this.workspaceGroups = groups;
     } catch (error) {
@@ -156,6 +161,8 @@ export class ChatStore {
       if (this.workspaceId) body.workspace_id = this.workspaceId;
       if (this.sessionId) body.session_id = this.sessionId;
 
+      // Note: Using raw fetch for SSE streaming endpoint instead of typed client.
+      // The openapi-fetch client doesn't properly support text/event-stream responses.
       const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
         method: "POST",
         headers: {
@@ -297,7 +304,7 @@ export class ChatStore {
     this.messages = this.messages.map((m) => {
       if (m.id !== messageId) return m;
       const toolCalls = [...(m.toolCalls ?? [])];
-      // Find the last "running" tool call with this name (handles duplicates)
+      // Find the most recent "running" tool call with this name
       for (let i = toolCalls.length - 1; i >= 0; i--) {
         if (toolCalls[i].name === toolName && toolCalls[i].status === "running") {
           toolCalls[i] = { ...toolCalls[i], status: "complete", result };

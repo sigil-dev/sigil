@@ -71,17 +71,13 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
     case "done":
       return { type: "done" };
     default:
-      // Unknown event types — treat data as text_delta
-      try {
-        const parsed = JSON.parse(data) as { text?: string };
-        if (parsed.text !== undefined) {
-          return { type: "text_delta", text: parsed.text };
-        }
-      } catch (error) {
-        // Not JSON — use raw data as text
-        console.warn("Unknown SSE event type, treating as text_delta:", eventType);
-      }
-      return { type: "text_delta", text: data };
+      console.warn("Unknown SSE event type:", eventType);
+      return {
+        type: "parse_error",
+        eventType,
+        rawData: data,
+        error: `Unknown event type: ${eventType}`,
+      };
   }
 }
 
