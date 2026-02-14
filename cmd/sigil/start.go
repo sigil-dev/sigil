@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/sigil-dev/sigil/internal/config"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
@@ -47,7 +49,10 @@ func runStart(cmd *cobra.Command, _ []string) error {
 		dataDir = filepath.Join(home, ".sigil")
 	}
 
-	gw, err := WireGateway(cfg, dataDir)
+	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	gw, err := WireGateway(ctx, cfg, dataDir)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "wiring gateway: %w", err)
 	}
@@ -58,5 +63,5 @@ func runStart(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	return gw.Start(cmd.Context())
+	return gw.Start(ctx)
 }
