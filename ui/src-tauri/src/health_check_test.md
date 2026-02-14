@@ -7,12 +7,14 @@ This document describes how to test the sidecar error visibility implementation.
 Per PR #16 review feedback, we implemented BOTH approaches for sidecar error visibility:
 
 ### Part 1: UI Event Listener (SvelteKit)
+
 - Location: `ui/src/routes/+layout.svelte`
 - Listens for `sidecar-error` and `sidecar-ready` events from Tauri
 - Displays a prominent red error banner when sidecar fails to start
 - Error banner can be dismissed by user
 
 ### Part 2: Tauri Health Check (Rust)
+
 - Location: `ui/src-tauri/src/main.rs`
 - After spawning sidecar, waits 1 second then checks `/health` endpoint
 - Makes HTTP request to `http://localhost:18789/health`
@@ -34,23 +36,27 @@ Per PR #16 review feedback, we implemented BOTH approaches for sidecar error vis
 ## Testing Scenarios
 
 ### Scenario 1: Normal Startup
+
 1. Build and run Tauri app with sidecar binary in place
 2. Expected: No error banner, sidecar starts normally
 3. Check console for "Sigil gateway health check passed"
 
 ### Scenario 2: Sidecar Binary Missing
+
 1. Remove or rename sidecar binary
 2. Run Tauri app
 3. Expected: Red error banner appears immediately
 4. Message: "Failed to start gateway: [error details]"
 
 ### Scenario 3: Port Already in Use
+
 1. Manually start Sigil on port 18789: `sigil start`
 2. Run Tauri app (which tries to start another instance)
 3. Expected: Red error banner after 1 second
 4. Message: "Sigil gateway failed health check - service not responding"
 
 ### Scenario 4: Delayed Startup
+
 1. Modify health check delay if needed to test timing
 2. Expected: Error banner only appears if health check fails after delay
 3. This tests that the health check waits for gateway to start
@@ -58,6 +64,7 @@ Per PR #16 review feedback, we implemented BOTH approaches for sidecar error vis
 ## Files Changed
 
 ### Rust (Tauri)
+
 - `ui/src-tauri/Cargo.toml`: Added `ureq = "2"` dependency, fixed features
 - `ui/src-tauri/src/main.rs`:
   - Added `health_check_sidecar()` function
@@ -65,6 +72,7 @@ Per PR #16 review feedback, we implemented BOTH approaches for sidecar error vis
   - Emits `sidecar-error` or `sidecar-ready` events
 
 ### SvelteKit (UI)
+
 - `ui/src/routes/+layout.svelte`:
   - Added event listeners for `sidecar-error` and `sidecar-ready`
   - Added error banner UI component with styling
@@ -73,6 +81,7 @@ Per PR #16 review feedback, we implemented BOTH approaches for sidecar error vis
 ## Known Limitations
 
 ### Build Issue
+
 The Tauri app currently requires the sidecar binary to be present at build time. The binary path is defined in `ui/src-tauri/tauri.conf.json`:
 
 ```json
@@ -84,12 +93,15 @@ The Tauri app currently requires the sidecar binary to be present at build time.
 Tauri expects this to expand to `binaries/sigil-<target>` (e.g., `binaries/sigil-aarch64-apple-darwin`).
 
 **To build successfully:**
+
 1. First build the Sigil binary: `task build` from repo root
 2. Copy binary to Tauri expected location:
+
    ```bash
    mkdir -p ui/src-tauri/binaries
    cp target/release/sigil ui/src-tauri/binaries/sigil-aarch64-apple-darwin
    ```
+
 3. Then build Tauri app
 
 This is a normal requirement for sidecar-based Tauri apps.
@@ -112,7 +124,7 @@ Both are necessary for comprehensive error coverage.
 
 ### Event Flow
 
-```
+```text
 start_sidecar()
     ├─> spawn sidecar process
     │   └─> if spawn fails: emit sidecar-error immediately
@@ -131,4 +143,3 @@ start_sidecar()
 3. **Diagnostics**: Include more diagnostic info in error messages
 4. **Logs**: Link to log file location in error banner
 5. **Health Check Interval**: Periodic health checks after startup
-
