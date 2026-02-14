@@ -88,9 +88,15 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	}
 
 	// 6. HTTP server.
+	var tokenValidator server.TokenValidator
+	if len(cfg.Auth.Tokens) > 0 {
+		tokenValidator = newConfigTokenValidator(cfg.Auth.Tokens)
+	}
+
 	srv, err := server.New(server.Config{
-		ListenAddr:  cfg.Networking.Listen,
-		CORSOrigins: nil, // use defaults
+		ListenAddr:     cfg.Networking.Listen,
+		CORSOrigins:    nil, // use defaults
+		TokenValidator: tokenValidator,
 	})
 	if err != nil {
 		_ = gs.Close()
@@ -323,4 +329,28 @@ func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, er
 		}
 	}
 	return out, nil
+}
+
+// configTokenValidator validates bearer tokens against static config entries.
+type configTokenValidator struct {
+	tokens map[string]*server.AuthenticatedUser
+}
+
+func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator {
+	m := make(map[string]*server.AuthenticatedUser, len(tokens))
+	for _, tc := range tokens {
+		m[tc.Token] = &server.AuthenticatedUser{
+			ID:          tc.UserID,
+			Name:        tc.Name,
+			Permissions: tc.Permissions,
+		}
+	}
+	return &configTokenValidator{tokens: m}
+}
+
+func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {
+	if user, ok := v.tokens[token]; ok {
+		return user, nil
+	}
+	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")
 }

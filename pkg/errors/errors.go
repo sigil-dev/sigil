@@ -67,6 +67,7 @@ const (
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
+	CodeServerAuthForbidden    Code = "server.auth.forbidden"
 	CodeServerInternalFailure  Code = "server.internal.failure"
 	CodeServerEntityNotFound   Code = "server.entity.not_found"
 	CodeServerConfigInvalid    Code = "server.config.invalid"
