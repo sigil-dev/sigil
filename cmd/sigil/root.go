@@ -4,6 +4,8 @@
 package main
 
 import (
+	"errors"
+
 	"github.com/sigil-dev/sigil/internal/config"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/cobra"
@@ -64,8 +66,14 @@ func initViper(cmd *cobra.Command) error {
 		v.AddConfigPath(".")
 		v.AddConfigPath("$HOME/.config/sigil")
 		v.AddConfigPath("/etc/sigil")
-		// Ignore "config file not found" — defaults and env vars still apply.
-		_ = v.ReadInConfig()
+		// No config file is fine — defaults and env vars still apply.
+		// Parse or permission errors must surface.
+		if err := v.ReadInConfig(); err != nil {
+			var notFound viper.ConfigFileNotFoundError
+			if !errors.As(err, &notFound) {
+				return sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config: %w", err)
+			}
+		}
 	}
 
 	// Bind persistent flags to viper keys.
