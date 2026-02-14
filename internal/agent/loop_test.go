@@ -1335,6 +1335,64 @@ func TestAgentLoop_ToolLoopIterationCapEnforced(t *testing.T) {
 		"provider should be called once initially plus maxToolLoopIterations times")
 }
 
+func TestAgentLoop_ToolRuntimeFailureRecovery(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Provider that emits a tool call on first Chat() call,
+	// then a text response on second call (after receiving the error).
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-fail",
+			Name:      "failing_tool",
+			Arguments: `{"input":"test"}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	// Plugin executor that returns an error simulating a tool crash/timeout.
+	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithError(sigilerr.New(sigilerr.CodePluginRuntimeCallFailure, "tool crashed")),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		ToolDispatcher: dispatcher,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "Use the failing tool",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, err, "tool runtime failure should not fail the entire turn")
+	require.NotNil(t, out)
+
+	// The loop should complete successfully with the LLM's text response.
+	assert.Equal(t, "Tool result processed.", out.Content)
+
+	// Provider should have been called twice:
+	// 1. Initial call (returns tool call)
+	// 2. Re-call with tool error result (returns text response)
+	toolCallProvider.mu.Lock()
+	callCount := toolCallProvider.callNum
+	toolCallProvider.mu.Unlock()
+	assert.Equal(t, 2, callCount, "provider should be called twice: initial + after tool error")
+}
+
 // ---------------------------------------------------------------------------
 // Multi-iteration tool loop provider and test
 // ---------------------------------------------------------------------------

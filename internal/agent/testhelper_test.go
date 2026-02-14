@@ -512,6 +512,11 @@ func newMockPluginManagerSlow(d time.Duration) *mockPluginExecutorSlow {
 	return &mockPluginExecutorSlow{delay: d}
 }
 
+// newMockPluginManagerWithError returns a PluginExecutor that always returns the given error.
+func newMockPluginManagerWithError(err error) *mockPluginExecutorError {
+	return &mockPluginExecutorError{err: err}
+}
+
 // ---------------------------------------------------------------------------
 // Memory store mocks
 // ---------------------------------------------------------------------------

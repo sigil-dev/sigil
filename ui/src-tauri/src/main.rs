@@ -8,6 +8,7 @@ use tauri::{
     AppHandle, Manager, RunEvent, WindowEvent,
 };
 
+use log::{error, info, warn};
 use std::sync::Mutex;
 
 /// Default gateway port, matching the TypeScript client's API_BASE default.
@@ -71,7 +72,7 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 
     *process_lock = Some(sidecar);
 
-    println!("Sigil gateway started with config: {}", config_path);
+    info!("Sigil gateway started with config: {}", config_path);
 
     // Health check: verify the gateway is running with 3 attempts (1s, 2s, 4s delays)
     let app_handle = app.clone();
@@ -89,14 +90,14 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 
             match health_check_sidecar() {
                 Ok(true) => {
-                    println!("Sigil gateway health check passed (attempt {})", attempt + 1);
+                    info!("Sigil gateway health check passed (attempt {})", attempt + 1);
                     if let Err(e) = app_handle.emit("sidecar-ready", ()) {
-                        eprintln!("Failed to emit sidecar-ready: {}", e);
+                        error!("Failed to emit sidecar-ready: {}", e);
                     }
                     return;
                 }
                 Ok(false) => {
-                    eprintln!(
+                    warn!(
                         "Health check attempt {}/{} failed - not responding",
                         attempt + 1,
                         delays.len()
@@ -111,7 +112,7 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
                     );
                 }
                 Err(e) => {
-                    eprintln!(
+                    error!(
                         "Health check attempt {}/{} error: {}",
                         attempt + 1,
                         delays.len(),
@@ -129,9 +130,9 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
             "Sigil gateway failed health check after {} attempts",
             delays.len()
         );
-        eprintln!("{}", msg);
+        error!("{}", msg);
         if let Err(e) = app_handle.emit("sidecar-error", &msg) {
-            eprintln!("Failed to emit sidecar-error: {}", e);
+            error!("Failed to emit sidecar-error: {}", e);
         }
     });
 
@@ -151,7 +152,7 @@ fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
         Ok(response) => Ok(response.status() == 200),
         Err(ureq::Error::Status(code, _)) => {
             // Gateway responded but with non-200 status
-            eprintln!("Health check returned non-OK status: {}", code);
+            warn!("Health check returned non-OK status: {}", code);
             Ok(false)
         }
         Err(ureq::Error::Transport(_)) => {
@@ -170,9 +171,11 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
         .map_err(|e| SidecarError::LockPoisoned(e.to_string()))?;
 
     if let Some(mut process) = process_lock.take() {
-        // Terminates the gateway process immediately. Database state depends on SQLite WAL recovery. Graceful shutdown would require the gateway to implement a /shutdown endpoint.
+        // SIGKILL: process cannot flush buffers or run cleanup handlers. Database integrity
+        // relies on SQLite WAL journal recovery at next open. A future /shutdown endpoint
+        // would allow graceful drain (close connections → flush WAL → exit).
         process.kill().map_err(SidecarError::KillFailed)?;
-        println!("Sigil gateway stopped");
+        info!("Sigil gateway stopped");
     }
 
     Ok(())
@@ -222,10 +225,10 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
             // Show main window on left click
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(e) = window.show() {
-                    eprintln!("Failed to show window: {}", e);
+                    error!("Failed to show window: {}", e);
                 }
                 if let Err(e) = window.set_focus() {
-                    eprintln!("Failed to set focus: {}", e);
+                    error!("Failed to set focus: {}", e);
                 }
             }
         }
@@ -234,21 +237,23 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
                 "open" => {
                     if let Some(window) = app.get_webview_window("main") {
                         if let Err(e) = window.show() {
-                            eprintln!("Failed to show window: {}", e);
+                            error!("Failed to show window: {}", e);
                         }
                         if let Err(e) = window.set_focus() {
-                            eprintln!("Failed to set focus: {}", e);
+                            error!("Failed to set focus: {}", e);
                         }
                     }
                 }
                 "restart" => {
                     if let Err(e) = restart_sidecar(app) {
-                        eprintln!("Failed to restart gateway: {}", e);
+                        error!("Failed to restart gateway: {}", e);
+                        let _ = app.emit("sidecar-error", format!("Restart failed: {}", e));
                     }
                 }
                 "quit" => {
                     if let Err(e) = stop_sidecar(app) {
-                        eprintln!("Failed to stop gateway: {}", e);
+                        error!("Failed to stop gateway: {}", e);
+                        let _ = app.emit("sidecar-error", format!("Stop failed: {}", e));
                     }
                     app.exit(0);
                 }
@@ -262,6 +267,7 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(SidecarState::new())
         .setup(|app| {
@@ -281,20 +287,20 @@ pub fn run() {
                                 .build(app)
                             {
                                 Ok(_tray) => {
-                                    println!("System tray initialized");
+                                    info!("System tray initialized");
                                 }
                                 Err(e) => {
-                                    eprintln!("System tray not available, continuing without tray: {}", e);
+                                    warn!("System tray not available, continuing without tray: {}", e);
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("Failed to load tray icon, continuing without tray: {}", e);
+                            warn!("Failed to load tray icon, continuing without tray: {}", e);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to create tray menu, continuing without tray: {}", e);
+                    warn!("Failed to create tray menu, continuing without tray: {}", e);
                 }
             }
 
@@ -302,9 +308,9 @@ pub fn run() {
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 if let Err(e) = start_sidecar(&app_handle) {
-                    eprintln!("Failed to start Sigil gateway: {}", e);
+                    error!("Failed to start Sigil gateway: {}", e);
                     if let Err(emit_err) = app_handle.emit("sidecar-error", format!("Failed to start gateway: {}", e)) {
-                        eprintln!("Failed to emit sidecar-error: {}", emit_err);
+                        error!("Failed to emit sidecar-error: {}", emit_err);
                     }
                 }
             });
@@ -315,7 +321,7 @@ pub fn run() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // Hide window instead of closing on close button
                 if let Err(e) = window.hide() {
-                    eprintln!("Failed to hide window: {}", e);
+                    error!("Failed to hide window: {}", e);
                 }
                 api.prevent_close();
             }
@@ -326,8 +332,12 @@ pub fn run() {
             if let RunEvent::ExitRequested { .. } = event {
                 // Clean up sidecar on app exit
                 if let Err(e) = stop_sidecar(app_handle) {
-                    eprintln!("Failed to stop sidecar on exit: {}", e);
+                    error!("Failed to stop sidecar on exit: {}", e);
                 }
             }
         });
+}
+
+fn main() {
+    run();
 }

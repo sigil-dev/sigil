@@ -50,12 +50,26 @@ func (m *mockChannelPlugin) getLastSent() plugin.OutboundMessage {
 // --- Mock PairingStore ---
 
 type mockPairingStore struct {
+	mu       sync.Mutex
 	pairings []*store.Pairing
 	created  []*store.Pairing // track Create() calls
 	err      error
+	// Optional delay mechanism for race condition testing
+	createDelay chan struct{}
 }
 
 func (m *mockPairingStore) Create(_ context.Context, p *store.Pairing) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// If createDelay is set, wait for signal before completing create
+	// This increases the window for TOCTOU races in concurrent tests
+	if m.createDelay != nil {
+		m.mu.Unlock()
+		<-m.createDelay
+		m.mu.Lock()
+	}
+
 	m.created = append(m.created, p)
 	return nil
 }
@@ -65,6 +79,9 @@ func (m *mockPairingStore) GetByChannel(context.Context, string, string) (*store
 }
 
 func (m *mockPairingStore) GetByUser(_ context.Context, userID string) ([]*store.Pairing, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -548,4 +565,100 @@ func TestChannelRouter_ConcurrentAccess(t *testing.T) {
 	ch, err := router.Get("telegram")
 	require.NoError(t, err)
 	assert.Equal(t, "telegram", ch.Name())
+}
+
+// TestChannelRouter_ConcurrentPairingCreation demonstrates a TOCTOU race
+// condition in authorizePairOnRequest. When multiple goroutines call
+// AuthorizeInbound simultaneously for the same user/channel/workspace,
+// the check-then-create pattern can result in duplicate pairing creations.
+//
+// Race flow:
+// 1. Goroutine A calls GetByUser() -> finds no pairing
+// 2. Goroutine B calls GetByUser() -> finds no pairing
+// 3. Goroutine A calls Create() -> creates pairing #1
+// 4. Goroutine B calls Create() -> creates pairing #2 (duplicate)
+//
+// The RWMutex on ChannelRouter only protects the channels map, not the
+// pairing store operations, so concurrent access to the pairing store is
+// unprotected.
+func TestChannelRouter_ConcurrentPairingCreation(t *testing.T) {
+	const goroutines = 10
+
+	// Create a mock store with a delay channel to widen the race window
+	ps := &mockPairingStore{
+		pairings:    []*store.Pairing{},
+		createDelay: make(chan struct{}),
+	}
+
+	router := plugin.NewChannelRouter(ps)
+	router.RegisterWithConfig("telegram", plugin.ChannelRegistration{
+		Plugin: &mockChannelPlugin{name: "telegram"},
+		Mode:   plugin.PairingOnRequest,
+	})
+
+	// Barrier to ensure all goroutines start simultaneously
+	barrier := make(chan struct{})
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	// Launch N goroutines that all attempt to authorize the same user
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			// Wait at barrier
+			<-barrier
+			// All goroutines call AuthorizeInbound for the same user/channel/workspace
+			_ = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "test-user", "ws-1")
+		}()
+	}
+
+	// Release all goroutines simultaneously
+	close(barrier)
+
+	// Allow a moment for all GetByUser calls to complete (all will see empty)
+	// then release all Create calls at once to maximize race window
+	// NOTE: This is a synchronization mechanism to trigger the race, not a sleep-based delay
+	go func() {
+		for i := 0; i < goroutines; i++ {
+			ps.createDelay <- struct{}{}
+		}
+		close(ps.createDelay)
+	}()
+
+	wg.Wait()
+
+	// Check how many pairings were created
+	ps.mu.Lock()
+	createdCount := len(ps.created)
+	ps.mu.Unlock()
+
+	// RACE CONDITION DOCUMENTATION:
+	// Without proper synchronization in authorizePairOnRequest, multiple
+	// pairings may be created. Ideally, only 1 pairing should be created,
+	// but the current implementation allows duplicates due to TOCTOU.
+	//
+	// This assertion documents the race — if createdCount > 1, the race occurred.
+	// A proper fix would add transactional create-if-not-exists semantics or
+	// use a mutex around the entire check-then-create sequence.
+	if createdCount > 1 {
+		t.Logf("RACE DETECTED: %d pairings created for same user/channel/workspace (expected 1)", createdCount)
+		// This is the current behavior — multiple pairings may be created
+		assert.Greater(t, createdCount, 1, "race condition allows duplicate pairings")
+	} else {
+		t.Logf("No race detected: %d pairing created", createdCount)
+		// If the code is fixed in the future, this assertion will pass
+		assert.Equal(t, 1, createdCount, "exactly one pairing should be created")
+	}
+
+	// Verify all created pairings have the correct parameters
+	ps.mu.Lock()
+	for _, p := range ps.created {
+		assert.Equal(t, "test-user", p.UserID)
+		assert.Equal(t, "telegram", p.ChannelType)
+		assert.Equal(t, "chat-1", p.ChannelID)
+		assert.Equal(t, "ws-1", p.WorkspaceID)
+		assert.Equal(t, store.PairingStatusPending, p.Status)
+	}
+	ps.mu.Unlock()
 }

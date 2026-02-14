@@ -5,6 +5,9 @@ import { api, API_BASE } from "$lib/api/client";
 import { logger } from "$lib/logger";
 import { parseSSEEventData } from "./sse-parser";
 
+/** Maximum SSE stream duration before automatic abort (5 minutes) */
+const SSE_STREAM_TIMEOUT_MS = 5 * 60 * 1000;
+
 /** Role of a chat message */
 export type MessageRole = "user" | "assistant" | "tool";
 
@@ -43,6 +46,31 @@ export interface WorkspaceGroup {
 let nextMessageId = 0;
 function generateMessageId(): string {
   return `msg-${Date.now()}-${nextMessageId++}`;
+}
+
+/** Classified error for user-facing display */
+interface ClassifiedError {
+  message: string;
+  isNetwork: boolean;
+  httpStatus?: number;
+}
+
+/** Classify a caught error into a user-facing message */
+function classifyError(error: unknown): ClassifiedError {
+  if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
+    return { message: "Network error — cannot reach gateway", isNetwork: true };
+  }
+  if (error instanceof TypeError) {
+    return { message: "Unexpected client error", isNetwork: false };
+  }
+  if (error instanceof Response || (error && typeof error === "object" && "status" in error)) {
+    const status = (error as { status?: number }).status;
+    return { message: `Gateway error (HTTP ${status ?? "unknown"})`, isNetwork: false, httpStatus: status };
+  }
+  if (error instanceof Error) {
+    return { message: error.message, isNetwork: false };
+  }
+  return { message: "An unexpected error occurred", isNetwork: false };
 }
 
 /**
@@ -96,16 +124,8 @@ export class ChatStore {
       this.workspaceGroups = groups;
     } catch (error) {
       logger.error("Failed to load sidebar", { error });
-      if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
-        this.error = "Network error — cannot reach gateway";
-      } else if (error instanceof TypeError) {
-        this.error = "Failed to load sidebar data";
-      } else if (error instanceof Response || (error && typeof error === "object" && "status" in error)) {
-        const status = (error as { status?: number }).status;
-        this.error = `Gateway error (HTTP ${status ?? "unknown"})`;
-      } else {
-        this.error = "Failed to load sidebar data";
-      }
+      const classified = classifyError(error);
+      this.error = classified.message;
     } finally {
       this.sidebarLoading = false;
     }
@@ -171,6 +191,7 @@ export class ChatStore {
 
       // Note: Using raw fetch for SSE streaming endpoint instead of typed client.
       // As of openapi-fetch@0.x (2026-02), ReadableStream/SSE responses are not supported.
+      const timeoutSignal = AbortSignal.timeout(SSE_STREAM_TIMEOUT_MS);
       const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
         method: "POST",
         headers: {
@@ -178,7 +199,7 @@ export class ChatStore {
           Accept: "text/event-stream",
         },
         body: JSON.stringify(body),
-        signal: this.abortController.signal,
+        signal: AbortSignal.any([this.abortController.signal, timeoutSignal]),
       });
 
       if (!response.ok) {
@@ -214,7 +235,8 @@ export class ChatStore {
         return;
       }
       logger.error("SSE stream error", { error: err });
-      this.error = err instanceof Error ? err.message : "Stream failed";
+      const classified = classifyError(err);
+      this.error = classified.message;
       // Only remove message if no content was streamed yet
       const msg = this.messages.find((m) => m.id === assistantMessage.id);
       if (!msg?.content) {
@@ -256,7 +278,7 @@ export class ChatStore {
           } else if (line.startsWith("event:")) {
             eventType = line.slice(6).trim();
           } else if (line.startsWith("data:")) {
-            // Per SSE spec: strip exactly one leading space if present (U+0020)
+            // Per SSE spec: strip at most one leading space after the colon (U+0020)
             let value = line.slice(5);
             if (value.length > 0 && value.charCodeAt(0) === 0x20) {
               value = value.slice(1);
@@ -272,7 +294,11 @@ export class ChatStore {
         this.handleSSEEvent(eventType || "message", data, messageId);
       }
     } finally {
-      reader.releaseLock();
+      try {
+        reader.releaseLock();
+      } catch (err) {
+        logger.error("Failed to release SSE reader lock", { error: err });
+      }
     }
   }
 
@@ -309,7 +335,8 @@ export class ChatStore {
           rawData: event.rawData,
         });
         this.error = `Failed to parse ${event.eventType} event`;
-        break;
+        // Abort stream on parse error to prevent further invalid events
+        throw new Error(`SSE parse error for ${event.eventType} event`);
     }
   }
 

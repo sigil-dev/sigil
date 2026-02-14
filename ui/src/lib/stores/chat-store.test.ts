@@ -179,6 +179,46 @@ describe("ChatStore", () => {
 
       expect(store.error).toContain("parse");
     });
+
+    it("handles mid-stream network interruption gracefully", async () => {
+      // Create a stream that sends partial data then errors (simulating network drop)
+      const encoder = new TextEncoder();
+      const partialSSE = "event: text_delta\ndata: {\"text\":\"partial response\"}\n\n";
+      let readCount = 0;
+
+      const interruptedStream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          readCount++;
+          if (readCount === 1) {
+            controller.enqueue(encoder.encode(partialSSE));
+          } else {
+            // Simulate network drop on next read
+            controller.error(new TypeError("Failed to fetch"));
+          }
+        },
+      });
+
+      const response = new Response(interruptedStream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      // Should handle the error gracefully
+      expect(store.loading).toBe(false);
+      expect(store.error).not.toBeNull();
+      expect(store.error).toBeTruthy();
+
+      // Partial content that was streamed before interruption should be preserved
+      expect(store.messages).toHaveLength(2);
+      expect(store.messages[0].role).toBe("user");
+      expect(store.messages[1].role).toBe("assistant");
+      expect(store.messages[1].content).toBe("partial response");
+    });
   });
 
   describe("cancel", () => {

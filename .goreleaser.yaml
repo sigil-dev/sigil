@@ -54,7 +54,7 @@ sboms:
       - "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.sbom.spdx.json"
 signs:
   - cmd: cosign
-    # Keyless signing is default in Cosign 2.0+; no env override needed.
+    # Keyless (Fulcio + Rekor) is the default signing mode since Cosign v2.
     artifacts: checksum
     output: true
     args:
