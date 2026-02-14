@@ -27,6 +27,12 @@ builds:
       - -X main.date={{.Date}}
 archives:
   - id: sigil
+    builds:
+      - sigil
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 checksum:
   name_template: checksums.txt
@@ -62,21 +68,36 @@ signs:
       - "${artifact}"
 changelog:
   use: github-native
-homebrew_casks:
+brews:
   - name: sigil
     repository:
       owner: sigil-dev
       name: homebrew-tap
-    url:
-      template: "https://github.com/sigil-dev/sigil/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     homepage: "https://github.com/sigil-dev/sigil"
     description: "Secure, lightweight Go gateway connecting messaging platforms to AI agents"
-dockers_v2:
-  - images:
-      - "ghcr.io/sigil-dev/sigil"
-    tags:
-      - "v{{ .Version }}"
-      - "latest"
-    platforms:
-      - linux/amd64
-      - linux/arm64
+    license: "Apache-2.0"
+    install: |
+      bin.install "sigil"
+dockers:
+  - image_templates:
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-amd64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    goarch: amd64
+  - image_templates:
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-arm64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    goarch: arm64
+
+docker_manifests:
+  - name_template: "ghcr.io/sigil-dev/sigil:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-amd64"
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/sigil-dev/sigil:latest"
+    image_templates:
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-amd64"
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-arm64"
