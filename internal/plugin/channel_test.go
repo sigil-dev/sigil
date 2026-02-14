@@ -162,7 +162,7 @@ func TestAuthorizeInbound_ClosedMode(t *testing.T) {
 
 	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "any-user", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingDenied))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
 }
 
 func TestAuthorizeInbound_AllowlistWithPairing(t *testing.T) {
@@ -192,12 +192,12 @@ func TestAuthorizeInbound_AllowlistWithPairing(t *testing.T) {
 	// Bob is allowlisted but has no pairing for chat-1
 	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "bob", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
 
 	// Stranger is not allowlisted
 	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "stranger", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingDenied))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
 }
 
 func TestAuthorizeInbound_PairingScopedToChannelInstance(t *testing.T) {
@@ -228,7 +228,7 @@ func TestAuthorizeInbound_PairingScopedToChannelInstance(t *testing.T) {
 	// Different channel instance: denied (no pairing for chat-2)
 	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-2", "alice", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
 }
 
 func TestAuthorizeInbound_PairingBackendFailure(t *testing.T) {
@@ -242,7 +242,7 @@ func TestAuthorizeInbound_PairingBackendFailure(t *testing.T) {
 
 	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelBackendFailure))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelBackendFailure))
 }
 
 func TestAuthorizeInbound_UnregisteredChannel(t *testing.T) {
@@ -284,7 +284,7 @@ func TestAuthorizeInbound_InactivePairingDenied(t *testing.T) {
 
 	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-1")
 	require.Error(t, err, "inactive pairing should not authorize")
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
 }
 
 func TestAuthorizeInbound_CrossChannelTypePairingDenied(t *testing.T) {
@@ -310,7 +310,7 @@ func TestAuthorizeInbound_CrossChannelTypePairingDenied(t *testing.T) {
 
 	err := router.AuthorizeInbound(context.Background(), "discord", "server-1", "alice", "ws-1")
 	require.Error(t, err, "telegram pairing should not authorize discord access")
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
 }
 
 func TestAuthorizeInbound_WorkspaceScopedPairingDenied(t *testing.T) {
@@ -341,7 +341,7 @@ func TestAuthorizeInbound_WorkspaceScopedPairingDenied(t *testing.T) {
 	// Different workspace: denied
 	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-2")
 	require.Error(t, err, "ws-1 pairing should not authorize ws-2 access")
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
 }
 
 // --- pair_on_request and pair_with_code tests ---
@@ -369,7 +369,7 @@ func TestAuthorizeInbound_PairOnRequest_NoPairing(t *testing.T) {
 
 	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "new-user", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingPending))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingPending))
 	// Verify a pending pairing was created
 	require.Len(t, ps.created, 1)
 	assert.Equal(t, "new-user", ps.created[0].UserID)
@@ -398,7 +398,7 @@ func TestAuthorizeInbound_PairOnRequest_PendingPairing(t *testing.T) {
 
 	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "waiting-user", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingPending))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingPending))
 	// Should NOT create a duplicate pending pairing
 	assert.Empty(t, ps.created)
 }
@@ -436,7 +436,7 @@ func TestAuthorizeInbound_PairWithCode_NoActivePairing(t *testing.T) {
 
 	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "new-user", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
 }
 
 func TestAuthorizeInbound_PairWithCode_ActivePairing(t *testing.T) {
@@ -471,5 +471,5 @@ func TestAuthorizeInbound_PairOnRequest_NoPairingStore(t *testing.T) {
 
 	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "user", "ws-1")
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
 }

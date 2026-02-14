@@ -127,14 +127,14 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 	case PairingOpen:
 		return nil
 	case PairingClosed:
-		return sigilerr.New(CodeChannelPairingDenied,
+		return sigilerr.New(sigilerr.CodeChannelPairingDenied,
 			"channel is closed",
 			sigilerr.Field("channel_type", channelType),
 			sigilerr.Field("channel_id", channelID),
 		)
 	case PairingAllowlist:
 		if !slices.Contains(reg.Allowlist, userID) {
-			return sigilerr.New(CodeChannelPairingDenied,
+			return sigilerr.New(sigilerr.CodeChannelPairingDenied,
 				"user not in channel allowlist",
 				sigilerr.Field("channel_type", channelType),
 				sigilerr.Field("channel_id", channelID),
@@ -146,7 +146,7 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 	case PairingWithCode:
 		return r.authorizePairWithCode(ctx, channelType, channelID, userID, workspaceID)
 	default:
-		return sigilerr.New(CodeChannelPairingDenied,
+		return sigilerr.New(sigilerr.CodeChannelPairingDenied,
 			"unknown pairing mode",
 			sigilerr.Field("channel_type", channelType),
 			sigilerr.Field("mode", string(reg.Mode)),
@@ -156,7 +156,7 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 	// For non-open modes (allowlist passes above), verify active pairing
 	// scoped to the specific channel instance and workspace.
 	if r.pairings == nil {
-		return sigilerr.New(CodeChannelPairingRequired,
+		return sigilerr.New(sigilerr.CodeChannelPairingRequired,
 			"pairing store not configured",
 			sigilerr.Field("channel_type", channelType),
 		)
@@ -164,7 +164,7 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 
 	pairings, err := r.pairings.GetByUser(ctx, userID)
 	if err != nil {
-		return sigilerr.Wrap(err, CodeChannelBackendFailure,
+		return sigilerr.Wrap(err, sigilerr.CodeChannelBackendFailure,
 			"pairing lookup failed",
 			sigilerr.Field("channel_type", channelType),
 			sigilerr.Field("user_id", userID),
@@ -178,7 +178,7 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 		}
 	}
 
-	return sigilerr.New(CodeChannelPairingRequired,
+	return sigilerr.New(sigilerr.CodeChannelPairingRequired,
 		"no active pairing for channel",
 		sigilerr.Field("channel_type", channelType),
 		sigilerr.Field("channel_id", channelID),
@@ -193,7 +193,7 @@ func (r *ChannelRouter) AuthorizeInbound(ctx context.Context, channelType, chann
 // auto-created for owner approval.
 func (r *ChannelRouter) authorizePairOnRequest(ctx context.Context, _ *ChannelRegistration, channelType, channelID, userID, workspaceID string) error {
 	if r.pairings == nil {
-		return sigilerr.New(CodeChannelPairingRequired,
+		return sigilerr.New(sigilerr.CodeChannelPairingRequired,
 			"pairing store not configured",
 			sigilerr.Field("channel_type", channelType),
 		)
@@ -201,7 +201,7 @@ func (r *ChannelRouter) authorizePairOnRequest(ctx context.Context, _ *ChannelRe
 
 	pairings, err := r.pairings.GetByUser(ctx, userID)
 	if err != nil {
-		return sigilerr.Wrap(err, CodeChannelBackendFailure,
+		return sigilerr.Wrap(err, sigilerr.CodeChannelBackendFailure,
 			"pairing lookup failed",
 			sigilerr.Field("channel_type", channelType),
 			sigilerr.Field("user_id", userID),
@@ -216,7 +216,7 @@ func (r *ChannelRouter) authorizePairOnRequest(ctx context.Context, _ *ChannelRe
 			return nil
 		}
 		if p.Status == store.PairingStatusPending {
-			return sigilerr.New(CodeChannelPairingPending,
+			return sigilerr.New(sigilerr.CodeChannelPairingPending,
 				"pairing request is pending approval",
 				sigilerr.Field("channel_type", channelType),
 				sigilerr.Field("channel_id", channelID),
@@ -233,14 +233,14 @@ func (r *ChannelRouter) authorizePairOnRequest(ctx context.Context, _ *ChannelRe
 		WorkspaceID: workspaceID,
 		Status:      store.PairingStatusPending,
 	}); err != nil {
-		return sigilerr.Wrap(err, CodeChannelBackendFailure,
+		return sigilerr.Wrap(err, sigilerr.CodeChannelBackendFailure,
 			"failed to create pending pairing",
 			sigilerr.Field("channel_type", channelType),
 			sigilerr.Field("user_id", userID),
 		)
 	}
 
-	return sigilerr.New(CodeChannelPairingPending,
+	return sigilerr.New(sigilerr.CodeChannelPairingPending,
 		"pairing request sent, awaiting approval",
 		sigilerr.Field("channel_type", channelType),
 		sigilerr.Field("channel_id", channelID),
@@ -254,7 +254,7 @@ func (r *ChannelRouter) authorizePairOnRequest(ctx context.Context, _ *ChannelRe
 // active pairing first.
 func (r *ChannelRouter) authorizePairWithCode(ctx context.Context, channelType, channelID, userID, workspaceID string) error {
 	if r.pairings == nil {
-		return sigilerr.New(CodeChannelPairingRequired,
+		return sigilerr.New(sigilerr.CodeChannelPairingRequired,
 			"pairing store not configured",
 			sigilerr.Field("channel_type", channelType),
 		)
@@ -262,7 +262,7 @@ func (r *ChannelRouter) authorizePairWithCode(ctx context.Context, channelType, 
 
 	pairings, err := r.pairings.GetByUser(ctx, userID)
 	if err != nil {
-		return sigilerr.Wrap(err, CodeChannelBackendFailure,
+		return sigilerr.Wrap(err, sigilerr.CodeChannelBackendFailure,
 			"pairing lookup failed",
 			sigilerr.Field("channel_type", channelType),
 			sigilerr.Field("user_id", userID),
@@ -276,7 +276,7 @@ func (r *ChannelRouter) authorizePairWithCode(ctx context.Context, channelType, 
 		}
 	}
 
-	return sigilerr.New(CodeChannelPairingRequired,
+	return sigilerr.New(sigilerr.CodeChannelPairingRequired,
 		"pairing code required to access this channel",
 		sigilerr.Field("channel_type", channelType),
 		sigilerr.Field("channel_id", channelID),
@@ -302,15 +302,3 @@ func CheckPairing(mode PairingMode, userID string, allowlist []string) bool {
 		return false
 	}
 }
-
-// CodeChannelPairingRequired indicates that no active pairing exists for the channel.
-const CodeChannelPairingRequired sigilerr.Code = "channel.pairing.required"
-
-// CodeChannelPairingDenied indicates the channel mode denies the user.
-const CodeChannelPairingDenied sigilerr.Code = "channel.pairing.denied"
-
-// CodeChannelPairingPending indicates a pairing request exists but awaits owner approval.
-const CodeChannelPairingPending sigilerr.Code = "channel.pairing.pending"
-
-// CodeChannelBackendFailure indicates an infrastructure error during pairing lookup.
-const CodeChannelBackendFailure sigilerr.Code = "channel.backend.failure"

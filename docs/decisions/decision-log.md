@@ -759,3 +759,23 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** The provider creation error path (`wire.go:180-183`) is a defensive guard — all current constructors succeed with non-empty API keys. But future providers may have richer validation. The factory map makes this path testable without changing the public API or over-engineering the function signature. The pattern is local to `cmd/sigil` and doesn't leak into the provider packages.
 
 **Ref:** PR #14 review, `cmd/sigil/wire.go`, `cmd/sigil/wire_test.go`
+
+---
+
+## D059: Auth Middleware — Bearer Token Validation (Supersedes D049)
+
+> **Supersedes D049.** The pass-through stub described in D049 has been replaced with full bearer token validation.
+
+**Question:** D049 deferred auth to a security phase, but `sigil-9s6` tracked implementing bearer token validation. Should this be done in the Phase 5 PR or remain a stub?
+
+**Options considered:**
+
+- Keep stub, defer to dedicated security PR — rejected: the `TokenValidator` interface and middleware are clean, self-contained, and already have comprehensive tests. Deferring adds unnecessary delay.
+- Full ABAC with capability checks — rejected: still too early. Identity resolution, workspace membership, and capability enforcement remain separate subsystems.
+- Bearer token validation with dev-mode bypass (chosen) — implements `TokenValidator` interface with config-backed static tokens. Public paths (`/health`, `/openapi.*`) bypass auth. When no tokens are configured, auth is disabled (dev mode).
+
+**Decision:** Replace the D049 pass-through stub with bearer token validation via a `TokenValidator` interface. The middleware validates `Authorization: Bearer <token>` headers, returns 401 for missing/invalid tokens and 403 for forbidden access. User context is injected via `UserFromContext`. Dev mode (nil validator) preserves the pass-through behavior for local development.
+
+**Rationale:** The `TokenValidator` interface keeps the middleware decoupled from the token storage backend. Config-backed static tokens are sufficient for the current phase. When ABAC is implemented, the interface extends naturally without changing the middleware wiring. The 9 auth tests provide confidence in the security boundary.
+
+**Ref:** PR #15, D049, `sigil-9s6`, `internal/server/auth.go`, `internal/server/auth_test.go`

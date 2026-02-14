@@ -82,6 +82,11 @@ const (
 	CodeCLIInputInvalid      Code = "cli.input.invalid"
 
 	CodeSecurityCapabilityInvalid Code = "security.capability.invalid"
+
+	CodeChannelPairingRequired Code = "channel.pairing.required"
+	CodeChannelPairingDenied   Code = "channel.pairing.denied"
+	CodeChannelPairingPending  Code = "channel.pairing.pending"
+	CodeChannelBackendFailure  Code = "channel.backend.failure"
 )
 
 // Field is a structured key/value context attached to an error.
