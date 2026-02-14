@@ -50,7 +50,54 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     *process_lock = Some(sidecar);
 
     println!("Sigil gateway started with config: {}", config_path);
+
+    // Health check: verify the gateway is actually running
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+
+        match health_check_sidecar() {
+            Ok(true) => {
+                println!("Sigil gateway health check passed");
+                let _ = app_handle.emit("sidecar-ready", ());
+            }
+            Ok(false) => {
+                let msg = "Sigil gateway failed health check - service not responding";
+                eprintln!("{}", msg);
+                let _ = app_handle.emit("sidecar-error", msg);
+            }
+            Err(e) => {
+                let msg = format!("Sigil gateway health check error: {}", e);
+                eprintln!("{}", msg);
+                let _ = app_handle.emit("sidecar-error", msg);
+            }
+        }
+    });
+
     Ok(())
+}
+
+/// Perform health check on the sidecar gateway
+fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
+    // Try to connect to the gateway's health endpoint
+    // Default port is 18789 based on client.ts
+    let health_url = "http://localhost:18789/health";
+
+    // Use ureq for a simple HTTP request
+    match ureq::get(health_url)
+        .timeout(std::time::Duration::from_secs(3))
+        .call()
+    {
+        Ok(response) => Ok(response.status() == 200),
+        Err(ureq::Error::Status(code, _)) => {
+            // Gateway responded but with non-200 status
+            Ok(code == 200)
+        }
+        Err(ureq::Error::Transport(_)) => {
+            // Connection failed - gateway not running
+            Ok(false)
+        }
+    }
 }
 
 /// Stop the Sigil gateway sidecar process

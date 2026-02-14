@@ -48,6 +48,7 @@ ui/build/
 
 # Tauri
 ui/src-tauri/target/
+ui/src-tauri/gen/
 
 # Documentation site
 site/build/
