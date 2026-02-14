@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/agent"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,6 +119,7 @@ func TestSkillLoader_ParseSkill_MissingOpeningDelimiter(t *testing.T) {
 	_, err := agent.ParseSkillFile(skillFile)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing opening")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentSkillParseInvalid), "expected CodeAgentSkillParseInvalid, got %s", sigilerr.CodeOf(err))
 }
 
 func TestSkillLoader_ParseSkill_MissingClosingDelimiter(t *testing.T) {
@@ -132,6 +134,7 @@ func TestSkillLoader_ParseSkill_MissingClosingDelimiter(t *testing.T) {
 	_, err := agent.ParseSkillFile(skillFile)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing closing")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentSkillParseInvalid), "expected CodeAgentSkillParseInvalid, got %s", sigilerr.CodeOf(err))
 }
 
 func TestSkillLoader_ParseSkill_MalformedYAML(t *testing.T) {
@@ -146,6 +149,7 @@ func TestSkillLoader_ParseSkill_MalformedYAML(t *testing.T) {
 	_, err := agent.ParseSkillFile(skillFile)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing frontmatter")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentSkillParseInvalid), "expected CodeAgentSkillParseInvalid, got %s", sigilerr.CodeOf(err))
 }
 
 func TestSkillLoader_ParseSkill_EmptyFrontmatter(t *testing.T) {
@@ -181,6 +185,7 @@ func TestSkillLoader_ParseSkill_CRLFLineEndings(t *testing.T) {
 	_, err := agent.ParseSkillFile(skillFile)
 	require.Error(t, err, "CRLF line endings not yet normalized; currently expected to fail")
 	assert.Contains(t, err.Error(), "missing opening")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentSkillParseInvalid), "expected CodeAgentSkillParseInvalid, got %s", sigilerr.CodeOf(err))
 }
 
 func TestSkillLoader_ParseSkill_NoTrailingNewline(t *testing.T) {

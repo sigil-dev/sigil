@@ -91,16 +91,43 @@ func ValidTransition(from, to PluginState) bool {
 
 // Instance represents a plugin instance with lifecycle state management.
 type Instance struct {
-	mu    sync.RWMutex
-	name  string
-	state PluginState
+	mu           sync.RWMutex
+	name         string
+	pluginType   string
+	version      string
+	tier         string
+	capabilities []string
+	state        PluginState
+}
+
+// InstanceConfig holds parameters for creating a fully-described plugin instance.
+type InstanceConfig struct {
+	Name         string
+	Type         string
+	Version      string
+	Tier         string
+	Capabilities []string
+	InitialState PluginState
 }
 
 // NewInstance creates a new plugin instance with the given name and initial state.
+// Retained for backward compatibility; use NewInstanceFromConfig for full metadata.
 func NewInstance(name string, state PluginState) *Instance {
 	return &Instance{
 		name:  name,
 		state: state,
+	}
+}
+
+// NewInstanceFromConfig creates a new plugin instance from a full configuration.
+func NewInstanceFromConfig(cfg InstanceConfig) *Instance {
+	return &Instance{
+		name:         cfg.Name,
+		pluginType:   cfg.Type,
+		version:      cfg.Version,
+		tier:         cfg.Tier,
+		capabilities: cfg.Capabilities,
+		state:        cfg.InitialState,
 	}
 }
 
@@ -109,6 +136,39 @@ func (i *Instance) Name() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.name
+}
+
+// Type returns the plugin type (provider, channel, tool, skill).
+func (i *Instance) Type() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.pluginType
+}
+
+// Version returns the plugin version.
+func (i *Instance) Version() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.version
+}
+
+// Tier returns the execution tier (wasm, process, container).
+func (i *Instance) Tier() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.tier
+}
+
+// Capabilities returns a copy of the granted capability patterns.
+func (i *Instance) Capabilities() []string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	if i.capabilities == nil {
+		return nil
+	}
+	out := make([]string, len(i.capabilities))
+	copy(out, i.capabilities)
+	return out
 }
 
 // State returns the current plugin state.

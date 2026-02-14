@@ -23,6 +23,8 @@ const (
 	CodeStoreKnowledgeQueryDatabase Code = "store.knowledge.query.database_failure"
 	CodeStoreDatabaseFailure        Code = "store.database.failure"
 	CodeStoreBackendUnsupported     Code = "store.backend.unsupported"
+	CodeStoreConflict               Code = "store.conflict"
+	CodeStoreInvalidInput           Code = "store.invalid_input"
 
 	CodeConfigLoadReadFailure      Code = "config.load.read.failure"
 	CodeConfigParseInvalidFormat   Code = "config.parse.invalid_format"
@@ -36,6 +38,10 @@ const (
 	CodePluginDiscoveryFailure           Code = "plugin.discovery.failure"
 	CodePluginNotFound                   Code = "plugin.not_found"
 	CodePluginChannelNotFound            Code = "plugin.channel.not_found"
+	CodePluginSandboxPathInvalid         Code = "plugin.sandbox.path.invalid"
+	CodePluginSandboxUnsupported         Code = "plugin.sandbox.unsupported"
+	CodePluginSandboxSetupFailure        Code = "plugin.sandbox.setup.failure"
+	CodePluginSandboxNetworkInvalid      Code = "plugin.sandbox.network.invalid"
 
 	CodeProviderRequestInvalid  Code = "provider.request.invalid"
 	CodeProviderResponseInvalid Code = "provider.response.invalid"
@@ -52,14 +58,29 @@ const (
 	CodeAgentSessionInactive         Code = "agent.session.status.forbidden"
 	CodeAgentToolBudgetExceeded      Code = "agent.tool.budget_exceeded"
 	CodeAgentToolTimeout             Code = "agent.tool.timeout"
+	CodeAgentSkillParseInvalid       Code = "agent.skill.parse.invalid"
 
 	CodeWorkspaceOpenFailure      Code = "workspace.open.failure"
 	CodeWorkspaceMembershipDenied Code = "workspace.membership.denied"
 	CodeWorkspaceConfigInvalid    Code = "workspace.config.invalid"
+	CodeWorkspaceCloseFailure    Code = "workspace.close.failure"
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
 	CodeServerInternalFailure  Code = "server.internal.failure"
+	CodeServerEntityNotFound   Code = "server.entity.not_found"
+	CodeServerConfigInvalid    Code = "server.config.invalid"
+	CodeServerStartFailure     Code = "server.start.failure"
+	CodeServerShutdownFailure  Code = "server.shutdown.failure"
+	CodeServerNotImplemented   Code = "server.method.not_implemented"
+
+	CodeCLIGatewayNotRunning Code = "cli.gateway.not_running"
+	CodeCLIRequestFailure    Code = "cli.request.failure"
+	CodeCLIResponseInvalid   Code = "cli.response.invalid"
+	CodeCLISetupFailure      Code = "cli.setup.failure"
+	CodeCLIInputInvalid      Code = "cli.input.invalid"
+
+	CodeSecurityCapabilityInvalid Code = "security.capability.invalid"
 )
 
 // Field is a structured key/value context attached to an error.
@@ -211,6 +232,8 @@ func IsUpstreamFailure(err error) bool {
 
 func HTTPStatus(err error) int {
 	switch {
+	case HasCode(err, CodeServerNotImplemented):
+		return http.StatusNotImplemented
 	case IsNotFound(err):
 		return http.StatusNotFound
 	case IsConflict(err):

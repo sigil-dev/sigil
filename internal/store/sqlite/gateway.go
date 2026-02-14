@@ -163,7 +163,7 @@ func (s *userStore) Get(ctx context.Context, id string) (*store.User, error) {
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(ctx, q, id).Scan(&u.ID, &u.Name, &u.Role, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user %s: %w", id, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user %s: %w", id, sql.ErrNoRows)
 	}
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting user %s: %w", id, err)
@@ -198,7 +198,7 @@ WHERE ui.platform = ? AND ui.platform_user_id = ?`
 		&u.ID, &u.Name, &u.Role, &createdAt, &updatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user with external id %s/%s: %w", provider, externalID, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user with external id %s/%s: %w", provider, externalID, sql.ErrNoRows)
 	}
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting user by external id %s/%s: %w", provider, externalID, err)
@@ -238,7 +238,7 @@ func (s *userStore) Update(ctx context.Context, user *store.User) error {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows for user %s: %w", user.ID, err)
 	}
 	if rows == 0 {
-		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user %s: %w", user.ID, store.ErrNotFound)
+		return sigilerr.New(sigilerr.CodeStoreEntityNotFound, "user "+user.ID+" not found")
 	}
 
 	// Replace identities: delete old, insert new.
@@ -309,7 +309,7 @@ func (s *userStore) Delete(ctx context.Context, id string) error {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows for user %s: %w", id, err)
 	}
 	if rows == 0 {
-		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "user %s: %w", id, store.ErrNotFound)
+		return sigilerr.New(sigilerr.CodeStoreEntityNotFound, "user "+id+" not found")
 	}
 	return nil
 }
@@ -384,7 +384,7 @@ FROM pairings WHERE channel_type = ? AND channel_id = ?`
 		&p.WorkspaceID, &p.Status, &createdAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "pairing for channel %s/%s: %w", channelType, channelID, store.ErrNotFound)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "pairing for channel %s/%s: %w", channelType, channelID, sql.ErrNoRows)
 	}
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting pairing for channel %s/%s: %w", channelType, channelID, err)
@@ -439,7 +439,7 @@ func (s *pairingStore) Delete(ctx context.Context, id string) error {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking rows for pairing %s: %w", id, err)
 	}
 	if rows == 0 {
-		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "pairing %s: %w", id, store.ErrNotFound)
+		return sigilerr.New(sigilerr.CodeStoreEntityNotFound, "pairing "+id+" not found")
 	}
 	return nil
 }

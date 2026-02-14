@@ -381,7 +381,7 @@ func TestOpenAPIGen_ProducesValidSpec(t *testing.T) {
 `cmd/openapi-gen/main.go`:
 
 - Creates a huma API instance with all routes registered (reuses `internal/server` route registration)
-- Exports the OpenAPI spec to `api/openapi/spec.yaml`
+- Exports the OpenAPI spec to `api/openapi/spec.json` (JSON is the canonical format)
 - Run via `task generate` or directly
 
 **Step 4: Run test — expect PASS**

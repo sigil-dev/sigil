@@ -5,12 +5,12 @@ package anthropic
 
 import (
 	"context"
-	"fmt"
 
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Config holds Anthropic provider configuration.
@@ -29,7 +29,7 @@ type Provider struct {
 // New creates a new Anthropic provider. Returns an error if the API key is missing.
 func New(cfg Config) (*Provider, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("anthropic: missing api_key in config")
+		return nil, sigilerr.New(sigilerr.CodeProviderRequestInvalid, "anthropic: missing api_key in config", sigilerr.FieldProvider("anthropic"))
 	}
 
 	opts := []option.RequestOption{
@@ -107,7 +107,7 @@ func (p *Provider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	params, err := buildParams(req)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: building request params: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "anthropic: building request params")
 	}
 
 	eventCh := make(chan provider.ChatEvent, 100)
@@ -192,7 +192,7 @@ func convertMessages(msgs []provider.Message) ([]anthropicsdk.MessageParam, erro
 			// not as individual messages. Skip them here.
 			continue
 		default:
-			return nil, fmt.Errorf("anthropic: unsupported message role %q", msg.Role)
+			return nil, sigilerr.Errorf(sigilerr.CodeProviderRequestInvalid, "anthropic: unsupported message role %q", msg.Role)
 		}
 	}
 

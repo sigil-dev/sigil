@@ -4,104 +4,101 @@
 package store_test
 
 import (
-	"errors"
-	"fmt"
 	"testing"
 
-	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestSentinelErrors_Direct verifies the sentinel errors can be checked directly.
-func TestSentinelErrors_Direct(t *testing.T) {
+// TestSigilErrors_Direct verifies sigilerr errors are classified correctly.
+func TestSigilErrors_Direct(t *testing.T) {
 	tests := []struct {
-		name     string
-		err      error
-		sentinel error
+		name  string
+		err   error
+		check func(error) bool
 	}{
-		{"ErrNotFound direct", store.ErrNotFound, store.ErrNotFound},
-		{"ErrConflict direct", store.ErrConflict, store.ErrConflict},
-		{"ErrInvalidInput direct", store.ErrInvalidInput, store.ErrInvalidInput},
-		{"ErrDatabase direct", store.ErrDatabase, store.ErrDatabase},
+		{"NotFound direct", sigilerr.New(sigilerr.CodeStoreEntityNotFound, "not found"), sigilerr.IsNotFound},
+		{"Conflict direct", sigilerr.New(sigilerr.CodeStoreConflict, "conflict"), sigilerr.IsConflict},
+		{"InvalidInput direct", sigilerr.New(sigilerr.CodeStoreInvalidInput, "invalid input"), sigilerr.IsInvalidInput},
+		{"Database direct", sigilerr.New(sigilerr.CodeStoreDatabaseFailure, "database error"), func(err error) bool {
+			return sigilerr.HasCode(err, sigilerr.CodeStoreDatabaseFailure)
+		}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.ErrorIs(t, tt.err, tt.sentinel)
+			assert.True(t, tt.check(tt.err))
 		})
 	}
 }
 
-// TestSentinelErrors_Wrapped verifies sentinel errors work when wrapped with fmt.Errorf.
-func TestSentinelErrors_Wrapped(t *testing.T) {
+// TestSigilErrors_Wrapped verifies sigilerr errors work when wrapped.
+func TestSigilErrors_Wrapped(t *testing.T) {
 	tests := []struct {
-		name     string
-		err      error
-		sentinel error
+		name  string
+		err   error
+		check func(error) bool
 	}{
 		{
-			name:     "ErrNotFound wrapped once",
-			err:      fmt.Errorf("entity abc: %w", store.ErrNotFound),
-			sentinel: store.ErrNotFound,
+			name:  "NotFound wrapped",
+			err:   sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "entity abc: not found"),
+			check: sigilerr.IsNotFound,
 		},
 		{
-			name:     "ErrConflict wrapped once",
-			err:      fmt.Errorf("unique constraint: %w", store.ErrConflict),
-			sentinel: store.ErrConflict,
+			name:  "Conflict wrapped",
+			err:   sigilerr.Errorf(sigilerr.CodeStoreConflict, "unique constraint: conflict"),
+			check: sigilerr.IsConflict,
 		},
 		{
-			name:     "ErrInvalidInput wrapped once",
-			err:      fmt.Errorf("malformed ID: %w", store.ErrInvalidInput),
-			sentinel: store.ErrInvalidInput,
+			name:  "InvalidInput wrapped",
+			err:   sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "malformed ID: invalid input"),
+			check: sigilerr.IsInvalidInput,
 		},
 		{
-			name:     "ErrDatabase wrapped once",
-			err:      fmt.Errorf("query failed: %w", store.ErrDatabase),
-			sentinel: store.ErrDatabase,
+			name: "Database wrapped",
+			err:  sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "query failed: database error"),
+			check: func(err error) bool {
+				return sigilerr.HasCode(err, sigilerr.CodeStoreDatabaseFailure)
+			},
 		},
 		{
-			name:     "ErrNotFound wrapped twice",
-			err:      fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", store.ErrNotFound)),
-			sentinel: store.ErrNotFound,
-		},
-		{
-			name:     "ErrNotFound with context",
-			err:      fmt.Errorf("session sess-123: %w", store.ErrNotFound),
-			sentinel: store.ErrNotFound,
+			name:  "NotFound with context",
+			err:   sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "session sess-123: not found"),
+			check: sigilerr.IsNotFound,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.ErrorIs(t, tt.err, tt.sentinel)
+			assert.True(t, tt.check(tt.err))
 		})
 	}
 }
 
-// TestSentinelErrors_NotMatching verifies errors.Is returns false for non-matching sentinels.
-func TestSentinelErrors_NotMatching(t *testing.T) {
-	err := fmt.Errorf("entity abc: %w", store.ErrNotFound)
+// TestSigilErrors_NotMatching verifies classification returns false for non-matching codes.
+func TestSigilErrors_NotMatching(t *testing.T) {
+	err := sigilerr.New(sigilerr.CodeStoreEntityNotFound, "entity abc: not found")
 
-	// Should NOT match other sentinels
-	assert.False(t, errors.Is(err, store.ErrConflict), "ErrNotFound should not match ErrConflict")
-	assert.False(t, errors.Is(err, store.ErrInvalidInput), "ErrNotFound should not match ErrInvalidInput")
-	assert.False(t, errors.Is(err, store.ErrDatabase), "ErrNotFound should not match ErrDatabase")
+	// Should NOT match other categories
+	assert.False(t, sigilerr.IsConflict(err), "NotFound should not match Conflict")
+	assert.False(t, sigilerr.IsInvalidInput(err), "NotFound should not match InvalidInput")
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeStoreDatabaseFailure), "NotFound should not match Database")
 }
 
-// TestSentinelErrors_Distinct verifies all sentinels are distinct errors.
-func TestSentinelErrors_Distinct(t *testing.T) {
-	sentinels := []error{
-		store.ErrNotFound,
-		store.ErrConflict,
-		store.ErrInvalidInput,
-		store.ErrDatabase,
+// TestSigilErrors_Distinct verifies all error codes are distinct.
+func TestSigilErrors_Distinct(t *testing.T) {
+	codes := []sigilerr.Code{
+		sigilerr.CodeStoreEntityNotFound,
+		sigilerr.CodeStoreConflict,
+		sigilerr.CodeStoreInvalidInput,
+		sigilerr.CodeStoreDatabaseFailure,
 	}
 
-	// Ensure no two sentinels are the same
-	for i, s1 := range sentinels {
-		for j, s2 := range sentinels {
+	// Ensure no two codes are the same
+	for i, c1 := range codes {
+		for j, c2 := range codes {
 			if i < j {
-				assert.NotEqual(t, s1, s2, "sentinels should be distinct")
+				assert.NotEqual(t, c1, c2, "error codes should be distinct")
 			}
 		}
 	}

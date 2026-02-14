@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/plugin"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +58,8 @@ execution:
 	_, err := plugin.ParseManifest([]byte(yaml))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "type")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+		"manifest type validation error should have CodePluginManifestValidateInvalid")
 }
 
 func TestParseManifest_MissingName(t *testing.T) {
@@ -68,6 +71,8 @@ execution:
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
 	assert.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+		"missing name error should have CodePluginManifestValidateInvalid")
 }
 
 func TestParseManifest_InvalidTier(t *testing.T) {
@@ -80,6 +85,8 @@ execution:
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
 	assert.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+		"invalid tier error should have CodePluginManifestValidateInvalid")
 }
 
 func TestValidateManifest_ConflictingCapabilities(t *testing.T) {
@@ -94,6 +101,8 @@ func TestValidateManifest_ConflictingCapabilities(t *testing.T) {
 
 	errs := m.Validate()
 	assert.NotEmpty(t, errs)
+	assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid),
+		"conflicting capabilities error should have CodePluginManifestValidateInvalid")
 }
 
 func TestValidateManifest_CapabilitySegmentLimit(t *testing.T) {
@@ -117,6 +126,8 @@ func TestValidateManifest_CapabilitySegmentLimit(t *testing.T) {
 	errs := m.Validate()
 	require.NotEmpty(t, errs)
 	assert.Contains(t, errs[0].Error(), "exceeds maximum 32 segments")
+	assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid),
+		"segment limit error should have CodePluginManifestValidateInvalid")
 }
 
 // NOTE: These are internal runtime types (plugin.TypeChannel, plugin.TierProcess),
@@ -169,6 +180,8 @@ func TestValidateManifest_MalformedTimeout(t *testing.T) {
 				for _, e := range errs {
 					if strings.Contains(e.Error(), "graceful_shutdown_timeout") {
 						found = true
+						assert.True(t, sigilerr.HasCode(e, sigilerr.CodePluginManifestValidateInvalid),
+							"timeout error should have CodePluginManifestValidateInvalid")
 						break
 					}
 				}
@@ -227,6 +240,8 @@ func TestValidateManifest_SemverVersionField(t *testing.T) {
 			for _, e := range errs {
 				if strings.Contains(e.Error(), "version must be valid semver") {
 					found = true
+					assert.True(t, sigilerr.HasCode(e, sigilerr.CodePluginManifestValidateInvalid),
+						"semver error should have CodePluginManifestValidateInvalid")
 				}
 			}
 			assert.True(t, found, "version %q should fail semver validation", v)

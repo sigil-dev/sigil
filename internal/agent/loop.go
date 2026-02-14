@@ -467,7 +467,7 @@ func (l *Loop) accountUsage(ctx context.Context, session *store.Session, usage *
 	session.TokenBudget.UsedDay += total
 
 	if err := l.sessions.Update(ctx, session); err != nil {
-		return fmt.Errorf("persisting token budget counters: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeAgentLoopFailure, "persisting token budget counters: %w", err)
 	}
 	return nil
 }

@@ -602,3 +602,128 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** The `HealthReporter` circuit breaker operates on a 30s cooldown window — too coarse for within-turn retries. A provider that fails on attempt 1 stays "available" to the health check and gets re-selected on attempt 2. The exclusion list ensures deterministic failover progression without requiring all providers to implement `HealthReporter`.
 
 **Ref:** PR #12 review round 8 finding 4
+
+---
+
+## D048: Config File Auto-Discovery
+
+**Question:** Should the CLI require `--config` to load a config file, or auto-discover from standard locations?
+
+**Options considered:**
+
+- Explicit only (`--config` required) — original implementation. Simple but diverges from the design doc's "standard precedence" (flag > env > file > defaults) which implies automatic file discovery.
+- Auto-discovery with standard paths (chosen) — search `.`, `$HOME/.config/sigil/`, `/etc/sigil/` for `sigil.yaml`. Missing file is silently ignored.
+- Auto-discovery with XDG_CONFIG_HOME — more correct on Linux but adds complexity for a single search path.
+
+**Decision:** Auto-discover `sigil.yaml` from `.`, `$HOME/.config/sigil/`, `/etc/sigil/` when `--config` is not explicitly provided. Missing file is silently ignored — defaults and environment variables still apply. Explicit `--config` takes full priority.
+
+**Rationale:** The design doc (§9 CLI, Viper Config Resolution) specifies "Config file (`sigil.yaml`)" as tier 3 in the precedence chain, implying automatic loading. Requiring `--config` for every invocation would break the expected ergonomics of `sigil start` with a config file in the current directory. The three search paths follow common Go CLI conventions (Viper, Cobra ecosystem).
+
+**Ref:** PR #13 review round 4, `docs/design/09-ui-and-cli.md`
+
+---
+
+## D049: Auth Middleware — Stub Now, Full ABAC Deferred
+
+**Question:** REST endpoints lack authentication and ABAC enforcement. Should the security model be implemented in the Phase 5 CLI PR, or deferred?
+
+**Options considered:**
+
+- Full ABAC in Phase 5 — rejected: scope creep; the security model depends on identity resolution, workspace membership, and capability enforcement which are separate subsystems.
+- No auth at all — rejected: leaves no extension point for future auth integration and doesn't acknowledge the gap.
+- Pass-through stub middleware (chosen) — wires `authMiddleware` into the chi stack now, logs requests at debug level, passes everything through. Full implementation tracked separately.
+
+**Decision:** Add a pass-through `authMiddleware` stub wired into the chi middleware stack. Full token validation and ABAC capability checks deferred to the security phase (tracked in `sigil-9s6`).
+
+**Rationale:** The middleware stub establishes the extension point in the correct position in the middleware chain (after CORS, before route handlers). When real auth is implemented, it replaces the stub body without changing the server wiring. The default binding to `127.0.0.1` provides the baseline security boundary until proper auth is added.
+
+**Ref:** PR #13 review round 4, `sigil-9s6`, `docs/design/03-security-model.md`
+
+---
+
+## D050: ErrNotFound Sentinel for REST Error Differentiation
+
+> **Superseded by D054.** The sentinel pattern described below was replaced with `sigilerr.CodeServerEntityNotFound` + `server.IsNotFound()` in PR #13 round 6. See D054 for current approach.
+
+**Question:** How should REST GET handlers distinguish "entity not found" (404) from internal errors (500)?
+
+**Options considered:**
+
+- String matching on error messages — fragile, breaks when error messages change.
+- Custom error types with interface assertion — more complex than needed for a single distinction.
+- Sentinel error with `errors.Is()` (chosen) — idiomatic Go, simple, extensible.
+
+**Decision:** ~~All service implementations wrap not-found errors with `server.ErrNotFound` sentinel. GET handlers use `errors.Is(err, ErrNotFound)` to return 404; all other errors return 500.~~ Superseded — see D054.
+
+**Rationale:** Mapping all service errors to 404 (the original behavior) masks internal failures — a database connection error would appear as "not found" to the client, making debugging impossible. This rationale still applies; only the mechanism changed.
+
+**Ref:** PR #13 review round 4
+
+## D051: Phase 5 CLI Scope — List-Only Subcommands, CRUD Deferred
+
+**Question:** Phase 5 plan specifies full CRUD subcommands (workspace create/delete/show, plugin install/remove/reload/inspect/logs, session show/archive/export) and full doctor diagnostics, but the implementation provides only `list` subcommands and stubs. Should the plan be updated or the commands implemented?
+
+**Decision:** Keep the plan as-is (plans are not retroactively edited). The implementation correctly follows the design doc scope (design/09-ui-and-cli.md) which explicitly limits Phase 5 to: `start`, `status`, `version`, `workspace list`, `plugin list`, `session list`, `chat` (stub), `doctor` (stub). Full CRUD and doctor diagnostics are deferred to Phase 6 (Advanced Features), tracked in `sigil-n6m`.
+
+**Rationale:** The design doc is the authoritative scope definition. The plan document described the full target state; the design doc subsequently narrowed Phase 5 scope. Changing plans retroactively obscures the original intent. Documenting the deferral here maintains traceability.
+
+**Ref:** PR #13 review round 5
+
+## D052: Status Command Calls /api/v1/status, Not /health
+
+**Question:** Phase 5 plan says `sigil status` calls `/health`, but the implementation calls `/api/v1/status`. Which endpoint should the CLI use?
+
+**Decision:** Keep `/api/v1/status`. The plan is not retroactively edited; this deviation is documented here.
+
+**Rationale:** `/health` is a minimal liveness probe (returns 200 OK with no payload) intended for load balancers and orchestrators. `/api/v1/status` is the designated gateway status endpoint for CLI and operator use. In Phase 5 it returns `{"status": "ok"}` as a stub; future phases will enrich the response with version, uptime, and component health per the design doc. The endpoint choice is correct even though the response is not yet enriched — the CLI is wired to the right path for when richer data is added.
+
+**Ref:** PR #13 review round 5
+
+## D053: Doctor Command — Stub in Phase 5, Full Diagnostics Deferred
+
+**Question:** The design doc's "Doctor Command" section describes full diagnostics (binary health, plugin processes, provider API keys, channel connections, node connectivity, disk space, Tailscale status), but Phase 5 implements only a stub. Should the design doc clarify this phasing?
+
+**Decision:** The design doc describes the complete target state, not per-phase scope. Phase 5 delivers `doctor` as a registered command with placeholder output. Full diagnostic checks are deferred to Phase 6 alongside the remaining CLI commands, tracked in `sigil-n6m`. The design doc is not modified; this decision documents the phased rollout.
+
+**Rationale:** Design docs describe what the system will eventually do. Phase scoping is handled in plan docs and decision log entries. Adding phase annotations to every design doc section would create maintenance burden and clutter the architectural narrative.
+
+**Ref:** PR #13 review round 5
+
+## D054: Replace Error Sentinels with sigilerr Structured Error Codes
+
+**Question:** D050 introduced `server.ErrNotFound` as a sentinel checked via `errors.Is()`. The rest of the codebase uses `sigilerr` structured error codes with `sigilerr.HasCode()`. Should the server layer follow the same pattern?
+
+**Decision:** Replace `server.ErrNotFound` sentinel with `sigilerr.CodeServerEntityNotFound`. Route handlers use `server.IsNotFound(err)` (which calls `sigilerr.HasCode`) instead of `errors.Is(err, ErrNotFound)`. Service adapters return `sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, ...)`. The plugin adapter translates `CodePluginNotFound` → `CodeServerEntityNotFound` at the boundary.
+
+**Rationale:** Using two error classification mechanisms (sentinels + error codes) in the same codebase creates translation gaps at boundaries. The plugin manager returned `CodePluginNotFound` but the server expected a sentinel, so adapters had to bridge them manually — and the initial implementation missed this, causing 404s to surface as 500s. A single mechanism (`sigilerr.HasCode`) eliminates this class of bug. Supersedes D050.
+
+**Ref:** PR #13 review round 6
+
+## D055: Session List Returns Empty Array in Phase 5
+
+**Question:** `sessionServiceAdapter.List` returns an empty array and nil error. Should it return a "not implemented" error instead, or is the empty array acceptable?
+
+**Decision:** Return empty array. This is semantically correct — there are zero sessions because the agent loop is not yet wired. The adapter comment documents the deferral. An empty list is not misleading; it accurately reflects the system state in Phase 5.
+
+**Rationale:** Returning an error would break the API contract (`GET /api/v1/workspaces/{id}/sessions` should return a list, possibly empty). Clients consuming the API would need special "not implemented" error handling that adds no value and would be removed when sessions are wired in a later phase. The in-code comment in `wire.go` plus this decision provide sufficient documentation.
+
+**Ref:** PR #13 review round 7
+
+## D056: Mandate sigilerr Structured Errors for All Production Code
+
+**Question:** The codebase has ~67 remaining `fmt.Errorf`/`errors.New` sites in production code alongside ~284 `sigilerr` sites. Should we mandate structured errors everywhere?
+
+**Decision:** Yes. All production Go code (excluding generated code in `internal/gen/`) MUST use `sigilerr` for error creation. Specifically:
+
+- **MUST** use `sigilerr.Errorf`, `sigilerr.New`, `sigilerr.Wrap`, or `sigilerr.Wrapf` instead of `fmt.Errorf` or `errors.New`.
+- **MUST** use `sigilerr.HasCode` for error classification instead of `errors.Is` with sentinels.
+- **MUST** assign an appropriate error code from `pkg/errors` for every error site.
+- **SHOULD** add new error codes to `pkg/errors/errors.go` when no existing code fits.
+- **MAY** use `fmt.Errorf` in test files for creating mock/stub errors that don't participate in error classification.
+- Existing sentinel vars (e.g., `store.ErrNotFound`, `store.ErrConflict`) will be replaced with `IsXxx()` helpers using `sigilerr.HasCode`, following the pattern established in D054.
+
+**Rationale:** Mixed error patterns create translation gaps at subsystem boundaries (demonstrated by the 404→500 bug in PR #13). Structured errors provide machine-readable codes, structured context (via `sigilerr.Field`), and consistent classification. The `samber/oops` foundation already supports all needed patterns. A single error mechanism across the codebase eliminates an entire class of boundary bugs and enables future error reporting/observability.
+
+**Migration tracked in:** sigil-c99
+
+**Ref:** PR #13 review round 7

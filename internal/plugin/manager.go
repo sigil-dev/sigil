@@ -89,7 +89,14 @@ func (m *Manager) Discover(ctx context.Context) ([]*Manifest, error) {
 		}
 
 		m.mu.Lock()
-		m.plugins[manifest.Name] = NewInstance(manifest.Name, StateDiscovered)
+		m.plugins[manifest.Name] = NewInstanceFromConfig(InstanceConfig{
+			Name:         manifest.Name,
+			Type:         string(manifest.Type),
+			Version:      manifest.Version,
+			Tier:         string(manifest.Execution.Tier),
+			Capabilities: manifest.Capabilities,
+			InitialState: StateDiscovered,
+		})
 		m.mu.Unlock()
 
 		manifests = append(manifests, manifest)

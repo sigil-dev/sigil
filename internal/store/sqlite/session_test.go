@@ -11,6 +11,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/store"
 	"github.com/sigil-dev/sigil/internal/store/sqlite"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,7 +64,7 @@ func TestSessionStore_CRUD(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = ss.GetSession(ctx, "sess-1")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 }
 
 func TestSessionStore_ActiveWindow(t *testing.T) {
@@ -112,7 +113,7 @@ func TestSessionStore_GetNonExistent(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = ss.GetSession(ctx, "nonexistent")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 }
 
 func TestSessionStore_BudgetPersistence(t *testing.T) {

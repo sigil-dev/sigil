@@ -4,7 +4,6 @@
 package plugin
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -199,22 +198,22 @@ func (m *Manifest) Validate() []error {
 // security.MatchCapability never returns errors during enforcement.
 func validateCapPattern(pattern string) error {
 	if pattern == "" {
-		return fmt.Errorf("capability pattern must not be empty")
+		return sigilerr.New(sigilerr.CodePluginManifestValidateInvalid, "capability pattern must not be empty")
 	}
 	if !capPatternRe.MatchString(pattern) {
-		return fmt.Errorf("capability pattern %q contains invalid characters", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "capability pattern %q contains invalid characters", pattern)
 	}
 	if strings.HasPrefix(pattern, ".") || strings.HasSuffix(pattern, ".") {
-		return fmt.Errorf("capability pattern %q must not start or end with a dot", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "capability pattern %q must not start or end with a dot", pattern)
 	}
 	if strings.Contains(pattern, "..") {
-		return fmt.Errorf("capability pattern %q contains consecutive dots", pattern)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "capability pattern %q contains consecutive dots", pattern)
 	}
 	// Reject patterns that would exceed the segment limit enforced by
 	// security.MatchCapability (maxSegments = 32). Catching this at
 	// validation time prevents silent skip in CapabilitySet.Contains.
 	if segments := strings.Count(pattern, ".") + 1; segments > 32 {
-		return fmt.Errorf("capability pattern %q exceeds maximum 32 segments (has %d)", pattern, segments)
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid, "capability pattern %q exceeds maximum 32 segments (has %d)", pattern, segments)
 	}
 	return nil
 }

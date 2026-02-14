@@ -7,8 +7,9 @@
 package security
 
 import (
-	"fmt"
 	"strings"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // CapabilitySet is a set of capability patterns.
@@ -44,10 +45,10 @@ func MatchCapability(pattern, cap string) (bool, error) {
 	capSegments := strings.Split(cap, ".")
 
 	if len(patternSegments) > maxSegments {
-		return false, fmt.Errorf("pattern exceeds maximum %d segments: got %d", maxSegments, len(patternSegments))
+		return false, sigilerr.Errorf(sigilerr.CodeSecurityCapabilityInvalid, "pattern exceeds maximum %d segments: got %d", maxSegments, len(patternSegments))
 	}
 	if len(capSegments) > maxSegments {
-		return false, fmt.Errorf("capability exceeds maximum %d segments: got %d", maxSegments, len(capSegments))
+		return false, sigilerr.Errorf(sigilerr.CodeSecurityCapabilityInvalid, "capability exceeds maximum %d segments: got %d", maxSegments, len(capSegments))
 	}
 
 	memo := make(map[[2]int]bool)

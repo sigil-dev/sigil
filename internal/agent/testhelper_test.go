@@ -41,7 +41,7 @@ func (m *mockSessionStore) CreateSession(_ context.Context, session *store.Sessi
 	defer m.mu.Unlock()
 
 	if _, exists := m.sessions[session.ID]; exists {
-		return store.ErrConflict
+		return sigilerr.New(sigilerr.CodeStoreConflict, "session already exists")
 	}
 
 	// Store a copy to avoid aliasing.
@@ -56,7 +56,7 @@ func (m *mockSessionStore) GetSession(_ context.Context, id string) (*store.Sess
 
 	s, ok := m.sessions[id]
 	if !ok {
-		return nil, store.ErrNotFound
+		return nil, sigilerr.New(sigilerr.CodeStoreEntityNotFound, "session not found")
 	}
 
 	cp := *s
@@ -68,7 +68,7 @@ func (m *mockSessionStore) UpdateSession(_ context.Context, session *store.Sessi
 	defer m.mu.Unlock()
 
 	if _, exists := m.sessions[session.ID]; !exists {
-		return store.ErrNotFound
+		return sigilerr.New(sigilerr.CodeStoreEntityNotFound, "session not found")
 	}
 
 	s := *session
@@ -107,7 +107,7 @@ func (m *mockSessionStore) DeleteSession(_ context.Context, id string) error {
 	defer m.mu.Unlock()
 
 	if _, exists := m.sessions[id]; !exists {
-		return store.ErrNotFound
+		return sigilerr.New(sigilerr.CodeStoreEntityNotFound, "session not found")
 	}
 
 	delete(m.sessions, id)

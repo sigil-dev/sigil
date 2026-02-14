@@ -214,25 +214,25 @@ func (m *Manager) Close() error {
 		if ws.SessionStore != nil {
 			if closer, ok := ws.SessionStore.(interface{ Close() error }); ok {
 				if err := closer.Close(); err != nil {
-					errs = append(errs, fmt.Errorf("closing session store for %s: %w", id, err))
+					errs = append(errs, sigilerr.Errorf(sigilerr.CodeWorkspaceCloseFailure, "closing session store for %s: %w", id, err))
 				}
 			}
 		}
 		if ws.MemoryStore != nil {
 			if err := ws.MemoryStore.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("closing memory store for %s: %w", id, err))
+				errs = append(errs, sigilerr.Errorf(sigilerr.CodeWorkspaceCloseFailure, "closing memory store for %s: %w", id, err))
 			}
 		}
 		if ws.VectorStore != nil {
 			if err := ws.VectorStore.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("closing vector store for %s: %w", id, err))
+				errs = append(errs, sigilerr.Errorf(sigilerr.CodeWorkspaceCloseFailure, "closing vector store for %s: %w", id, err))
 			}
 		}
 		delete(m.workspaces, id)
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("closing workspaces: %w", sigilerr.Join(errs...))
+		return sigilerr.Errorf(sigilerr.CodeWorkspaceCloseFailure, "closing workspaces: %w", sigilerr.Join(errs...))
 	}
 	return nil
 }

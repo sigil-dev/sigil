@@ -4,11 +4,11 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -51,14 +51,14 @@ func ParseSkillFile(path string) (*Skill, error) {
 
 	// Split frontmatter from body. Expect leading "---\n" and closing "---\n".
 	if !strings.HasPrefix(content, "---\n") {
-		return nil, fmt.Errorf("skill file %s: missing opening frontmatter delimiter", path)
+		return nil, sigilerr.Errorf(sigilerr.CodeAgentSkillParseInvalid, "skill file %s: missing opening frontmatter delimiter", path)
 	}
 
 	// Find the closing delimiter after the opening one.
 	rest := content[4:] // skip opening "---\n"
 	idx := strings.Index(rest, "\n---\n")
 	if idx < 0 {
-		return nil, fmt.Errorf("skill file %s: missing closing frontmatter delimiter", path)
+		return nil, sigilerr.Errorf(sigilerr.CodeAgentSkillParseInvalid, "skill file %s: missing closing frontmatter delimiter", path)
 	}
 
 	frontmatterRaw := rest[:idx]
@@ -66,7 +66,7 @@ func ParseSkillFile(path string) (*Skill, error) {
 
 	var fm skillFrontmatter
 	if err := yaml.Unmarshal([]byte(frontmatterRaw), &fm); err != nil {
-		return nil, fmt.Errorf("skill file %s: parsing frontmatter: %w", path, err)
+		return nil, sigilerr.Errorf(sigilerr.CodeAgentSkillParseInvalid, "skill file %s: parsing frontmatter: %w", path, err)
 	}
 
 	return &Skill{

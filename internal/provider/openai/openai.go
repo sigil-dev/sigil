@@ -16,6 +16,7 @@ import (
 	"github.com/openai/openai-go/shared"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Config holds OpenAI provider configuration.
@@ -34,7 +35,7 @@ type Provider struct {
 // New creates a new OpenAI provider. Returns an error if the API key is missing.
 func New(cfg Config) (*Provider, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("openai: missing api_key in config")
+		return nil, sigilerr.New(sigilerr.CodeProviderRequestInvalid, "openai: missing api_key in config", sigilerr.FieldProvider("openai"))
 	}
 
 	opts := []option.RequestOption{
@@ -133,7 +134,7 @@ func (p *Provider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	params, err := buildParams(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: building request params: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "openai: building request params")
 	}
 
 	eventCh := make(chan provider.ChatEvent, 100)
@@ -212,7 +213,7 @@ func convertMessages(msgs []provider.Message, systemPrompt string) ([]openaisdk.
 		case store.MessageRoleSystem:
 			result = append(result, openaisdk.SystemMessage(msg.Content))
 		default:
-			return nil, fmt.Errorf("openai: unsupported message role %q", msg.Role)
+			return nil, sigilerr.Errorf(sigilerr.CodeProviderRequestInvalid, "openai: unsupported message role %q", msg.Role)
 		}
 	}
 

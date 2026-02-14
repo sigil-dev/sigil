@@ -9,6 +9,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/provider/google"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,6 +85,8 @@ func TestGoogleProvider_MissingAPIKey(t *testing.T) {
 	_, err := google.New(google.Config{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "api_key")
+	assert.True(t, sigilerr.IsInvalidInput(err), "missing API key should be CodeProviderRequestInvalid")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderRequestInvalid))
 }
 
 func TestGoogleProvider_Status(t *testing.T) {

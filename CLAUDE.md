@@ -171,16 +171,30 @@ This repo includes in-repo Claude Code hooks and commands in `.claude/`:
 - Use context for cancellation and timeouts
 - Prefer composition over inheritance
 
-### Error Handling
+### Error Handling (D056)
 
-Use structured errors with context via `pkg/errors` (built on `samber/oops`):
+All production code **MUST** use `pkg/errors` (`sigilerr`) for error creation — **not** `fmt.Errorf` or `errors.New`:
 
 ```go
-// Wrap with context
+// Create with code + context
 return sigilerr.Errorf(sigilerr.CodePluginRuntimeStartFailure, "loading plugin %s: %w", name, err)
 
-// At API boundaries, include error codes for client consumption
+// Classify errors by code, not sentinels
+if sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound) { ... }
+
+// Add structured fields for observability
+return sigilerr.New(sigilerr.CodeProviderUpstreamFailure, "provider timeout",
+    sigilerr.ProviderField("anthropic"))
 ```
+
+| Requirement | Description |
+|-------------|-------------|
+| **MUST** use `sigilerr.Errorf/New/Wrap/Wrapf` | Not `fmt.Errorf` or `errors.New` in production code |
+| **MUST** use `sigilerr.HasCode` | Not `errors.Is` with sentinel vars for error classification |
+| **MUST** assign error codes | Every error site needs a code from `pkg/errors/errors.go` |
+| **SHOULD** add new codes | When no existing code fits the error site |
+| **MAY** use `fmt.Errorf` in tests | For mock errors not participating in error classification |
+| **MUST NOT** use sentinel vars | Use `IsXxx()` helpers with `sigilerr.HasCode` instead |
 
 ### Logging
 

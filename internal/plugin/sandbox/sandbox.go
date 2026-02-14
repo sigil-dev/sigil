@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/sigil-dev/sigil/internal/plugin"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 var (
@@ -48,13 +49,13 @@ func init() {
 // for injection in Seatbelt profiles or bwrap argument confusion.
 func validateSandboxPath(path string) error {
 	if path == "" {
-		return fmt.Errorf("invalid path: must not be empty")
+		return sigilerr.New(sigilerr.CodePluginSandboxPathInvalid, "invalid path: must not be empty")
 	}
 	if strings.HasPrefix(path, "-") {
-		return fmt.Errorf("invalid path %q: must not start with dash", path)
+		return sigilerr.Errorf(sigilerr.CodePluginSandboxPathInvalid, "invalid path %q: must not start with dash", path)
 	}
 	if dangerousPathChars.MatchString(path) {
-		return fmt.Errorf("invalid path %q: contains disallowed characters", path)
+		return sigilerr.Errorf(sigilerr.CodePluginSandboxPathInvalid, "invalid path %q: contains disallowed characters", path)
 	}
 	return nil
 }
@@ -62,7 +63,7 @@ func validateSandboxPath(path string) error {
 func GenerateArgs(manifest *plugin.Manifest, binaryPath string) ([]string, error) {
 	// Item 5: Container tier returns a descriptive error instead of silent nil.
 	if manifest.Execution.Tier == plugin.TierContainer {
-		return nil, fmt.Errorf("sandbox for container tier not yet implemented")
+		return nil, sigilerr.New(sigilerr.CodePluginSandboxUnsupported, "sandbox for container tier not yet implemented")
 	}
 
 	if manifest.Execution.Tier != plugin.TierProcess {
@@ -71,11 +72,11 @@ func GenerateArgs(manifest *plugin.Manifest, binaryPath string) ([]string, error
 
 	// Reject empty or whitespace-only binaryPath.
 	if strings.TrimSpace(binaryPath) == "" {
-		return nil, fmt.Errorf("binaryPath must not be empty or whitespace-only")
+		return nil, sigilerr.New(sigilerr.CodePluginSandboxPathInvalid, "binaryPath must not be empty or whitespace-only")
 	}
 	// Validate binaryPath against injection characters (same rules as manifest paths).
 	if err := validateSandboxPath(binaryPath); err != nil {
-		return nil, fmt.Errorf("invalid binaryPath: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginSandboxPathInvalid, "invalid binaryPath")
 	}
 
 	switch targetOS {
@@ -84,7 +85,7 @@ func GenerateArgs(manifest *plugin.Manifest, binaryPath string) ([]string, error
 	case "darwin":
 		return generateSandboxExecArgs(manifest, binaryPath)
 	default:
-		return nil, fmt.Errorf("sandbox not supported on %s", targetOS)
+		return nil, sigilerr.Errorf(sigilerr.CodePluginSandboxUnsupported, "sandbox not supported on %s", targetOS)
 	}
 }
 
@@ -176,17 +177,17 @@ func generateSandboxExecArgs(manifest *plugin.Manifest, binaryPath string) ([]st
 	// will be cleaned up on reboot if not removed explicitly.
 	f, err := os.CreateTemp("", "sigil-seatbelt-*.sb")
 	if err != nil {
-		return nil, fmt.Errorf("creating seatbelt profile temp file: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginSandboxSetupFailure, "creating seatbelt profile temp file")
 	}
 
 	if _, err := f.WriteString(profile); err != nil {
 		_ = f.Close()
 		_ = os.Remove(f.Name())
-		return nil, fmt.Errorf("writing seatbelt profile: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginSandboxSetupFailure, "writing seatbelt profile")
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(f.Name())
-		return nil, fmt.Errorf("closing seatbelt profile temp file: %w", err)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginSandboxSetupFailure, "closing seatbelt profile temp file")
 	}
 
 	args := []string{sandboxExecPath, "-f", f.Name(), "--", binaryPath}
@@ -256,14 +257,14 @@ func generateSeatbeltProfile(manifest *plugin.Manifest) (string, error) {
 		for _, entry := range sb.Network.Allow {
 			_, port, err := net.SplitHostPort(entry)
 			if err != nil {
-				return "", fmt.Errorf("invalid network allow entry %q: expected host:port format", entry)
+				return "", sigilerr.Errorf(sigilerr.CodePluginSandboxNetworkInvalid, "invalid network allow entry %q: expected host:port format", entry)
 			}
 			p, err := strconv.Atoi(port)
 			if err != nil {
-				return "", fmt.Errorf("invalid port in network allow entry %q", entry)
+				return "", sigilerr.Errorf(sigilerr.CodePluginSandboxNetworkInvalid, "invalid port in network allow entry %q", entry)
 			}
 			if p < 1 || p > 65535 {
-				return "", fmt.Errorf("port %d out of range (1-65535) in network allow entry %q", p, entry)
+				return "", sigilerr.Errorf(sigilerr.CodePluginSandboxNetworkInvalid, "port %d out of range (1-65535) in network allow entry %q", p, entry)
 			}
 			rules = append(rules, fmt.Sprintf(`(allow network-outbound (remote tcp "*:%s"))`, port))
 		}
@@ -282,7 +283,7 @@ func expandPath(path string) (string, error) {
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("expanding %q: home directory unavailable: %w", path, err)
+			return "", sigilerr.Wrapf(err, sigilerr.CodePluginSandboxSetupFailure, "expanding %q: home directory unavailable", path)
 		}
 		return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
 	}

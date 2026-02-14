@@ -484,9 +484,11 @@ func TestAgentLoop_SessionNotFound(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Nil(t, out)
-	// The error should be a not-found error from the session store.
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
-		"expected wrapped error code, got %s", sigilerr.CodeOf(err))
+	// The error should be a not-found error from the session store,
+	// wrapped by the agent loop. Since oops.Code() returns the deepest
+	// code in the chain, the store's not-found code is visible.
+	assert.True(t, sigilerr.IsNotFound(err),
+		"expected not-found error, got code %s", sigilerr.CodeOf(err))
 	assert.Contains(t, err.Error(), "prepare")
 }
 

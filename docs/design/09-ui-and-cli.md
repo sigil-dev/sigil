@@ -48,11 +48,13 @@ sigil
 +-- version
 ```
 
+**Phase 5 scope**: `start`, `status`, `version`, `workspace list`, `plugin list`, `session list`, `chat` (stub), `doctor` (stub). Remaining commands (`channel`, `skill`, `node`, `user`, `config`, full `doctor` subcommands, and CRUD operations on workspace/plugin/session) are deferred to Phase 6 (Advanced Features). Tracked in `sigil-n6m`.
+
 ### Viper Config Resolution (standard precedence)
 
 1. CLI flags (highest)
-2. Environment variables (`GATEWAY_*`)
-3. Config file (`gateway.yaml`)
+2. Environment variables (`SIGIL_*`)
+3. Config file (`sigil.yaml`)
 4. Defaults (lowest)
 
 ### Doctor Command

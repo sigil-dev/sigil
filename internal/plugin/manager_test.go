@@ -168,6 +168,41 @@ func (m *mockAuditStore) Query(_ context.Context, _ store.AuditFilter) ([]*store
 	return m.entries, nil
 }
 
+func TestManager_DiscoverPopulatesInstanceMetadata(t *testing.T) {
+	dir := t.TempDir()
+
+	pluginDir := filepath.Join(dir, "test-tool")
+	require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+
+	manifest := `
+name: test-tool
+version: 2.1.0
+type: tool
+execution:
+  tier: process
+capabilities:
+  - sessions.read
+  - exec.run.sandboxed
+`
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "plugin.yaml"), []byte(manifest), 0o644))
+
+	audit := &mockAuditStore{}
+	enforcer := security.NewEnforcer(audit)
+	mgr := plugin.NewManager(dir, enforcer)
+
+	_, err := mgr.Discover(context.Background())
+	require.NoError(t, err)
+
+	inst, err := mgr.Get("test-tool")
+	require.NoError(t, err)
+	assert.Equal(t, "test-tool", inst.Name())
+	assert.Equal(t, "tool", inst.Type())
+	assert.Equal(t, "2.1.0", inst.Version())
+	assert.Equal(t, "process", inst.Tier())
+	assert.Equal(t, []string{"sessions.read", "exec.run.sandboxed"}, inst.Capabilities())
+	assert.Equal(t, plugin.StateDiscovered, inst.State())
+}
+
 func TestManager_GetKnownPlugin(t *testing.T) {
 	dir := t.TempDir()
 

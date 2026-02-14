@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-dev/sigil/internal/store"
 	"github.com/sigil-dev/sigil/internal/store/sqlite"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/sigil-dev/sigil/internal/store"
 )
 
 func TestKnowledgeStore_Entities(t *testing.T) {
@@ -139,7 +141,7 @@ func TestKnowledgeStore_Traverse_StartNotFound(t *testing.T) {
 	// Try to traverse from a non-existent entity
 	_, err = ks.Traverse(ctx, "nonexistent", 2, store.TraversalFilter{})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, store.ErrNotFound, "Should return ErrNotFound when start entity doesn't exist")
+	assert.True(t, sigilerr.IsNotFound(err), "Should return not_found error when start entity doesn't exist")
 }
 
 // TestKnowledgeStore_Traverse_MaxDepth tests that MaxDepth in TraversalFilter

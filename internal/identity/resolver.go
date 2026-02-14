@@ -5,7 +5,6 @@ package identity
 
 import (
 	"context"
-	"errors"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
@@ -31,7 +30,7 @@ func NewResolver(users store.UserStore) *Resolver {
 func (r *Resolver) Resolve(ctx context.Context, channelType, platformUserID string) (*store.User, error) {
 	user, err := r.users.GetByExternalID(ctx, channelType, platformUserID)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if sigilerr.IsNotFound(err) {
 			return nil, sigilerr.Wrap(
 				err,
 				CodeIdentityUserNotFound,

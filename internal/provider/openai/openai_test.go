@@ -9,6 +9,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/provider/openai"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,6 +73,8 @@ func TestOpenAIProvider_MissingAPIKey(t *testing.T) {
 	_, err := openai.New(openai.Config{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "api_key")
+	assert.True(t, sigilerr.IsInvalidInput(err), "missing API key should be CodeProviderRequestInvalid")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderRequestInvalid))
 }
 
 func TestOpenAIProvider_Status(t *testing.T) {

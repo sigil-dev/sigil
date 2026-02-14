@@ -11,6 +11,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/store"
 	"github.com/sigil-dev/sigil/internal/store/sqlite"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,7 +64,7 @@ func TestUserStore_Get_NotFound(t *testing.T) {
 	defer func() { _ = gs.Close() }()
 
 	_, err = gs.Users().Get(ctx, "nonexistent")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 }
 
 func TestUserStore_GetByExternalID(t *testing.T) {
@@ -93,7 +94,7 @@ func TestUserStore_GetByExternalID(t *testing.T) {
 
 	// Not found case
 	_, err = gs.Users().GetByExternalID(ctx, "telegram", "unknown")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 }
 
 func TestUserStore_Update(t *testing.T) {
@@ -138,7 +139,7 @@ func TestUserStore_Update_NotFound(t *testing.T) {
 	defer func() { _ = gs.Close() }()
 
 	err = gs.Users().Update(ctx, &store.User{ID: "nonexistent"})
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 }
 
 func TestUserStore_List(t *testing.T) {
@@ -198,11 +199,11 @@ func TestUserStore_Delete(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = gs.Users().Get(ctx, "usr-del")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 
 	// Delete non-existent
 	err = gs.Users().Delete(ctx, "nonexistent")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 }
 
 // TestUserIdentity_AllFieldsRoundTrip verifies that all 4 UserIdentity fields
@@ -301,7 +302,7 @@ func TestPairingStore_GetByChannel_NotFound(t *testing.T) {
 	defer func() { _ = gs.Close() }()
 
 	_, err = gs.Pairings().GetByChannel(ctx, "telegram", "nonexistent")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 }
 
 func TestPairingStore_GetByUser(t *testing.T) {
@@ -358,11 +359,11 @@ func TestPairingStore_Delete(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = gs.Pairings().GetByChannel(ctx, "telegram", "tg-del")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 
 	// Delete non-existent
 	err = gs.Pairings().Delete(ctx, "nonexistent")
-	assert.ErrorIs(t, err, store.ErrNotFound)
+	assert.True(t, sigilerr.IsNotFound(err))
 }
 
 // ---------- AuditStore ----------
