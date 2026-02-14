@@ -1,0 +1,98 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sigil",
+  "version": "0.1.0",
+  "identifier": "dev.sigil.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Sigil",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/sigil/**"]
+      }
+    },
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": false,
+      "title": "Sigil"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "resources": [],
+    "externalBin": [
+      "binaries/sigil"
+    ],
+    "copyright": "Copyright 2026 Sigil Contributors",
+    "category": "Productivity",
+    "shortDescription": "Secure AI Agent Gateway",
+    "longDescription": "Sigil is a secure, lightweight gateway connecting messaging platforms to AI agents via a plugin architecture.",
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "entitlements": null,
+      "exceptionDomain": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": false,
+      "scope": [
+        {
+          "name": "sigil",
+          "sidecar": true,
+          "args": [
+            "start",
+            "--config",
+            {
+              "validator": "\\S+"
+            }
+          ]
+        }
+      ]
+    },
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://releases.sigil.dev/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "dialog": true,
+      "pubkey": ""
+    }
+  }
+}
