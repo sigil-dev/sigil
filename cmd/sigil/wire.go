@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +14,10 @@ import (
 	"github.com/sigil-dev/sigil/internal/plugin"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/internal/provider"
+	anthropicprov "github.com/sigil-dev/sigil/internal/provider/anthropic"
+	googleprov "github.com/sigil-dev/sigil/internal/provider/google"
+	openaiprov "github.com/sigil-dev/sigil/internal/provider/openai"
+	openrouterprov "github.com/sigil-dev/sigil/internal/provider/openrouter"
 	"github.com/sigil-dev/sigil/internal/security"
 	"github.com/sigil-dev/sigil/internal/server"
 	"github.com/sigil-dev/sigil/internal/store"
@@ -32,7 +37,7 @@ type Gateway struct {
 
 // WireGateway creates all subsystems and wires them together.
 // The dataDir is the root directory for all persistent state.
-func WireGateway(cfg *config.Config, dataDir string) (*Gateway, error) {
+func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gateway, error) {
 	storeCfg := &store.StorageConfig{Backend: cfg.Storage.Backend}
 
 	// Ensure the data directory exists.
@@ -49,11 +54,20 @@ func WireGateway(cfg *config.Config, dataDir string) (*Gateway, error) {
 	// 2. Security enforcer.
 	enforcer := security.NewEnforcer(gs.AuditLog())
 
-	// 3. Plugin manager.
+	// 3. Plugin manager — discover plugins in the plugins directory.
 	pluginMgr := plugin.NewManager(filepath.Join(dataDir, "plugins"), enforcer)
 
-	// 4. Provider registry.
+	manifests, err := pluginMgr.Discover(ctx)
+	if err != nil {
+		slog.Warn("plugin discovery error", "error", err)
+	} else if len(manifests) > 0 {
+		slog.Info("discovered plugins", "count", len(manifests))
+	}
+
+	// 4. Provider registry — register built-in providers from config.
 	provReg := provider.NewRegistry()
+
+	registerBuiltinProviders(cfg, provReg)
 
 	// 5. Workspace manager.
 	wsMgr := workspace.NewManager(filepath.Join(dataDir, "workspaces"), storeCfg)
@@ -135,6 +149,50 @@ func convertBindings(bindings []config.BindingConfig) []workspace.Binding {
 		}
 	}
 	return out
+}
+
+// providerFactory builds a provider.Provider from a ProviderConfig.
+type providerFactory func(config.ProviderConfig) (provider.Provider, error)
+
+// builtinProviderFactories maps provider names to their constructors.
+// Declared as a variable so tests can inject failing factories.
+var builtinProviderFactories = map[string]providerFactory{
+	"anthropic": func(pc config.ProviderConfig) (provider.Provider, error) {
+		return anthropicprov.New(anthropicprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
+	},
+	"google": func(pc config.ProviderConfig) (provider.Provider, error) {
+		return googleprov.New(googleprov.Config{APIKey: pc.APIKey})
+	},
+	"openai": func(pc config.ProviderConfig) (provider.Provider, error) {
+		return openaiprov.New(openaiprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
+	},
+	"openrouter": func(pc config.ProviderConfig) (provider.Provider, error) {
+		return openrouterprov.New(openrouterprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
+	},
+}
+
+// registerBuiltinProviders iterates configured providers and registers
+// matching built-in implementations. Unknown names or empty API keys are
+// logged and skipped — neither is fatal at startup.
+func registerBuiltinProviders(cfg *config.Config, reg *provider.Registry) {
+	for name, pc := range cfg.Providers {
+		if pc.APIKey == "" {
+			slog.Warn("skipping provider with empty API key", "provider", name)
+			continue
+		}
+		factory, ok := builtinProviderFactories[name]
+		if !ok {
+			slog.Warn("unknown provider in config, skipping", "provider", name)
+			continue
+		}
+		p, err := factory(pc)
+		if err != nil {
+			slog.Warn("failed to create provider", "provider", name, "error", err)
+			continue
+		}
+		reg.Register(name, p)
+		slog.Info("registered provider", "provider", name)
+	}
 }
 
 // --- Service adapters ---

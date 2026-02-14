@@ -727,3 +727,35 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Migration tracked in:** sigil-c99
 
 **Ref:** PR #13 review round 7
+
+## D057: Startup Graceful Degradation — Non-Fatal Plugin Discovery and Provider Registration
+
+**Question:** Should the gateway fail to start if plugin discovery errors occur or if a configured provider cannot be created?
+
+**Options considered:**
+
+- Fail-fast on any error — rejected: prevents the gateway from starting when a single provider has a bad API key or the plugins directory is missing. Too brittle for operator experience.
+- Silent ignore — rejected: operators would have no visibility into misconfiguration.
+- Warn and continue (chosen) — log warnings for each failure, continue startup with whatever succeeded.
+
+**Decision:** Plugin discovery errors and provider registration failures (empty API keys, unknown provider names, constructor errors) are logged as warnings and skipped. Neither is fatal. The gateway starts with whatever plugins and providers succeed.
+
+**Rationale:** The gateway should be resilient to partial misconfiguration. An operator who configures three providers but has one typo should still get the other two working. The structured slog warnings provide clear diagnostics without blocking the entire startup. This is consistent with D033 (config validation fails fast) — config *structure* is validated strictly at load time, but *runtime initialization* of optional subsystems degrades gracefully.
+
+**Ref:** PR #14, `cmd/sigil/wire.go`
+
+## D058: Provider Factory Map for Constructor Testability
+
+**Question:** How should provider construction be structured to allow testing the creation failure path?
+
+**Options considered:**
+
+- Direct switch/case (original) — clean but the error path is unreachable in tests because all current constructors only fail on empty API keys, which are pre-filtered.
+- Accept constructor functions as parameters — more functional but changes the call signature at every call site.
+- Package-level factory map (chosen) — `builtinProviderFactories` maps provider names to constructors. Tests can temporarily replace entries to inject failures.
+
+**Decision:** Extract the switch/case into a `var builtinProviderFactories map[string]providerFactory`. The `registerBuiltinProviders` function looks up constructors from this map. Tests override entries to inject failing factories via `t.Cleanup` restoration.
+
+**Rationale:** The provider creation error path (`wire.go:180-183`) is a defensive guard — all current constructors succeed with non-empty API keys. But future providers may have richer validation. The factory map makes this path testable without changing the public API or over-engineering the function signature. The pattern is local to `cmd/sigil` and doesn't leak into the provider packages.
+
+**Ref:** PR #14 review, `cmd/sigil/wire.go`, `cmd/sigil/wire_test.go`

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/config"
+	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +33,7 @@ func TestWireGateway(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 
-	gw, err := WireGateway(cfg, dir)
+	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
@@ -47,7 +49,7 @@ func TestGateway_GracefulShutdown(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 
-	gw, err := WireGateway(cfg, dir)
+	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
@@ -63,7 +65,7 @@ func TestWireGateway_ChatEndpointNotDisabled(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 
-	gw, err := WireGateway(cfg, dir)
+	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
@@ -86,7 +88,7 @@ func TestWireGateway_ChatStreamEndpointNotDisabled(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 
-	gw, err := WireGateway(cfg, dir)
+	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
@@ -108,7 +110,7 @@ func TestWorkspaceServiceAdapter_ListReturnsEmptyArray(t *testing.T) {
 	cfg := testGatewayConfig()
 	// No workspaces configured.
 
-	gw, err := WireGateway(cfg, dir)
+	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
@@ -131,7 +133,7 @@ func TestSessionServiceAdapter_ListReturnsEmptyArray(t *testing.T) {
 		"test-ws": {Description: "Test workspace"},
 	}
 
-	gw, err := WireGateway(cfg, dir)
+	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
@@ -154,7 +156,7 @@ func TestPluginServiceAdapter_FieldCompleteness(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 
-	gw, err := WireGateway(cfg, dir)
+	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
@@ -177,9 +179,82 @@ func TestWireGateway_WithWorkspaces(t *testing.T) {
 		"test-ws": {Description: "Test workspace", Members: []string{"user-1"}},
 	}
 
-	gw, err := WireGateway(cfg, dir)
+	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
 	assert.NotNil(t, gw.WorkspaceManager)
+}
+
+func TestWireGateway_ProviderRegistration(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {APIKey: "test-key-anthropic"},
+		"openai":    {APIKey: "test-key-openai"},
+		"google":    {APIKey: "test-key-google"},
+	}
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	// All three providers should be registered.
+	for _, name := range []string{"anthropic", "openai", "google"} {
+		p, err := gw.ProviderRegistry.Get(name)
+		assert.NoError(t, err, "provider %q should be registered", name)
+		assert.NotNil(t, p, "provider %q should not be nil", name)
+	}
+}
+
+func TestWireGateway_ProviderSkipsEmptyAPIKey(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {APIKey: ""}, // empty — should be skipped
+	}
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	_, err = gw.ProviderRegistry.Get("anthropic")
+	assert.Error(t, err, "provider with empty API key should not be registered")
+}
+
+func TestWireGateway_ProviderCreationFailureSkipped(t *testing.T) {
+	// Inject a factory that always fails to exercise the err != nil path.
+	orig := builtinProviderFactories["anthropic"]
+	builtinProviderFactories["anthropic"] = func(_ config.ProviderConfig) (provider.Provider, error) {
+		return nil, fmt.Errorf("injected failure")
+	}
+	t.Cleanup(func() { builtinProviderFactories["anthropic"] = orig })
+
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {APIKey: "test-key"},
+	}
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err, "provider creation failure should not prevent startup")
+	defer func() { _ = gw.Close() }()
+
+	_, err = gw.ProviderRegistry.Get("anthropic")
+	assert.Error(t, err, "failed provider should not be registered")
+}
+
+func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"unknown-provider": {APIKey: "some-key"},
+	}
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err, "unknown provider should not cause startup failure")
+	defer func() { _ = gw.Close() }()
+
+	_, err = gw.ProviderRegistry.Get("unknown-provider")
+	assert.Error(t, err, "unknown provider should not be registered")
 }
