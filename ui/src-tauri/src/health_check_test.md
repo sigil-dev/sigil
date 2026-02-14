@@ -119,7 +119,7 @@ Both are necessary for comprehensive error coverage.
 
 - **URL**: `http://localhost:18789/health` (matches `client.ts` default port)
 - **Timeout**: 3 seconds for HTTP request
-- **Delay**: 1 second after spawn before checking
+- **Delay**: Retries with exponential backoff (1s, 2s, 4s delays between attempts)
 - **Library**: `ureq` for simple synchronous HTTP (no async runtime needed)
 
 ### Event Flow

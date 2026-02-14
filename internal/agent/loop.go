@@ -383,9 +383,10 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		}
 
 		// Peek at the first event to detect immediate upstream failures
-		// (auth errors, rate limits, provider down). Providers record
-		// their own in-stream failures via RecordFailure() internally,
-		// so the next Route call will skip this provider via the failover chain.
+		// (auth errors, rate limits, provider down). Pre-stream failures are
+		// recorded by this caller; providers record success only on stream
+		// completion via RecordSuccess(), so the next Route call will skip
+		// this provider via the failover chain if needed.
 		firstEvent, ok := <-eventCh
 		if !ok {
 			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: stream closed without events", prov.Name())

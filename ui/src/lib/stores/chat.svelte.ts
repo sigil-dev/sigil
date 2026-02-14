@@ -336,7 +336,8 @@ export class ChatStore {
         });
         this.error = `Failed to parse ${event.eventType} event`;
         // Abort stream on parse error to prevent further invalid events
-        throw new Error(`SSE parse error for ${event.eventType} event`);
+        this.abortController?.abort();
+        return;
     }
   }
 

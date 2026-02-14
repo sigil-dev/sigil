@@ -12,6 +12,7 @@ use log::{error, info, warn};
 use std::sync::Mutex;
 
 /// Default gateway port, matching the TypeScript client's API_BASE default.
+/// MUST match: ui/src/lib/api/client.ts API_BASE port
 const DEFAULT_GATEWAY_PORT: u16 = 18789;
 
 /// Errors that can occur during sidecar lifecycle management
@@ -90,7 +91,10 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 
             match health_check_sidecar() {
                 Ok(true) => {
-                    info!("Sigil gateway health check passed (attempt {})", attempt + 1);
+                    info!(
+                        "Sigil gateway health check passed (attempt {})",
+                        attempt + 1
+                    );
                     if let Err(e) = app_handle.emit("sidecar-ready", ()) {
                         error!("Failed to emit sidecar-ready: {}", e);
                     }
@@ -190,13 +194,11 @@ fn restart_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 }
 
 /// Create the system tray menu
-fn create_tray_menu(app: &AppHandle) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
+fn create_tray_menu(
+    app: &AppHandle,
+) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
     let menu = MenuBuilder::new(app)
-        .item(
-            &MenuItemBuilder::new("Open Sigil")
-                .id("open")
-                .build(app)?,
-        )
+        .item(&MenuItemBuilder::new("Open Sigil").id("open").build(app)?)
         .separator()
         .item(
             &MenuItemBuilder::new("Restart Gateway")
@@ -204,11 +206,7 @@ fn create_tray_menu(app: &AppHandle) -> Result<tauri::menu::Menu<tauri::Wry>, Bo
                 .build(app)?,
         )
         .separator()
-        .item(
-            &MenuItemBuilder::new("Quit")
-                .id("quit")
-                .build(app)?,
-        )
+        .item(&MenuItemBuilder::new("Quit").id("quit").build(app)?)
         .build()?;
 
     Ok(menu)
@@ -232,34 +230,32 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
                 }
             }
         }
-        TrayIconEvent::MenuItemClick { id, .. } => {
-            match id.as_ref() {
-                "open" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        if let Err(e) = window.show() {
-                            error!("Failed to show window: {}", e);
-                        }
-                        if let Err(e) = window.set_focus() {
-                            error!("Failed to set focus: {}", e);
-                        }
+        TrayIconEvent::MenuItemClick { id, .. } => match id.as_ref() {
+            "open" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(e) = window.show() {
+                        error!("Failed to show window: {}", e);
+                    }
+                    if let Err(e) = window.set_focus() {
+                        error!("Failed to set focus: {}", e);
                     }
                 }
-                "restart" => {
-                    if let Err(e) = restart_sidecar(app) {
-                        error!("Failed to restart gateway: {}", e);
-                        let _ = app.emit("sidecar-error", format!("Restart failed: {}", e));
-                    }
-                }
-                "quit" => {
-                    if let Err(e) = stop_sidecar(app) {
-                        error!("Failed to stop gateway: {}", e);
-                        let _ = app.emit("sidecar-error", format!("Stop failed: {}", e));
-                    }
-                    app.exit(0);
-                }
-                _ => {}
             }
-        }
+            "restart" => {
+                if let Err(e) = restart_sidecar(app) {
+                    error!("Failed to restart gateway: {}", e);
+                    let _ = app.emit("sidecar-error", format!("Restart failed: {}", e));
+                }
+            }
+            "quit" => {
+                if let Err(e) = stop_sidecar(app) {
+                    error!("Failed to stop gateway: {}", e);
+                    let _ = app.emit("sidecar-error", format!("Stop failed: {}", e));
+                }
+                app.exit(0);
+            }
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -273,34 +269,53 @@ pub fn run() {
         .setup(|app| {
             // Create tray menu and icon with graceful degradation
             match create_tray_menu(&app.handle()) {
-                Ok(menu) => {
-                    match Image::from_bytes(include_bytes!("../icons/icon.png")) {
-                        Ok(icon) => {
-                            match TrayIconBuilder::with_id("main")
-                                .icon(icon)
-                                .menu(&menu)
-                                .menu_on_left_click(false)
-                                .title("Sigil")
-                                .on_tray_icon_event(|tray, event| {
-                                    handle_tray_event(tray.app_handle(), event);
-                                })
-                                .build(app)
-                            {
-                                Ok(_tray) => {
-                                    info!("System tray initialized");
-                                }
-                                Err(e) => {
-                                    warn!("System tray not available, continuing without tray: {}", e);
+                Ok(menu) => match Image::from_bytes(include_bytes!("../icons/icon.png")) {
+                    Ok(icon) => {
+                        match TrayIconBuilder::with_id("main")
+                            .icon(icon)
+                            .menu(&menu)
+                            .menu_on_left_click(false)
+                            .title("Sigil")
+                            .on_tray_icon_event(|tray, event| {
+                                handle_tray_event(tray.app_handle(), event);
+                            })
+                            .build(app)
+                        {
+                            Ok(_tray) => {
+                                info!("System tray initialized");
+                            }
+                            Err(e) => {
+                                warn!("System tray not available, continuing without tray: {}", e);
+                                if let Err(emit_err) = app.emit(
+                                    "tray-unavailable",
+                                    format!("System tray initialization failed: {}", e),
+                                ) {
+                                    error!(
+                                        "Failed to emit tray-unavailable notification: {}",
+                                        emit_err
+                                    );
                                 }
                             }
                         }
-                        Err(e) => {
-                            warn!("Failed to load tray icon, continuing without tray: {}", e);
+                    }
+                    Err(e) => {
+                        warn!("Failed to load tray icon, continuing without tray: {}", e);
+                        if let Err(emit_err) = app.emit(
+                            "tray-unavailable",
+                            format!("Failed to load tray icon: {}", e),
+                        ) {
+                            error!("Failed to emit tray-unavailable notification: {}", emit_err);
                         }
                     }
-                }
+                },
                 Err(e) => {
                     warn!("Failed to create tray menu, continuing without tray: {}", e);
+                    if let Err(emit_err) = app.emit(
+                        "tray-unavailable",
+                        format!("Failed to create tray menu: {}", e),
+                    ) {
+                        error!("Failed to emit tray-unavailable notification: {}", emit_err);
+                    }
                 }
             }
 
@@ -309,7 +324,9 @@ pub fn run() {
             std::thread::spawn(move || {
                 if let Err(e) = start_sidecar(&app_handle) {
                     error!("Failed to start Sigil gateway: {}", e);
-                    if let Err(emit_err) = app_handle.emit("sidecar-error", format!("Failed to start gateway: {}", e)) {
+                    if let Err(emit_err) =
+                        app_handle.emit("sidecar-error", format!("Failed to start gateway: {}", e))
+                    {
                         error!("Failed to emit sidecar-error: {}", emit_err);
                     }
                 }

@@ -253,7 +253,15 @@ func (p *Provider) streamChat(
 					}
 				}
 				if part.FunctionCall != nil {
-					args, _ := json.Marshal(part.FunctionCall.Args)
+					args, err := json.Marshal(part.FunctionCall.Args)
+					if err != nil {
+						p.health.RecordFailure()
+						ch <- provider.ChatEvent{
+							Type:  provider.EventTypeError,
+							Error: sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "google: marshaling tool call arguments for %q: %w", part.FunctionCall.Name, err).Error(),
+						}
+						return
+					}
 					ch <- provider.ChatEvent{
 						Type: provider.EventTypeToolCall,
 						ToolCall: &provider.ToolCall{
