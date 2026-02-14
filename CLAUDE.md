@@ -10,7 +10,7 @@ Instructions for Claude Code working on the Sigil codebase.
 
 1. **File issues for remaining work** - Create beads issues for anything needing follow-up
 2. **Run quality gates** (if code changed) - `task test`, `task lint`
-3. **Update issue status** - `bd close <id>` for completed work
+3. **Update issue status** - `bd close <id>` for completed work, update in-progress items
 4. **PUSH TO REMOTE** - This is MANDATORY:
 
    ```bash
@@ -22,6 +22,7 @@ Instructions for Claude Code working on the Sigil codebase.
 
 5. **Clean up** - Clear stashes, prune remote branches
 6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
 
@@ -409,35 +410,6 @@ Three execution tiers:
 | Build              | `docs/design/10-build-and-distribution.md` | Toolchain, CI/CD             |
 | Storage Interfaces | `docs/design/11-storage-interfaces.md`     | Store abstractions, backends |
 | Decisions          | `docs/decisions/decision-log.md`           | All architectural decisions  |
-
-## Landing the Plane (Session Completion)
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-
-   ```bash
-   git pull --rebase
-   bd sync
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
 
 <!-- BEGIN BEADS INTEGRATION -->
 
