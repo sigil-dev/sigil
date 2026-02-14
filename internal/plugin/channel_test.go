@@ -34,10 +34,14 @@ func (m *mockChannelPlugin) Send(_ context.Context, msg plugin.OutboundMessage) 
 
 type mockPairingStore struct {
 	pairings []*store.Pairing
+	created  []*store.Pairing // track Create() calls
 	err      error
 }
 
-func (m *mockPairingStore) Create(context.Context, *store.Pairing) error { return nil }
+func (m *mockPairingStore) Create(_ context.Context, p *store.Pairing) error {
+	m.created = append(m.created, p)
+	return nil
+}
 func (m *mockPairingStore) GetByChannel(context.Context, string, string) (*store.Pairing, error) {
 	return nil, nil
 }
@@ -337,5 +341,135 @@ func TestAuthorizeInbound_WorkspaceScopedPairingDenied(t *testing.T) {
 	// Different workspace: denied
 	err = router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "alice", "ws-2")
 	require.Error(t, err, "ws-1 pairing should not authorize ws-2 access")
+	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+}
+
+// --- pair_on_request and pair_with_code tests ---
+
+func TestPairingModes_PairOnRequest(t *testing.T) {
+	// CheckPairing should return true for pair_on_request (anyone can initiate a request)
+	got := plugin.CheckPairing(plugin.PairingOnRequest, "anyone", nil)
+	assert.True(t, got)
+}
+
+func TestPairingModes_PairWithCode(t *testing.T) {
+	// CheckPairing should return false for pair_with_code (code-based, not auto-pair)
+	got := plugin.CheckPairing(plugin.PairingWithCode, "anyone", nil)
+	assert.False(t, got)
+}
+
+func TestAuthorizeInbound_PairOnRequest_NoPairing(t *testing.T) {
+	// When no pairing exists, should create a pending pairing and return pending error
+	ps := &mockPairingStore{pairings: []*store.Pairing{}}
+	router := plugin.NewChannelRouter(ps)
+	router.RegisterWithConfig("telegram", plugin.ChannelRegistration{
+		Plugin: &mockChannelPlugin{name: "telegram"},
+		Mode:   plugin.PairingOnRequest,
+	})
+
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "new-user", "ws-1")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingPending))
+	// Verify a pending pairing was created
+	require.Len(t, ps.created, 1)
+	assert.Equal(t, "new-user", ps.created[0].UserID)
+	assert.Equal(t, "telegram", ps.created[0].ChannelType)
+	assert.Equal(t, "chat-1", ps.created[0].ChannelID)
+	assert.Equal(t, "ws-1", ps.created[0].WorkspaceID)
+	assert.Equal(t, store.PairingStatusPending, ps.created[0].Status)
+}
+
+func TestAuthorizeInbound_PairOnRequest_PendingPairing(t *testing.T) {
+	// When a pending pairing exists, should return pending error without creating another
+	ps := &mockPairingStore{
+		pairings: []*store.Pairing{
+			{
+				ID: "p-1", UserID: "waiting-user",
+				ChannelType: "telegram", ChannelID: "chat-1",
+				WorkspaceID: "ws-1", Status: store.PairingStatusPending,
+			},
+		},
+	}
+	router := plugin.NewChannelRouter(ps)
+	router.RegisterWithConfig("telegram", plugin.ChannelRegistration{
+		Plugin: &mockChannelPlugin{name: "telegram"},
+		Mode:   plugin.PairingOnRequest,
+	})
+
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "waiting-user", "ws-1")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingPending))
+	// Should NOT create a duplicate pending pairing
+	assert.Empty(t, ps.created)
+}
+
+func TestAuthorizeInbound_PairOnRequest_ActivePairing(t *testing.T) {
+	// When an active pairing exists, should allow through
+	ps := &mockPairingStore{
+		pairings: []*store.Pairing{
+			{
+				ID: "p-1", UserID: "approved-user",
+				ChannelType: "telegram", ChannelID: "chat-1",
+				WorkspaceID: "ws-1", Status: store.PairingStatusActive,
+			},
+		},
+	}
+	router := plugin.NewChannelRouter(ps)
+	router.RegisterWithConfig("telegram", plugin.ChannelRegistration{
+		Plugin: &mockChannelPlugin{name: "telegram"},
+		Mode:   plugin.PairingOnRequest,
+	})
+
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "approved-user", "ws-1")
+	assert.NoError(t, err)
+}
+
+func TestAuthorizeInbound_PairWithCode_NoActivePairing(t *testing.T) {
+	// Without an active pairing, should deny with code-required message
+	ps := &mockPairingStore{pairings: []*store.Pairing{}}
+	router := plugin.NewChannelRouter(ps)
+	router.RegisterWithConfig("telegram", plugin.ChannelRegistration{
+		Plugin:      &mockChannelPlugin{name: "telegram"},
+		Mode:        plugin.PairingWithCode,
+		PairingCode: "ABC123",
+	})
+
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "new-user", "ws-1")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
+}
+
+func TestAuthorizeInbound_PairWithCode_ActivePairing(t *testing.T) {
+	// With an active pairing, should allow through
+	ps := &mockPairingStore{
+		pairings: []*store.Pairing{
+			{
+				ID: "p-1", UserID: "paired-user",
+				ChannelType: "telegram", ChannelID: "chat-1",
+				WorkspaceID: "ws-1", Status: store.PairingStatusActive,
+			},
+		},
+	}
+	router := plugin.NewChannelRouter(ps)
+	router.RegisterWithConfig("telegram", plugin.ChannelRegistration{
+		Plugin:      &mockChannelPlugin{name: "telegram"},
+		Mode:        plugin.PairingWithCode,
+		PairingCode: "ABC123",
+	})
+
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "paired-user", "ws-1")
+	assert.NoError(t, err)
+}
+
+func TestAuthorizeInbound_PairOnRequest_NoPairingStore(t *testing.T) {
+	// pair_on_request with nil pairing store should return pairing required error
+	router := plugin.NewChannelRouter(nil)
+	router.RegisterWithConfig("telegram", plugin.ChannelRegistration{
+		Plugin: &mockChannelPlugin{name: "telegram"},
+		Mode:   plugin.PairingOnRequest,
+	})
+
+	err := router.AuthorizeInbound(context.Background(), "telegram", "chat-1", "user", "ws-1")
+	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, plugin.CodeChannelPairingRequired))
 }
