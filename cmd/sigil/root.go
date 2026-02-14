@@ -15,9 +15,9 @@ import (
 // NewRootCmd creates the root sigil command with all subcommands registered.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "sigil",
-		Short: "Sigil — secure AI agent gateway",
-		Long:  "Sigil is a secure, lightweight gateway connecting messaging platforms to AI agents.",
+		Use:           "sigil",
+		Short:         "Sigil — secure AI agent gateway",
+		Long:          "Sigil is a secure, lightweight gateway connecting messaging platforms to AI agents.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {

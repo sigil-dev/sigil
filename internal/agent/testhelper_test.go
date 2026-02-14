@@ -376,8 +376,8 @@ func newMockProviderRouterCapturing(capturer *mockProviderCapturing) *mockProvid
 // mockProviderRouterBudgetAware routes normally but enforces budget via RouteWithBudget.
 // It also captures the budget passed to RouteWithBudget for assertions.
 type mockProviderRouterBudgetAware struct {
-	provider      provider.Provider
-	mu            sync.Mutex
+	provider       provider.Provider
+	mu             sync.Mutex
 	capturedBudget *provider.Budget
 }
 
@@ -395,9 +395,11 @@ func (r *mockProviderRouterBudgetAware) RouteWithBudget(_ context.Context, _, _ 
 	return r.provider, "mock-model", nil
 }
 
-func (r *mockProviderRouterBudgetAware) RegisterProvider(_ string, _ provider.Provider) error { return nil }
-func (r *mockProviderRouterBudgetAware) MaxAttempts() int                                     { return 1 }
-func (r *mockProviderRouterBudgetAware) Close() error                                         { return nil }
+func (r *mockProviderRouterBudgetAware) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+func (r *mockProviderRouterBudgetAware) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterBudgetAware) Close() error     { return nil }
 
 func (r *mockProviderRouterBudgetAware) getCapturedBudget() *provider.Budget {
 	r.mu.Lock()
@@ -416,9 +418,11 @@ func (r *mockProviderRouterInvalidModelRef) RouteWithBudget(_ context.Context, _
 	return nil, "", sigilerr.New(sigilerr.CodeProviderInvalidModelRef, "model name must use provider/model format")
 }
 
-func (r *mockProviderRouterInvalidModelRef) RegisterProvider(_ string, _ provider.Provider) error { return nil }
-func (r *mockProviderRouterInvalidModelRef) MaxAttempts() int                                     { return 1 }
-func (r *mockProviderRouterInvalidModelRef) Close() error                                         { return nil }
+func (r *mockProviderRouterInvalidModelRef) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+func (r *mockProviderRouterInvalidModelRef) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterInvalidModelRef) Close() error     { return nil }
 
 // ---------------------------------------------------------------------------
 // Audit store mock

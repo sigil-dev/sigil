@@ -1,14 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Sigil Contributors
-
 version: 2
-
 project_name: sigil
-
 before:
   hooks:
     - task generate
-
 builds:
   # Main binary (CGO_ENABLED=1 for sqlite3/sqlite-vec)
   - id: sigil
@@ -27,15 +23,12 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
       - -X main.date={{.Date}}
-
 archives:
   - id: sigil
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-
 checksum:
   name_template: checksums.txt
   algorithm: sha256
-
 sboms:
   - artifacts: archive
     cmd: syft
@@ -54,7 +47,6 @@ sboms:
       - "spdx-json=${document}"
     documents:
       - "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.sbom.spdx.json"
-
 signs:
   - cmd: cosign
     env:
@@ -67,10 +59,8 @@ signs:
       - "--output-certificate=${certificate}"
       - "--output-signature=${signature}"
       - "${artifact}"
-
 changelog:
   use: github-native
-
 brews:
   - name: sigil
     repository:
@@ -79,7 +69,6 @@ brews:
     homepage: "https://github.com/sigil-dev/sigil"
     description: "Secure, lightweight Go gateway connecting messaging platforms to AI agents"
     license: "Apache-2.0"
-
 dockers_v2:
   - images:
       - "ghcr.io/sigil-dev/sigil"

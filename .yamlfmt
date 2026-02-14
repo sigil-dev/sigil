@@ -3,6 +3,7 @@ exclude:
   - .serena
   - .git
   - node_modules
+  - ui/node_modules
   - vendor
   - .direnv
 formatter:

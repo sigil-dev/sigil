@@ -10,7 +10,7 @@ Complete command-line interface documentation.
 
 Flags available to all commands.
 
-```
+```bash
 --config string      Config file path (default: ~/.sigil/config.yaml)
 --log-level string   Log level: debug, info, warn, error (default: info)
 --workspace string   Workspace to operate on (default: "default")
@@ -25,6 +25,7 @@ sigil start [flags]
 ```
 
 **Flags:**
+
 - `--host string` - Host to bind to (default: "localhost")
 - `--port int` - Port to listen on (default: 8080)
 - `--dev` - Enable development mode
@@ -54,6 +55,7 @@ sigil workspace [command]
 ```
 
 **Subcommands:**
+
 - `create <name>` - Create a new workspace
 - `list` - List all workspaces
 - `delete <name>` - Delete a workspace
@@ -68,6 +70,7 @@ sigil plugin [command]
 ```
 
 **Subcommands:**
+
 - `list` - List installed plugins
 - `install <path>` - Install a plugin
 - `remove <name>` - Remove a plugin
@@ -82,6 +85,7 @@ sigil channel [command]
 ```
 
 **Subcommands:**
+
 - `list` - List configured channels
 - `add <type> <name>` - Add a new channel
 - `remove <name>` - Remove a channel
@@ -96,6 +100,7 @@ sigil doctor [flags]
 ```
 
 **Checks:**
+
 - Configuration validity
 - Plugin compatibility
 - Database connectivity
@@ -110,6 +115,7 @@ Complete configuration file specification.
 Configuration files use YAML format.
 
 **Default locations:**
+
 - Linux: `~/.config/sigil/config.yaml`
 - macOS: `~/Library/Application Support/sigil/config.yaml`
 - Windows: `%APPDATA%\sigil\config.yaml`
@@ -220,7 +226,8 @@ REST API and SSE endpoints.
 API authentication and authorization.
 
 **Bearer Token:**
-```
+
+```text
 Authorization: Bearer <token>
 ```
 
@@ -231,6 +238,7 @@ Authorization: Bearer <token>
 Server health and status.
 
 **Response:**
+
 ```json
 {
   "status": "running",
@@ -244,10 +252,11 @@ Server health and status.
 List workspaces.
 
 **Response:**
+
 ```json
 {
   "workspaces": [
-    {"id": "default", "name": "Default Workspace"}
+    { "id": "default", "name": "Default Workspace" }
   ]
 }
 ```
@@ -257,6 +266,7 @@ List workspaces.
 Create a workspace.
 
 **Request:**
+
 ```json
 {
   "name": "My Workspace",
@@ -289,6 +299,7 @@ Server-Sent Events for real-time updates.
 Stream agent responses in real-time.
 
 **Event types:**
+
 - `message.start` - Agent response started
 - `message.chunk` - Response content chunk
 - `message.complete` - Response complete

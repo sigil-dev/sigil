@@ -187,14 +187,14 @@ return sigilerr.New(sigilerr.CodeProviderUpstreamFailure, "provider timeout",
     sigilerr.ProviderField("anthropic"))
 ```
 
-| Requirement | Description |
-|-------------|-------------|
-| **MUST** use `sigilerr.Errorf/New/Wrap/Wrapf` | Not `fmt.Errorf` or `errors.New` in production code |
-| **MUST** use `sigilerr.HasCode` | Not `errors.Is` with sentinel vars for error classification |
-| **MUST** assign error codes | Every error site needs a code from `pkg/errors/errors.go` |
-| **SHOULD** add new codes | When no existing code fits the error site |
-| **MAY** use `fmt.Errorf` in tests | For mock errors not participating in error classification |
-| **MUST NOT** use sentinel vars | Use `IsXxx()` helpers with `sigilerr.HasCode` instead |
+| Requirement                                   | Description                                                 |
+| --------------------------------------------- | ----------------------------------------------------------- |
+| **MUST** use `sigilerr.Errorf/New/Wrap/Wrapf` | Not `fmt.Errorf` or `errors.New` in production code         |
+| **MUST** use `sigilerr.HasCode`               | Not `errors.Is` with sentinel vars for error classification |
+| **MUST** assign error codes                   | Every error site needs a code from `pkg/errors/errors.go`   |
+| **SHOULD** add new codes                      | When no existing code fits the error site                   |
+| **MAY** use `fmt.Errorf` in tests             | For mock errors not participating in error classification   |
+| **MUST NOT** use sentinel vars                | Use `IsXxx()` helpers with `sigilerr.HasCode` instead       |
 
 ### Logging
 

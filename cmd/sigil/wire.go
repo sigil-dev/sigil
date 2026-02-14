@@ -12,7 +12,6 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/plugin"
-	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/internal/provider"
 	anthropicprov "github.com/sigil-dev/sigil/internal/provider/anthropic"
 	googleprov "github.com/sigil-dev/sigil/internal/provider/google"
@@ -23,6 +22,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/store"
 	_ "github.com/sigil-dev/sigil/internal/store/sqlite" // register sqlite backend
 	"github.com/sigil-dev/sigil/internal/workspace"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Gateway holds all wired subsystems and manages their lifecycle.

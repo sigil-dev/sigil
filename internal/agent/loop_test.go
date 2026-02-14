@@ -1188,6 +1188,7 @@ func (p *mockProviderChatErrorWithHealth) Available(_ context.Context) bool { re
 func (p *mockProviderChatErrorWithHealth) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-health-error"}, nil
 }
+
 func (p *mockProviderChatErrorWithHealth) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
@@ -1195,6 +1196,7 @@ func (p *mockProviderChatErrorWithHealth) Close() error { return nil }
 func (p *mockProviderChatErrorWithHealth) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	return nil, assert.AnError
 }
+
 func (p *mockProviderChatErrorWithHealth) RecordFailure() {
 	p.mu.Lock()
 	p.failureCount++

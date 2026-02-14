@@ -42,9 +42,11 @@ func (m *mockPairingStore) Create(_ context.Context, p *store.Pairing) error {
 	m.created = append(m.created, p)
 	return nil
 }
+
 func (m *mockPairingStore) GetByChannel(context.Context, string, string) (*store.Pairing, error) {
 	return nil, nil
 }
+
 func (m *mockPairingStore) GetByUser(_ context.Context, userID string) ([]*store.Pairing, error) {
 	if m.err != nil {
 		return nil, m.err

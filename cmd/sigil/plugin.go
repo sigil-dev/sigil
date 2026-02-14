@@ -70,4 +70,3 @@ func runPluginList(cmd *cobra.Command, _ []string) error {
 	}
 	return tw.Flush()
 }
-

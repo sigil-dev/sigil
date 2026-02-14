@@ -13,11 +13,11 @@ import (
 // After a failure, the provider is marked unhealthy for a cooldown
 // period, after which it becomes available again to allow recovery.
 type HealthTracker struct {
-	mu          sync.RWMutex
-	healthy     bool
-	failedAt    time.Time
-	cooldown    time.Duration
-	nowFunc     func() time.Time // for testing
+	mu       sync.RWMutex
+	healthy  bool
+	failedAt time.Time
+	cooldown time.Duration
+	nowFunc  func() time.Time // for testing
 }
 
 // DefaultHealthCooldown is the duration after which an unhealthy provider

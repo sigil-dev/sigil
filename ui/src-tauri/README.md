@@ -13,7 +13,7 @@ This directory contains the Tauri v2 desktop application wrapper for Sigil.
 
 The Tauri app wraps the SvelteKit UI and manages a sidecar process running the Sigil gateway binary:
 
-```
+```text
 ┌─────────────────────────────────────┐
 │  Tauri Desktop App (Rust)           │
 │  ┌──────────────────────────────┐   │
@@ -54,6 +54,7 @@ npm run tauri dev
 ```
 
 This will:
+
 1. Start the SvelteKit dev server (Vite)
 2. Build and run the Tauri app
 3. Auto-reload on code changes
@@ -70,6 +71,7 @@ Outputs to `ui/src-tauri/target/release/bundle/`
 ## Configuration
 
 See `tauri.conf.json` for:
+
 - Window settings
 - Sidecar binary configuration
 - Bundle settings (icons, identifier, etc.)
@@ -78,10 +80,12 @@ See `tauri.conf.json` for:
 ## Sidecar Binary
 
 The Tauri app expects the Sigil gateway binary at:
+
 - **Development**: `binaries/sigil` (relative to project root)
 - **Production**: Bundled in `externalBin` during build
 
 The sidecar is started with:
+
 ```bash
 sigil start --config $APPDATA/sigil/sigil.yaml
 ```
@@ -91,6 +95,7 @@ sigil start --config $APPDATA/sigil/sigil.yaml
 Replace `icons/icon.png` with a proper application icon before release. Current icon is a 1x1 placeholder.
 
 Recommended icon sizes for all platforms:
+
 - 32x32, 128x128, 256x256, 512x512 (PNG)
 - For macOS: .icns file
 - For Windows: .ico file
@@ -114,6 +119,7 @@ Use `tauri icon` command to generate all required sizes from a source PNG.
 ## Auto-Updates
 
 Configured in `tauri.conf.json` under `plugins.updater`:
+
 - Endpoint: `https://releases.sigil.dev/{{target}}/{{arch}}/{{current_version}}`
 - Requires signing key for production releases
 - Set `pubkey` before enabling in production

@@ -49,8 +49,8 @@ const (
 	CodeProviderBudgetExceeded  Code = "provider.budget.exceeded"
 	CodeProviderNotFound        Code = "provider.registry.not_found"
 	CodeProviderAllUnavailable  Code = "provider.routing.all_unavailable"
-	CodeProviderNoDefault        Code = "provider.routing.no_default"
-	CodeProviderInvalidModelRef  Code = "provider.routing.invalid_model_ref"
+	CodeProviderNoDefault       Code = "provider.routing.no_default"
+	CodeProviderInvalidModelRef Code = "provider.routing.invalid_model_ref"
 
 	CodeAgentLoopInvalidInput        Code = "agent.loop.invalid_input"
 	CodeAgentLoopFailure             Code = "agent.loop.failure"
@@ -63,7 +63,7 @@ const (
 	CodeWorkspaceOpenFailure      Code = "workspace.open.failure"
 	CodeWorkspaceMembershipDenied Code = "workspace.membership.denied"
 	CodeWorkspaceConfigInvalid    Code = "workspace.config.invalid"
-	CodeWorkspaceCloseFailure    Code = "workspace.close.failure"
+	CodeWorkspaceCloseFailure     Code = "workspace.close.failure"
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"

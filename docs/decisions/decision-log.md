@@ -740,7 +740,7 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 
 **Decision:** Plugin discovery errors and provider registration failures (empty API keys, unknown provider names, constructor errors) are logged as warnings and skipped. Neither is fatal. The gateway starts with whatever plugins and providers succeed.
 
-**Rationale:** The gateway should be resilient to partial misconfiguration. An operator who configures three providers but has one typo should still get the other two working. The structured slog warnings provide clear diagnostics without blocking the entire startup. This is consistent with D033 (config validation fails fast) — config *structure* is validated strictly at load time, but *runtime initialization* of optional subsystems degrades gracefully.
+**Rationale:** The gateway should be resilient to partial misconfiguration. An operator who configures three providers but has one typo should still get the other two working. The structured slog warnings provide clear diagnostics without blocking the entire startup. This is consistent with D033 (config validation fails fast) — config _structure_ is validated strictly at load time, but _runtime initialization_ of optional subsystems degrades gracefully.
 
 **Ref:** PR #14, `cmd/sigil/wire.go`
 

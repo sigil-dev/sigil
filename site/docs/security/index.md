@@ -50,7 +50,7 @@ Attribute-Based Access Control (ABAC) for plugin permissions.
 
 Hierarchical glob patterns for capability matching.
 
-```
+```text
 channel:send          # Exact match
 channel:*             # All channel operations
 tool:file:read:/*     # All file reads
@@ -117,6 +117,7 @@ Lightweight, memory-safe plugins with no syscall access.
 **Use case:** Pure-compute tools, data transformation, safe parsing.
 
 **Guarantees:**
+
 - No network access
 - No file system access
 - No process spawning
@@ -129,6 +130,7 @@ OS-level sandboxing with bwrap (Linux) or sandbox-exec (macOS).
 **Use case:** Most plugins, including channels and providers.
 
 **Guarantees:**
+
 - Restricted syscalls
 - Limited file system access
 - No privilege escalation
@@ -141,6 +143,7 @@ Full OCI container isolation for untrusted plugins.
 **Use case:** Untrusted plugins, network-heavy tools, complex dependencies.
 
 **Guarantees:**
+
 - Network isolation
 - Full file system isolation
 - Resource quotas

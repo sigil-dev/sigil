@@ -70,11 +70,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "GPT-4.1",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				MaxContextTokens: 128000,
-				MaxOutputTokens:  32768,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   32768,
 			},
 		},
 		{
@@ -82,11 +82,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "GPT-4.1 Mini",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				MaxContextTokens: 128000,
-				MaxOutputTokens:  16384,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   16384,
 			},
 		},
 		{
@@ -94,10 +94,10 @@ func knownModels() []provider.ModelInfo {
 			Name:     "GPT-4.1 Nano",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
+				SupportsTools:     true,
 				SupportsStreaming: true,
-				MaxContextTokens: 128000,
-				MaxOutputTokens:  16384,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   16384,
 			},
 		},
 		{
@@ -105,11 +105,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "o3",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
+				SupportsTools:     true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 200000,
-				MaxOutputTokens:  100000,
+				SupportsThinking:  true,
+				MaxContextTokens:  200000,
+				MaxOutputTokens:   100000,
 			},
 		},
 		{
@@ -117,11 +117,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "o4-mini",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
+				SupportsTools:     true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 200000,
-				MaxOutputTokens:  100000,
+				SupportsThinking:  true,
+				MaxContextTokens:  200000,
+				MaxOutputTokens:   100000,
 			},
 		},
 	}
@@ -311,8 +311,8 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 			ch <- provider.ChatEvent{
 				Type: provider.EventTypeUsage,
 				Usage: &provider.Usage{
-					InputTokens:    int(chunk.Usage.PromptTokens),
-					OutputTokens:   int(chunk.Usage.CompletionTokens),
+					InputTokens:     int(chunk.Usage.PromptTokens),
+					OutputTokens:    int(chunk.Usage.CompletionTokens),
 					CacheReadTokens: int(chunk.Usage.PromptTokensDetails.CachedTokens),
 				},
 			}

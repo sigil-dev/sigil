@@ -4,11 +4,11 @@
 [package]
 name = "sigil"
 version = "0.1.0"
-description = "Sigil Desktop App"
 authors = ["Sigil Contributors"]
+edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/sigil-dev/sigil"
-edition = "2021"
+description = "Sigil Desktop App"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -16,10 +16,10 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "shell-sidecar"] }
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "shell-sidecar"] }
+tauri-plugin-shell = "2"
 
 [features]
 # This feature is used for production builds or when `devPath` points to the filesystem

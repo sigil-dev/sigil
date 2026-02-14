@@ -87,11 +87,11 @@ type StorageConfig struct {
 
 // WorkspaceConfig defines a single workspace.
 type WorkspaceConfig struct {
-	Description string           `mapstructure:"description"`
-	Members     []string         `mapstructure:"members"`
-	Bindings    []BindingConfig  `mapstructure:"bindings"`
-	Tools       ToolsConfig      `mapstructure:"tools"`
-	Skills      []string         `mapstructure:"skills"`
+	Description string          `mapstructure:"description"`
+	Members     []string        `mapstructure:"members"`
+	Bindings    []BindingConfig `mapstructure:"bindings"`
+	Tools       ToolsConfig     `mapstructure:"tools"`
+	Skills      []string        `mapstructure:"skills"`
 }
 
 // BindingConfig maps a channel type and ID to a workspace.
