@@ -2,6 +2,7 @@
 // Copyright 2026 Sigil Contributors
 
 import { api } from "$lib/api/client";
+import { logger } from "$lib/logger";
 import { parseSSEEventData } from "./sse-parser";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:18789";
@@ -82,7 +83,7 @@ export class ChatStore {
         let loadError: string | undefined;
 
         if (sessErr) {
-          console.warn(`Failed to load sessions for workspace ${ws.id}:`, sessErr);
+          logger.warn("Failed to load sessions for workspace", { workspaceId: ws.id, error: sessErr });
           loadError = sessErr.detail || "Failed to load sessions";
         } else {
           sessions = (sessData?.sessions ?? []).map((s) => ({
@@ -96,8 +97,15 @@ export class ChatStore {
       }
       this.workspaceGroups = groups;
     } catch (error) {
-      console.error("Failed to load sidebar:", error);
-      this.error = "Failed to load sidebar data";
+      logger.error("Failed to load sidebar", { error });
+      if (error instanceof TypeError) {
+        this.error = "Network error — cannot reach gateway";
+      } else if (error instanceof Response || (error && typeof error === "object" && "status" in error)) {
+        const status = (error as { status?: number }).status;
+        this.error = `Gateway error (HTTP ${status ?? "unknown"})`;
+      } else {
+        this.error = "Failed to load sidebar data";
+      }
     } finally {
       this.sidebarLoading = false;
     }
@@ -180,7 +188,14 @@ export class ChatStore {
           const errJson = JSON.parse(errText) as { detail?: string };
           if (errJson.detail) detail = errJson.detail;
         } catch {
-          // Use raw text if not JSON
+          logger.warn("Server returned non-JSON error response", {
+            status: response.status,
+            contentType: response.headers.get("Content-Type"),
+            textPreview: errText.substring(0, 200),
+          });
+          if (errText.trim().startsWith("<")) {
+            detail = `Server error (HTTP ${response.status})`;
+          }
         }
         this.error = `Request failed: ${response.status} — ${detail}`;
         this.removeMessage(assistantMessage.id);
@@ -198,7 +213,7 @@ export class ChatStore {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
-      console.error("SSE stream error:", err);
+      logger.error("SSE stream error", { error: err });
       this.error = err instanceof Error ? err.message : "Stream failed";
       // Only remove message if no content was streamed yet
       const msg = this.messages.find((m) => m.id === assistantMessage.id);
@@ -288,7 +303,11 @@ export class ChatStore {
       case "done":
         break;
       case "parse_error":
-        console.error(`SSE parse error for ${event.eventType}: ${event.error}`, event.rawData);
+        logger.error("SSE parse error", {
+          eventType: event.eventType,
+          error: event.error,
+          rawData: event.rawData,
+        });
         this.error = `Failed to parse ${event.eventType} event`;
         break;
     }

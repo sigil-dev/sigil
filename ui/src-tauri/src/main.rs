@@ -51,7 +51,7 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Sigil gateway started with config: {}", config_path);
 
-    // Health check: verify the gateway is actually running with retry logic
+    // Health check: verify the gateway is running with 3 attempts (1s, 2s, 4s delays)
     let app_handle = app.clone();
     std::thread::spawn(move || {
         let delays = [1000u64, 2000, 4000];
@@ -128,8 +128,7 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let mut process_lock = state.process.lock().map_err(|e| format!("sidecar state lock poisoned: {}", e))?;
 
     if let Some(mut process) = process_lock.take() {
-        // CommandChild only supports kill() — graceful shutdown via API signal
-        // would require the gateway to support a shutdown endpoint.
+        // CommandChild::kill() sends SIGKILL — the gateway process is terminated immediately without graceful shutdown. Any in-flight database transactions will be rolled back by SQLite. Graceful shutdown would require the gateway to implement a /shutdown endpoint.
         process.kill()?;
         println!("Sigil gateway stopped");
     }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
+import { logger } from "$lib/logger";
+
 /** Parsed SSE event types returned by the parser. */
 export type ParsedSSEEvent =
   | { type: "text_delta"; text: string }
@@ -74,7 +76,7 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
     case "done":
       return { type: "done" };
     default:
-      console.warn("Unknown SSE event type:", eventType);
+      logger.warn("Unknown SSE event type", { eventType });
       return {
         type: "parse_error",
         eventType,
