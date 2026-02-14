@@ -53,14 +53,24 @@
 	const placeholderTools = ['file-access', 'web-search', 'code-exec'];
 	const placeholderSkills = ['summarize', 'translate', 'analyze-code'];
 
-	function handleAddSkill() {
-		console.log('Add skill - Coming soon');
-		alert('Skill management coming soon');
+	function handleInstallSkill() {
+		console.log('Install skill - Coming soon');
+	}
+
+	function handleCopySkill(skill: string) {
+		console.log('Copy skill to another workspace:', skill);
+	}
+
+	function handleLinkSkill(skill: string) {
+		console.log('Link skill from another workspace:', skill);
+	}
+
+	function handleEditSkill(skill: string) {
+		console.log('Edit skill:', skill);
 	}
 
 	function handleRemoveSkill(skill: string) {
 		console.log('Remove skill:', skill);
-		alert('Skill management coming soon');
 	}
 
 	function handleToggleTool(tool: string) {
@@ -160,14 +170,20 @@
 
 			<section class="card">
 				<h2>Available Skills</h2>
+				<p class="preview-banner">Skill management preview &mdash; backend not yet connected</p>
 				<div class="section-actions">
-					<button onclick={handleAddSkill}>Add Skill</button>
+					<button disabled onclick={handleInstallSkill}>Install</button>
+					<button disabled onclick={() => handleLinkSkill('')}>Link from Workspace</button>
 				</div>
 				<ul>
 					{#each placeholderSkills as skill}
-						<li>
+						<li class="skill-item">
 							<span class="badge">skill</span> {skill}
-							<button class="remove-btn" onclick={() => handleRemoveSkill(skill)}>Remove</button>
+							<span class="skill-actions">
+								<button class="action-btn" disabled onclick={() => handleEditSkill(skill)} title="Edit skill">Edit</button>
+								<button class="action-btn" disabled onclick={() => handleCopySkill(skill)} title="Copy to another workspace">Copy</button>
+								<button class="remove-btn" disabled onclick={() => handleRemoveSkill(skill)}>Remove</button>
+							</span>
 						</li>
 					{/each}
 				</ul>
@@ -324,9 +340,45 @@
 		font-size: 0.85rem;
 	}
 
-	.remove-btn:hover {
+	.remove-btn:hover:not(:disabled) {
 		background: #fee;
 		border-color: #c00;
+	}
+
+	.remove-btn:disabled,
+	.action-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.preview-banner {
+		background: #fff3cd;
+		color: #856404;
+		padding: 0.4rem 0.75rem;
+		border-radius: 4px;
+		font-size: 0.8rem;
+		margin-bottom: 0.75rem;
+	}
+
+	.skill-item {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+	}
+
+	.skill-actions {
+		display: flex;
+		gap: 0.25rem;
+	}
+
+	.action-btn {
+		padding: 0.2rem 0.4rem;
+		border: 1px solid #ddd;
+		border-radius: 4px;
+		background: white;
+		color: #0066cc;
+		cursor: pointer;
+		font-size: 0.8rem;
 	}
 
 	.section-help {

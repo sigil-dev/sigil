@@ -11,9 +11,9 @@ Complete command-line interface documentation.
 Flags available to all commands.
 
 ```bash
---config string      Config file path (default: ~/.sigil/config.yaml)
---log-level string   Log level: debug, info, warn, error (default: info)
---workspace string   Workspace to operate on (default: "default")
+--config, -c string   Path to config file
+--data-dir string     Path to data directory
+--verbose, -v         Enable verbose output
 ```
 
 ### `sigil start`
@@ -26,9 +26,7 @@ sigil start [flags]
 
 **Flags:**
 
-- `--host string` - Host to bind to (default: "localhost")
-- `--port int` - Port to listen on (default: 8080)
-- `--dev` - Enable development mode
+- `--listen string` - Override listen address, host:port (default: "127.0.0.1:18789")
 
 ### `sigil status`
 
@@ -123,53 +121,36 @@ Configuration files use YAML format.
 ### Server Configuration
 
 ```yaml
-server:
-  host: localhost
-  port: 8080
-  tls:
-    enabled: false
-    cert_file: ""
-    key_file: ""
-  cors:
-    allowed_origins: ["*"]
-    allowed_methods: ["GET", "POST", "PUT", "DELETE"]
+networking:
+  mode: local        # local or tailscale
+  listen: "127.0.0.1:18789"
 ```
 
-### Database Configuration
+### Storage Configuration
 
 ```yaml
-database:
-  type: sqlite
-  path: ~/.sigil/data
-  sqlite:
-    journal_mode: WAL
-    synchronous: NORMAL
+storage:
+  backend: sqlite
 ```
 
-### Security Configuration
+### Authentication Configuration
 
 ```yaml
-security:
-  sandbox:
-    default_tier: process
-    enable_wasm: true
-    enable_container: false
-  capabilities:
-    default_deny: true
-    audit_log: true
+auth:
+  tokens:
+    - token: "your-bearer-token"
+      user_id: "user-1"
+      name: "Admin"
+      permissions: ["admin"]
 ```
 
 ### Provider Configuration
 
 ```yaml
 providers:
-  - name: anthropic
-    type: anthropic
-    config:
-      api_key_env: ANTHROPIC_API_KEY
-      default_model: claude-opus-4.6
-      budget:
-        daily_limit_usd: 10.0
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    endpoint: ""
 ```
 
 ### Channel Configuration
@@ -212,9 +193,8 @@ memory:
 Override configuration with environment variables:
 
 ```bash
-SIGIL_SERVER_PORT=9000
-SIGIL_DATABASE_PATH=/var/lib/sigil
-SIGIL_LOG_LEVEL=debug
+SIGIL_NETWORKING_LISTEN=127.0.0.1:9000
+SIGIL_STORAGE_BACKEND=sqlite
 ```
 
 ## API Reference

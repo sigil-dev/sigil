@@ -121,8 +121,15 @@
 
 <div class="container">
 	<header>
-		<h1>Plugins</h1>
-		<p>Manage installed plugins and view execution status</p>
+		<div class="header-row">
+			<div>
+				<h1>Plugins</h1>
+				<p>Manage installed plugins and view execution status</p>
+			</div>
+			<button class="install-btn" disabled title="Plugin installation coming soon">
+				Install Plugin
+			</button>
+		</div>
 	</header>
 
 	{#if error}
@@ -142,6 +149,7 @@
 					<th>Version</th>
 					<th>Tier</th>
 					<th>Status</th>
+					<th>Resources</th>
 					<th>Actions</th>
 				</tr>
 			</thead>
@@ -160,6 +168,9 @@
 							<span class="status-badge {getStatusBadgeClass(plugin.status)}">
 								{plugin.status}
 							</span>
+						</td>
+						<td class="resources-cell">
+							<span class="resource-placeholder" title="Resource monitoring coming soon">&mdash;</span>
 						</td>
 						<td class="actions-cell">
 							<button onclick={() => viewDetails(plugin.name)} disabled={reloading !== null}>
@@ -255,6 +266,30 @@
 	header p {
 		color: #666;
 		font-size: 0.95rem;
+	}
+
+	.header-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+	}
+
+	.install-btn {
+		padding: 0.6rem 1.2rem;
+		background: #4a90d9;
+		color: white;
+		border: none;
+		border-radius: 6px;
+		font-size: 0.9rem;
+		font-weight: 600;
+		cursor: not-allowed;
+		opacity: 0.5;
+		white-space: nowrap;
+	}
+
+	.resource-placeholder {
+		color: #aaa;
+		font-size: 0.85rem;
 	}
 
 	.loading,

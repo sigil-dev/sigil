@@ -26,7 +26,7 @@ impl SidecarState {
 /// Start the Sigil gateway sidecar process
 fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let state = app.state::<SidecarState>();
-    let mut process_lock = state.process.lock().unwrap();
+    let mut process_lock = state.process.lock().map_err(|e| format!("sidecar state lock poisoned: {}", e))?;
 
     // Don't start if already running
     if process_lock.is_some() {
@@ -56,9 +56,11 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 /// Stop the Sigil gateway sidecar process
 fn stop_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let state = app.state::<SidecarState>();
-    let mut process_lock = state.process.lock().unwrap();
+    let mut process_lock = state.process.lock().map_err(|e| format!("sidecar state lock poisoned: {}", e))?;
 
     if let Some(mut process) = process_lock.take() {
+        // CommandChild only supports kill() — graceful shutdown via API signal
+        // would require the gateway to support a shutdown endpoint.
         process.kill()?;
         println!("Sigil gateway stopped");
     }
@@ -176,6 +178,7 @@ pub fn run() {
             std::thread::spawn(move || {
                 if let Err(e) = start_sidecar(&app_handle) {
                     eprintln!("Failed to start Sigil gateway: {}", e);
+                    let _ = app_handle.emit("sidecar-error", format!("Failed to start gateway: {}", e));
                 }
             });
 
@@ -184,7 +187,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // Hide window instead of closing on close button
-                window.hide().unwrap();
+                let _ = window.hide();
                 api.prevent_close();
             }
         })

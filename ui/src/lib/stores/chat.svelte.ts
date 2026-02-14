@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
+import { parseSSEEventData } from "./sse-parser";
+
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:18789";
 
 /** Role of a chat message */
@@ -182,18 +184,25 @@ export class ChatStore {
         return;
       }
       this.error = err instanceof Error ? err.message : "Stream failed";
-      this.removeMessage(assistantMessage.id);
+      // Only remove message if no content was streamed yet
+      const msg = this.messages.find((m) => m.id === assistantMessage.id);
+      if (!msg?.content) {
+        this.removeMessage(assistantMessage.id);
+      }
     } finally {
       this.loading = false;
       this.abortController = null;
     }
   }
 
-  /** Parse SSE events from a ReadableStream and update the assistant message */
+  /** Parse SSE events from a ReadableStream and update the assistant message.
+   *  Follows SSE spec: buffers data lines and dispatches on blank-line boundaries. */
   private async readSSEStream(body: ReadableStream<Uint8Array>, messageId: string): Promise<void> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let eventType = "";
+    const dataLines: string[] = [];
 
     try {
       while (true) {
@@ -204,88 +213,63 @@ export class ChatStore {
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
 
-        let eventType = "";
         for (const line of lines) {
-          if (line.startsWith("event:")) {
+          if (line === "") {
+            // Blank line = dispatch buffered event per SSE spec
+            if (dataLines.length > 0) {
+              const data = dataLines.join("\n");
+              this.handleSSEEvent(eventType || "message", data, messageId);
+              dataLines.length = 0;
+              eventType = "";
+            }
+          } else if (line.startsWith("event:")) {
             eventType = line.slice(6).trim();
           } else if (line.startsWith("data:")) {
-            const data = line.slice(5).trim();
-            this.handleSSEEvent(eventType || "message", data, messageId);
-            eventType = "";
+            dataLines.push(line.slice(5).trimStart());
           }
         }
       }
 
-      // Process any remaining buffer
-      if (buffer.trim()) {
-        const lines = buffer.split("\n");
-        let eventType = "";
-        for (const line of lines) {
-          if (line.startsWith("event:")) {
-            eventType = line.slice(6).trim();
-          } else if (line.startsWith("data:")) {
-            const data = line.slice(5).trim();
-            this.handleSSEEvent(eventType || "message", data, messageId);
-            eventType = "";
-          }
-        }
+      // Flush any remaining buffered event
+      if (dataLines.length > 0) {
+        const data = dataLines.join("\n");
+        this.handleSSEEvent(eventType || "message", data, messageId);
       }
     } finally {
       reader.releaseLock();
     }
   }
 
-  /** Handle a single SSE event */
+  /** Handle a single SSE event using the typed parser */
   private handleSSEEvent(eventType: string, data: string, messageId: string): void {
-    switch (eventType) {
-      case "text_delta": {
-        this.appendToMessage(messageId, data);
+    const event = parseSSEEventData(eventType, data);
+
+    switch (event.type) {
+      case "text_delta":
+        this.appendToMessage(messageId, event.text);
         break;
-      }
-      case "session_id": {
-        this.sessionId = data;
+      case "session_id":
+        this.sessionId = event.sessionId;
         break;
-      }
-      case "tool_call": {
-        try {
-          const toolData = JSON.parse(data) as { name: string; input?: unknown };
-          this.addToolCall(messageId, {
-            name: toolData.name,
-            status: "running",
-            input: toolData.input,
-          });
-        } catch {
-          // Ignore malformed tool_call events
-        }
+      case "tool_call":
+        this.addToolCall(messageId, {
+          name: event.name,
+          status: "running",
+          input: event.input,
+        });
         break;
-      }
-      case "tool_result": {
-        try {
-          const resultData = JSON.parse(data) as { name: string; result?: unknown };
-          this.updateToolCall(messageId, resultData.name, {
-            status: "complete",
-            result: resultData.result,
-          });
-        } catch {
-          // Ignore malformed tool_result events
-        }
+      case "tool_result":
+        this.completeToolCall(messageId, event.name, event.result);
         break;
-      }
-      case "error": {
-        this.error = data;
+      case "error":
+        this.error = event.message;
         break;
-      }
-      case "done": {
-        // Stream complete
+      case "done":
         break;
-      }
-      default: {
-        // For plain "message" or unknown events, treat as text delta
-        if (data) {
-          this.appendToMessage(messageId, data);
-        }
+      case "parse_error":
+        console.error(`SSE parse error for ${event.eventType}: ${event.error}`, event.rawData);
+        this.error = `Failed to parse ${event.eventType} event`;
         break;
-      }
     }
   }
 
@@ -302,18 +286,19 @@ export class ChatStore {
     });
   }
 
-  /** Update a tool call's status/result by name */
-  private updateToolCall(
-    messageId: string,
-    toolName: string,
-    update: Partial<ToolCall>,
-  ): void {
+  /** Complete the most recent running tool call matching the given name */
+  private completeToolCall(messageId: string, toolName: string, result?: unknown): void {
     this.messages = this.messages.map((m) => {
       if (m.id !== messageId) return m;
-      return {
-        ...m,
-        toolCalls: (m.toolCalls ?? []).map((tc) => tc.name === toolName ? { ...tc, ...update } : tc),
-      };
+      const toolCalls = [...(m.toolCalls ?? [])];
+      // Find the last "running" tool call with this name (handles duplicates)
+      for (let i = toolCalls.length - 1; i >= 0; i--) {
+        if (toolCalls[i].name === toolName && toolCalls[i].status === "running") {
+          toolCalls[i] = { ...toolCalls[i], status: "complete", result };
+          break;
+        }
+      }
+      return { ...m, toolCalls };
     });
   }
 

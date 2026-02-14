@@ -7,6 +7,8 @@ before:
     - task generate
 builds:
   # Main binary (CGO_ENABLED=1 for sqlite3/sqlite-vec)
+  # NOTE: CGO cross-compilation requires goreleaser-cross Docker image in CI.
+  # See: https://github.com/goreleaser/goreleaser-cross
   - id: sigil
     main: ./cmd/sigil
     binary: sigil
@@ -49,8 +51,7 @@ sboms:
       - "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.sbom.spdx.json"
 signs:
   - cmd: cosign
-    env:
-      - COSIGN_EXPERIMENTAL=1
+    # Keyless signing is default in Cosign 2.0+; no env override needed.
     artifacts: checksum
     output: true
     args:
@@ -61,20 +62,21 @@ signs:
       - "${artifact}"
 changelog:
   use: github-native
-brews:
+homebrew_casks:
   - name: sigil
     repository:
       owner: sigil-dev
       name: homebrew-tap
+    url:
+      template: "https://github.com/sigil-dev/sigil/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     homepage: "https://github.com/sigil-dev/sigil"
     description: "Secure, lightweight Go gateway connecting messaging platforms to AI agents"
-    license: "Apache-2.0"
 dockers_v2:
   - images:
       - "ghcr.io/sigil-dev/sigil"
     tags:
-      - "{{ .Version }}"
-      - latest
+      - "v{{ .Version }}"
+      - "latest"
     platforms:
       - linux/amd64
       - linux/arm64

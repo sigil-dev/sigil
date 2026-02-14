@@ -51,9 +51,9 @@ Attribute-Based Access Control (ABAC) for plugin permissions.
 Hierarchical glob patterns for capability matching.
 
 ```text
-channel:send          # Exact match
-channel:*             # All channel operations
-tool:file:read:/*     # All file reads
+channel.send          # Exact match
+channel.*             # All channel operations
+tool.file.read.*      # All file reads
 ```
 
 ### Capability Grants
@@ -74,37 +74,37 @@ Complete list of available capabilities and their meanings.
 
 ### Channel Capabilities
 
-- `channel:send` - Send messages to channels
-- `channel:receive` - Receive messages from channels
-- `channel:list` - List available channels
-- `channel:manage` - Create or delete channels
+- `channel.send` - Send messages to channels
+- `channel.receive` - Receive messages from channels
+- `channel.list` - List available channels
+- `channel.manage` - Create or delete channels
 
 ### Tool Capabilities
 
-- `tool:exec` - Execute arbitrary tools
-- `tool:file:read` - Read files from disk
-- `tool:file:write` - Write files to disk
-- `tool:network:http` - Make HTTP requests
-- `tool:network:websocket` - Open WebSocket connections
+- `tool.exec` - Execute arbitrary tools
+- `tool.file.read` - Read files from disk
+- `tool.file.write` - Write files to disk
+- `tool.network.http` - Make HTTP requests
+- `tool.network.websocket` - Open WebSocket connections
 
 ### Provider Capabilities
 
-- `provider:llm:call` - Invoke LLM APIs
-- `provider:llm:stream` - Stream LLM responses
-- `provider:embedding` - Generate embeddings
+- `provider.llm.call` - Invoke LLM APIs
+- `provider.llm.stream` - Stream LLM responses
+- `provider.embedding` - Generate embeddings
 
 ### Storage Capabilities
 
-- `storage:workspace:read` - Read workspace data
-- `storage:workspace:write` - Write workspace data
-- `storage:memory:read` - Read agent memory
-- `storage:memory:write` - Write agent memory
+- `storage.workspace.read` - Read workspace data
+- `storage.workspace.write` - Write workspace data
+- `storage.memory.read` - Read agent memory
+- `storage.memory.write` - Write agent memory
 
 ### System Capabilities
 
-- `system:config:read` - Read Sigil configuration
-- `system:plugin:list` - List installed plugins
-- `system:node:connect` - Connect to remote nodes
+- `system.config.read` - Read Sigil configuration
+- `system.plugin.list` - List installed plugins
+- `system.node.connect` - Connect to remote nodes
 
 ## Isolation Tiers
 

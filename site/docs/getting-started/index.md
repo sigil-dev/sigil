@@ -6,7 +6,7 @@ Welcome to Sigil! This guide will help you install, configure, and run Sigil for
 
 Requirements for running Sigil on your system.
 
-- Go 1.23 or later
+- Go 1.25 or later
 - CGo-enabled environment (required for SQLite)
 - Supported operating systems: Linux, macOS, Windows (with WSL)
 

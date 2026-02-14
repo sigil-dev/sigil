@@ -34,6 +34,17 @@
 
 <form class="chat-input" onsubmit={handleSubmit}>
 	<div class="chat-input__wrapper">
+		<div class="chat-input__left-actions">
+			<button
+				type="button"
+				class="chat-input__btn chat-input__btn--attach"
+				disabled
+				title="Attach file (coming soon)"
+			>
+				&#x1F4CE;
+			</button>
+		</div>
+
 		<textarea
 			class="chat-input__field"
 			placeholder="Type a message..."
@@ -79,6 +90,21 @@
 		display: flex;
 		gap: 0.5rem;
 		align-items: flex-end;
+	}
+
+	.chat-input__left-actions {
+		display: flex;
+		align-items: center;
+	}
+
+	.chat-input__btn--attach {
+		background: none;
+		border: 1px solid #ccc;
+		border-radius: 6px;
+		padding: 0.4rem 0.5rem;
+		font-size: 1rem;
+		cursor: not-allowed;
+		opacity: 0.5;
 	}
 
 	.chat-input__field {

@@ -24,11 +24,9 @@ Step-by-step guide to building your first plugin.
 
 ### Scaffolding
 
-Use the plugin template to generate boilerplate code.
-
-```bash
-task scaffold:plugin
-```
+Use the `/sigil-new-plugin` Claude Code command to scaffold a new plugin with
+manifest, code, and tests. Alternatively, create the plugin directory structure
+manually following the patterns in `plugins/`.
 
 ### Manifest File
 

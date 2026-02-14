@@ -57,7 +57,7 @@
 	let auditFilterText = $state('');
 	let auditFilterAction = $state('all');
 
-	const filteredAuditLogs = $derived(() => {
+	const filteredAuditLogs = $derived.by(() => {
 		let filtered = auditLogs;
 
 		// Filter by text (user or action)
@@ -115,6 +115,8 @@
 				<p class="panel-description">
 					Configure LLM providers with API keys and default models. Settings will be saved to sigil.yaml.
 				</p>
+
+				<div class="preview-banner">Preview — not connected to live data</div>
 
 				<div class="provider-list">
 					{#each providers as provider}
@@ -175,7 +177,7 @@
 					</label>
 
 					<div class="form-actions">
-						<button type="button">Save Settings</button>
+						<button type="button" disabled>Save Settings (not yet implemented)</button>
 					</div>
 				</form>
 			</section>
@@ -205,8 +207,8 @@
 									<td><code>{user.id}</code></td>
 									<td>{user.name}</td>
 									<td>
-										<button>Edit</button>
-										<button>Unpair</button>
+										<button disabled>Edit</button>
+										<button disabled>Unpair</button>
 									</td>
 								</tr>
 							{/each}
@@ -220,6 +222,8 @@
 				<p class="panel-description">
 					Security-relevant operations and administrative actions.
 				</p>
+
+				<div class="preview-banner">Preview — showing sample data</div>
 
 				<div class="audit-filters">
 					<input
@@ -245,7 +249,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each filteredAuditLogs() as log}
+						{#each filteredAuditLogs as log}
 							<tr>
 								<td>{new Date(log.timestamp).toLocaleString()}</td>
 								<td><code>{log.user}</code></td>
@@ -256,7 +260,7 @@
 					</tbody>
 				</table>
 
-				{#if filteredAuditLogs().length === 0}
+				{#if filteredAuditLogs.length === 0}
 					<p class="empty-state">No audit logs match the current filters</p>
 				{/if}
 			</section>
@@ -510,5 +514,22 @@
 
 	.audit-filters select {
 		width: 200px;
+	}
+
+	.preview-banner {
+		padding: 0.5rem 1rem;
+		background: #fff3cd;
+		color: #856404;
+		border: 1px solid #ffc107;
+		border-radius: 4px;
+		font-size: 0.85rem;
+		font-weight: 600;
+		margin-bottom: 1rem;
+		text-align: center;
+	}
+
+	button:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
 	}
 </style>
