@@ -51,32 +51,47 @@ fn start_sidecar(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Sigil gateway started with config: {}", config_path);
 
-    // Health check: verify the gateway is actually running
+    // Health check: verify the gateway is actually running with retry logic
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let delays = [1000u64, 2000, 4000];
 
-        match health_check_sidecar() {
-            Ok(true) => {
-                println!("Sigil gateway health check passed");
-                if let Err(e) = app_handle.emit("sidecar-ready", ()) {
-                    eprintln!("Failed to emit sidecar-ready: {}", e);
+        for (attempt, delay_ms) in delays.iter().enumerate() {
+            std::thread::sleep(std::time::Duration::from_millis(*delay_ms));
+
+            match health_check_sidecar() {
+                Ok(true) => {
+                    println!("Sigil gateway health check passed (attempt {})", attempt + 1);
+                    if let Err(e) = app_handle.emit("sidecar-ready", ()) {
+                        eprintln!("Failed to emit sidecar-ready: {}", e);
+                    }
+                    return;
+                }
+                Ok(false) => {
+                    eprintln!(
+                        "Health check attempt {}/{} failed - not responding",
+                        attempt + 1,
+                        delays.len()
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Health check attempt {}/{} error: {}",
+                        attempt + 1,
+                        delays.len(),
+                        e
+                    );
                 }
             }
-            Ok(false) => {
-                let msg = "Sigil gateway failed health check - service not responding";
-                eprintln!("{}", msg);
-                if let Err(e) = app_handle.emit("sidecar-error", msg) {
-                    eprintln!("Failed to emit sidecar-error: {}", e);
-                }
-            }
-            Err(e) => {
-                let msg = format!("Sigil gateway health check error: {}", e);
-                eprintln!("{}", msg);
-                if let Err(e) = app_handle.emit("sidecar-error", msg) {
-                    eprintln!("Failed to emit sidecar-error: {}", e);
-                }
-            }
+        }
+
+        let msg = format!(
+            "Sigil gateway failed health check after {} attempts",
+            delays.len()
+        );
+        eprintln!("{}", msg);
+        if let Err(e) = app_handle.emit("sidecar-error", &msg) {
+            eprintln!("Failed to emit sidecar-error: {}", e);
         }
     });
 
@@ -140,11 +155,6 @@ fn create_tray_menu(app: &AppHandle) -> Result<tauri::menu::Menu<tauri::Wry>, Bo
         )
         .separator()
         .item(
-            &MenuItemBuilder::new("Pause Agent")
-                .id("pause")
-                .build(app)?,
-        )
-        .item(
             &MenuItemBuilder::new("Restart Gateway")
                 .id("restart")
                 .build(app)?,
@@ -189,10 +199,6 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
                             eprintln!("Failed to set focus: {}", e);
                         }
                     }
-                }
-                "pause" => {
-                    // TODO: Implement agent pause via API call
-                    println!("Pause agent requested");
                 }
                 "restart" => {
                     if let Err(e) = restart_sidecar(app) {

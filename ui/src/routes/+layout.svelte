@@ -9,37 +9,46 @@
 	let sidecarError = $state<string | null>(null);
 	let sidecarReady = $state(false);
 
-	onMount(async () => {
+	onMount(() => {
 		// Only set up Tauri listeners in desktop environment
 		if (typeof window === 'undefined' || !('__TAURI__' in window)) return;
 
-		try {
-			const { listen } = await import('@tauri-apps/api/event');
+		let cleanup: (() => void) | undefined;
 
-			// Listen for sidecar startup errors
-			const errorUnlisten = await listen('sidecar-error', (event: any) => {
-				console.error('Sidecar error:', event.payload);
-				sidecarError = typeof event.payload === 'string'
-					? event.payload
-					: 'Sigil gateway failed to start. Please check the logs.';
-			});
+		(async () => {
+			try {
+				const { listen } = await import('@tauri-apps/api/event');
 
-			// Listen for sidecar ready event
-			const readyUnlisten = await listen('sidecar-ready', () => {
-				console.log('Sidecar ready');
-				sidecarReady = true;
-				sidecarError = null;
-			});
+				// Listen for sidecar startup errors
+				const errorUnlisten = await listen('sidecar-error', (event: any) => {
+					console.error('Sidecar error:', event.payload);
+					sidecarError = typeof event.payload === 'string'
+						? event.payload
+						: 'Sigil gateway failed to start. Please check the logs.';
+				});
 
-			// Cleanup listeners on unmount
-			return () => {
-				errorUnlisten();
-				readyUnlisten();
-			};
-		} catch (e) {
-			// Not in Tauri environment - ignore
-			console.debug('Tauri API not available:', e);
-		}
+				// Listen for sidecar ready event
+				const readyUnlisten = await listen('sidecar-ready', () => {
+					console.log('Sidecar ready');
+					sidecarReady = true;
+					sidecarError = null;
+				});
+
+				// Store cleanup function to be called on unmount
+				cleanup = () => {
+					errorUnlisten();
+					readyUnlisten();
+				};
+			} catch (e) {
+				// Not in Tauri environment - ignore
+				console.debug('Tauri API not available:', e);
+			}
+		})();
+
+		// Return sync cleanup function
+		return () => {
+			cleanup?.();
+		};
 	});
 </script>
 

@@ -175,7 +175,14 @@ export class ChatStore {
 
       if (!response.ok) {
         const errText = await response.text();
-        this.error = `Request failed: ${response.status} ${errText}`;
+        let detail = errText;
+        try {
+          const errJson = JSON.parse(errText) as { detail?: string };
+          if (errJson.detail) detail = errJson.detail;
+        } catch {
+          // Use raw text if not JSON
+        }
+        this.error = `Request failed: ${response.status} — ${detail}`;
         this.removeMessage(assistantMessage.id);
         return;
       }
@@ -191,6 +198,7 @@ export class ChatStore {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
+      console.error("SSE stream error:", err);
       this.error = err instanceof Error ? err.message : "Stream failed";
       // Only remove message if no content was streamed yet
       const msg = this.messages.find((m) => m.id === assistantMessage.id);

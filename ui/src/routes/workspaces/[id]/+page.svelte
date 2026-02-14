@@ -47,56 +47,6 @@
 		}
 	});
 
-	// Placeholder data for features not yet in API
-	const placeholderChannels = ['telegram-main', 'discord-dev'];
-	const placeholderNodes = ['laptop', 'desktop'];
-	const placeholderTools = ['file-access', 'web-search', 'code-exec'];
-	const placeholderSkills = ['summarize', 'translate', 'analyze-code'];
-
-	function handleInstallSkill() {
-		console.log('Install skill - Coming soon');
-	}
-
-	function handleCopySkill(skill: string) {
-		console.log('Copy skill to another workspace:', skill);
-	}
-
-	function handleLinkSkill(skill: string) {
-		console.log('Link skill from another workspace:', skill);
-	}
-
-	function handleEditSkill(skill: string) {
-		console.log('Edit skill:', skill);
-	}
-
-	function handleRemoveSkill(skill: string) {
-		console.log('Remove skill:', skill);
-	}
-
-	function handleToggleTool(tool: string) {
-		console.log('Toggle tool:', tool);
-		alert('Tool allowlist configuration coming soon');
-	}
-
-	function handleBindChannel(channel: string) {
-		console.log('Bind channel:', channel);
-		alert('Channel binding coming soon');
-	}
-
-	function handleUnbindChannel(channel: string) {
-		console.log('Unbind channel:', channel);
-		alert('Channel unbinding coming soon');
-	}
-
-	function handleBindNode(node: string) {
-		console.log('Bind node:', node);
-		alert('Node binding coming soon');
-	}
-
-	function handleUnbindNode(node: string) {
-		console.log('Unbind node:', node);
-		alert('Node unbinding coming soon');
-	}
 </script>
 
 <div class="container">
@@ -123,70 +73,22 @@
 
 			<section class="card">
 				<h2>Channels</h2>
-				<div class="section-actions">
-					<button onclick={() => handleBindChannel('')}>Bind Channel</button>
-				</div>
-				<ul>
-					{#each placeholderChannels as channel}
-						<li>
-							<span class="badge">channel</span> {channel}
-							<button class="remove-btn" onclick={() => handleUnbindChannel(channel)}>Unbind</button>
-						</li>
-					{/each}
-				</ul>
+				<div class="coming-soon">Coming soon — channel binding requires Phase 6 APIs</div>
 			</section>
 
 			<section class="card">
 				<h2>Nodes</h2>
-				<div class="section-actions">
-					<button onclick={() => handleBindNode('')}>Bind Node</button>
-				</div>
-				<ul>
-					{#each placeholderNodes as node}
-						<li>
-							<span class="badge">node</span> {node}
-							<button class="remove-btn" onclick={() => handleUnbindNode(node)}>Unbind</button>
-						</li>
-					{/each}
-				</ul>
+				<div class="coming-soon">Coming soon — node management requires Phase 6 APIs</div>
 			</section>
 
 			<section class="card">
 				<h2>Allowed Tools</h2>
-				<p class="section-help">Toggle tools to control which capabilities are available to agents.</p>
-				<ul class="tool-list">
-					{#each placeholderTools as tool}
-						<li>
-							<label class="toggle-control">
-								<input type="checkbox" checked onchange={() => handleToggleTool(tool)} />
-								<span class="toggle-label">
-									<span class="badge">tool</span> {tool}
-								</span>
-							</label>
-						</li>
-					{/each}
-				</ul>
+				<div class="coming-soon">Coming soon — tool allowlists require Phase 6 APIs</div>
 			</section>
 
 			<section class="card">
 				<h2>Available Skills</h2>
-				<p class="preview-banner">Skill management preview &mdash; backend not yet connected</p>
-				<div class="section-actions">
-					<button disabled onclick={handleInstallSkill}>Install</button>
-					<button disabled onclick={() => handleLinkSkill('')}>Link from Workspace</button>
-				</div>
-				<ul>
-					{#each placeholderSkills as skill}
-						<li class="skill-item">
-							<span class="badge">skill</span> {skill}
-							<span class="skill-actions">
-								<button class="action-btn" disabled onclick={() => handleEditSkill(skill)} title="Edit skill">Edit</button>
-								<button class="action-btn" disabled onclick={() => handleCopySkill(skill)} title="Copy to another workspace">Copy</button>
-								<button class="remove-btn" disabled onclick={() => handleRemoveSkill(skill)}>Remove</button>
-							</span>
-						</li>
-					{/each}
-				</ul>
+				<div class="coming-soon">Coming soon — skill management requires Phase 6 APIs</div>
 			</section>
 
 			<section class="card full-width">
@@ -293,140 +195,17 @@
 		color: #333;
 	}
 
-	ul {
-		list-style: none;
-		padding: 0;
-		margin: 0;
-	}
-
-	li {
-		padding: 0.5rem 0;
-		border-bottom: 1px solid #eee;
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-	}
-
-	li:last-child {
-		border-bottom: none;
-	}
-
-	.section-actions {
-		margin-bottom: 1rem;
-	}
-
-	.section-actions button {
-		padding: 0.5rem 1rem;
-		border: 1px solid #0066cc;
-		border-radius: 4px;
-		background: white;
-		color: #0066cc;
-		cursor: pointer;
-		font-size: 0.9rem;
-	}
-
-	.section-actions button:hover {
-		background: #0066cc;
-		color: white;
-	}
-
-	.remove-btn {
-		padding: 0.25rem 0.5rem;
-		border: 1px solid #ddd;
-		border-radius: 4px;
-		background: white;
-		color: #c00;
-		cursor: pointer;
-		font-size: 0.85rem;
-	}
-
-	.remove-btn:hover:not(:disabled) {
-		background: #fee;
-		border-color: #c00;
-	}
-
-	.remove-btn:disabled,
-	.action-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	.preview-banner {
-		background: #fff3cd;
-		color: #856404;
-		padding: 0.4rem 0.75rem;
-		border-radius: 4px;
-		font-size: 0.8rem;
-		margin-bottom: 0.75rem;
-	}
-
-	.skill-item {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-	}
-
-	.skill-actions {
-		display: flex;
-		gap: 0.25rem;
-	}
-
-	.action-btn {
-		padding: 0.2rem 0.4rem;
-		border: 1px solid #ddd;
-		border-radius: 4px;
-		background: white;
-		color: #0066cc;
-		cursor: pointer;
-		font-size: 0.8rem;
-	}
-
-	.section-help {
-		color: #666;
-		font-size: 0.9rem;
-		margin-bottom: 1rem;
-	}
-
-	.tool-list {
-		list-style: none;
-		padding: 0;
-		margin: 0;
-	}
-
-	.toggle-control {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		cursor: pointer;
-		width: 100%;
-	}
-
-	.toggle-control input[type='checkbox'] {
-		cursor: pointer;
-	}
-
-	.toggle-label {
-		flex: 1;
-	}
-
-	.badge {
-		display: inline-block;
-		padding: 0.2rem 0.5rem;
-		font-size: 0.75rem;
-		border-radius: 4px;
-		background: #e0e0e0;
-		color: #333;
-		font-weight: 600;
-		text-transform: uppercase;
-	}
-
-	.empty-state {
-		color: #999;
+	.coming-soon {
+		padding: 1.5rem;
 		text-align: center;
-		padding: 2rem;
+		color: #856404;
+		background: #fff3cd;
+		border: 1px solid #ffc107;
+		border-radius: 4px;
+		font-size: 0.9rem;
 	}
 
-	table {
+table {
 		width: 100%;
 		border-collapse: collapse;
 	}

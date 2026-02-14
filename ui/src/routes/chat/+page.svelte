@@ -68,7 +68,9 @@
 							</button>
 						</div>
 
-						{#if group.sessions.length === 0}
+						{#if group.loadError}
+							<div class="workspace-group__error" title={group.loadError}>Failed to load sessions</div>
+						{:else if group.sessions.length === 0}
 							<div class="workspace-group__empty">No sessions</div>
 						{:else}
 							<ul class="session-list">
@@ -247,6 +249,15 @@
 		font-size: 0.8rem;
 		color: #aaa;
 		font-style: italic;
+	}
+
+	.workspace-group__error {
+		padding: 0.3rem 0.5rem;
+		font-size: 0.8rem;
+		color: #991b1b;
+		background: #fef2f2;
+		border-radius: 4px;
+		margin: 0 0.25rem;
 	}
 
 	/* Session list */

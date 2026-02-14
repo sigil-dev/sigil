@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:18789; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost",
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:18789; style-src 'self'; img-src 'self' asset: https://asset.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/sigil/**"]

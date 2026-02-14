@@ -21,10 +21,13 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
       try {
         const parsed = JSON.parse(data) as { text: string };
         return { type: "text_delta", text: parsed.text };
-      } catch (error) {
-        // Fall back to raw text if not JSON (e.g., multi-line data)
-        console.warn("Failed to parse text_delta JSON, using raw text:", error);
-        return { type: "text_delta", text: data };
+      } catch (e) {
+        return {
+          type: "parse_error",
+          eventType,
+          rawData: data,
+          error: e instanceof Error ? e.message : "JSON parse failed",
+        };
       }
     }
     case "session_id": {

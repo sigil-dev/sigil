@@ -45,9 +45,13 @@ describe("parseSSEEventData", () => {
     expect(result).toEqual({ type: "done" });
   });
 
-  it("falls back to raw text for non-JSON text_delta data", () => {
+  it("returns parse_error for non-JSON text_delta data", () => {
     const result = parseSSEEventData("text_delta", "not json");
-    expect(result).toEqual({ type: "text_delta", text: "not json" });
+    expect(result.type).toBe("parse_error");
+    if (result.type === "parse_error") {
+      expect(result.eventType).toBe("text_delta");
+      expect(result.rawData).toBe("not json");
+    }
   });
 
   it("returns parse_error for malformed tool_call JSON", () => {
@@ -76,13 +80,13 @@ describe("parseSSEStream", () => {
   });
 
   it("concatenates multi-line data fields with newlines", () => {
-    const raw = "event: text_delta\ndata: line1\ndata: line2\ndata: line3\n\n";
+    const raw = "event: error\ndata: line1\ndata: line2\ndata: line3\n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     // Multi-line data should be joined with newlines per SSE spec
-    expect(events[0].type).toBe("text_delta");
-    if (events[0].type === "text_delta") {
-      expect(events[0].text).toBe("line1\nline2\nline3");
+    expect(events[0].type).toBe("error");
+    if (events[0].type === "error") {
+      expect(events[0].message).toBe("line1\nline2\nline3");
     }
   });
 
@@ -106,7 +110,7 @@ describe("parseSSEStream", () => {
   });
 
   it("strips exactly one leading space after 'data:' per SSE spec", () => {
-    const raw = "event: text_delta\ndata: value\n\n";
+    const raw = 'event: text_delta\ndata: {"text":"value"}\n\n';
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("text_delta");
@@ -116,17 +120,17 @@ describe("parseSSEStream", () => {
   });
 
   it("preserves additional leading spaces after the first one", () => {
-    const raw = "event: text_delta\ndata:  value\n\n";
+    const raw = "event: error\ndata:  value\n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe("text_delta");
-    if (events[0].type === "text_delta") {
-      expect(events[0].text).toBe(" value");
+    expect(events[0].type).toBe("error");
+    if (events[0].type === "error") {
+      expect(events[0].message).toBe(" value");
     }
   });
 
   it("handles no leading space after colon", () => {
-    const raw = "event: text_delta\ndata:value\n\n";
+    const raw = 'event: text_delta\ndata:{"text":"value"}\n\n';
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("text_delta");
