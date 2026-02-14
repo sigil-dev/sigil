@@ -151,6 +151,26 @@ func convertBindings(bindings []config.BindingConfig) []workspace.Binding {
 	return out
 }
 
+// providerFactory builds a provider.Provider from a ProviderConfig.
+type providerFactory func(config.ProviderConfig) (provider.Provider, error)
+
+// builtinProviderFactories maps provider names to their constructors.
+// Declared as a variable so tests can inject failing factories.
+var builtinProviderFactories = map[string]providerFactory{
+	"anthropic": func(pc config.ProviderConfig) (provider.Provider, error) {
+		return anthropicprov.New(anthropicprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
+	},
+	"google": func(pc config.ProviderConfig) (provider.Provider, error) {
+		return googleprov.New(googleprov.Config{APIKey: pc.APIKey})
+	},
+	"openai": func(pc config.ProviderConfig) (provider.Provider, error) {
+		return openaiprov.New(openaiprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
+	},
+	"openrouter": func(pc config.ProviderConfig) (provider.Provider, error) {
+		return openrouterprov.New(openrouterprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
+	},
+}
+
 // registerBuiltinProviders iterates configured providers and registers
 // matching built-in implementations. Unknown names or empty API keys are
 // logged and skipped — neither is fatal at startup.
@@ -160,23 +180,12 @@ func registerBuiltinProviders(cfg *config.Config, reg *provider.Registry) {
 			slog.Warn("skipping provider with empty API key", "provider", name)
 			continue
 		}
-		var (
-			p   provider.Provider
-			err error
-		)
-		switch name {
-		case "anthropic":
-			p, err = anthropicprov.New(anthropicprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
-		case "google":
-			p, err = googleprov.New(googleprov.Config{APIKey: pc.APIKey})
-		case "openai":
-			p, err = openaiprov.New(openaiprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
-		case "openrouter":
-			p, err = openrouterprov.New(openrouterprov.Config{APIKey: pc.APIKey, BaseURL: pc.Endpoint})
-		default:
+		factory, ok := builtinProviderFactories[name]
+		if !ok {
 			slog.Warn("unknown provider in config, skipping", "provider", name)
 			continue
 		}
+		p, err := factory(pc)
 		if err != nil {
 			slog.Warn("failed to create provider", "provider", name, "error", err)
 			continue

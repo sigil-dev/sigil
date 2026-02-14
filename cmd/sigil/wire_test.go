@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/config"
+	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -218,6 +220,28 @@ func TestWireGateway_ProviderSkipsEmptyAPIKey(t *testing.T) {
 
 	_, err = gw.ProviderRegistry.Get("anthropic")
 	assert.Error(t, err, "provider with empty API key should not be registered")
+}
+
+func TestWireGateway_ProviderCreationFailureSkipped(t *testing.T) {
+	// Inject a factory that always fails to exercise the err != nil path.
+	orig := builtinProviderFactories["anthropic"]
+	builtinProviderFactories["anthropic"] = func(_ config.ProviderConfig) (provider.Provider, error) {
+		return nil, fmt.Errorf("injected failure")
+	}
+	t.Cleanup(func() { builtinProviderFactories["anthropic"] = orig })
+
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {APIKey: "test-key"},
+	}
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err, "provider creation failure should not prevent startup")
+	defer func() { _ = gw.Close() }()
+
+	_, err = gw.ProviderRegistry.Get("anthropic")
+	assert.Error(t, err, "failed provider should not be registered")
 }
 
 func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
