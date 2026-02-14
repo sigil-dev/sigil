@@ -16,11 +16,25 @@ import (
 // Config is the top-level Sigil configuration.
 type Config struct {
 	Networking NetworkingConfig           `mapstructure:"networking"`
+	Auth       AuthConfig                 `mapstructure:"auth"`
 	Providers  map[string]ProviderConfig  `mapstructure:"providers"`
 	Models     ModelsConfig               `mapstructure:"models"`
 	Sessions   SessionsConfig             `mapstructure:"sessions"`
 	Storage    StorageConfig              `mapstructure:"storage"`
 	Workspaces map[string]WorkspaceConfig `mapstructure:"workspaces"`
+}
+
+// AuthConfig controls REST API authentication.
+type AuthConfig struct {
+	Tokens []TokenConfig `mapstructure:"tokens"`
+}
+
+// TokenConfig maps a bearer token to a user identity.
+type TokenConfig struct {
+	Token       string   `mapstructure:"token"`
+	UserID      string   `mapstructure:"user_id"`
+	Name        string   `mapstructure:"name"`
+	Permissions []string `mapstructure:"permissions"`
 }
 
 // NetworkingConfig controls how Sigil listens for connections.

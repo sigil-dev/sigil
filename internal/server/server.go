@@ -20,10 +20,11 @@ import (
 
 // Config holds HTTP server configuration.
 type Config struct {
-	ListenAddr   string
-	CORSOrigins  []string
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	ListenAddr     string
+	CORSOrigins    []string
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	TokenValidator TokenValidator // nil = auth disabled (dev mode)
 }
 
 // Server wraps a chi router with huma API and HTTP server.
@@ -53,7 +54,7 @@ func New(cfg Config) (*Server, error) {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
 	r.Use(corsMiddleware(cfg.CORSOrigins))
-	r.Use(authMiddleware)
+	r.Use(authMiddleware(cfg.TokenValidator))
 
 	// Huma API with OpenAPI spec
 	humaConfig := huma.DefaultConfig("Sigil Gateway", "0.1.0")

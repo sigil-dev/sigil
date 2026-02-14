@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -12,10 +13,18 @@ import (
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
-// Budget defines token budget constraints for a routing request.
+// Budget defines token and USD budget constraints for a routing request.
+// The caller (agent loop) is responsible for tracking cumulative spend
+// and populating these fields; routing only enforces the limits.
 type Budget struct {
 	MaxSessionTokens  int
 	UsedSessionTokens int
+
+	// USD budget constraints (0 = unlimited).
+	MaxHourUSD  float64
+	UsedHourUSD float64
+	MaxDayUSD   float64
+	UsedDayUSD  float64
 }
 
 // Registry manages provider registration, lookup, and routing with
@@ -116,6 +125,22 @@ func (r *Registry) RouteWithBudget(ctx context.Context, workspaceID, modelName s
 		return nil, "", sigilerr.New(
 			sigilerr.CodeProviderBudgetExceeded,
 			"budget exceeded: used "+itoa(budget.UsedSessionTokens)+" of "+itoa(budget.MaxSessionTokens)+" tokens",
+		)
+	}
+
+	// 1b. Check hourly USD budget.
+	if budget != nil && budget.MaxHourUSD > 0 && budget.UsedHourUSD >= budget.MaxHourUSD {
+		return nil, "", sigilerr.New(
+			sigilerr.CodeProviderBudgetExceeded,
+			"budget exceeded: hourly USD spend $"+formatUSD(budget.UsedHourUSD)+" of $"+formatUSD(budget.MaxHourUSD)+" limit",
+		)
+	}
+
+	// 1c. Check daily USD budget.
+	if budget != nil && budget.MaxDayUSD > 0 && budget.UsedDayUSD >= budget.MaxDayUSD {
+		return nil, "", sigilerr.New(
+			sigilerr.CodeProviderBudgetExceeded,
+			"budget exceeded: daily USD spend $"+formatUSD(budget.UsedDayUSD)+" of $"+formatUSD(budget.MaxDayUSD)+" limit",
 		)
 	}
 
@@ -236,6 +261,11 @@ func parseRef(ref string) (providerName, model string) {
 		return ref, ""
 	}
 	return ref[:idx], ref[idx+1:]
+}
+
+// formatUSD formats a float64 as a two-decimal USD string (e.g. "5.00").
+func formatUSD(v float64) string {
+	return fmt.Sprintf("%.2f", v)
 }
 
 // itoa converts an int to a string without importing strconv.

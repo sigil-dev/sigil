@@ -186,3 +186,225 @@ func TestRegistry_MaxAttempts(t *testing.T) {
 	reg.SetFailover([]string{"a/model", "b/model", "c/model"})
 	assert.Equal(t, 4, reg.MaxAttempts())
 }
+
+func TestRegistry_BudgetEnforcement_HourlyUSD(t *testing.T) {
+	reg := provider.NewRegistry()
+	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
+	reg.Register("anthropic", anthropic)
+	reg.SetDefault("anthropic/claude-sonnet-4-5")
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		budget  *provider.Budget
+		wantErr bool
+		errCode sigilerr.Code
+	}{
+		{
+			name: "hourly budget not exceeded",
+			budget: &provider.Budget{
+				MaxHourUSD:  5.00,
+				UsedHourUSD: 3.00,
+			},
+			wantErr: false,
+		},
+		{
+			name: "hourly budget exactly met",
+			budget: &provider.Budget{
+				MaxHourUSD:  5.00,
+				UsedHourUSD: 5.00,
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderBudgetExceeded,
+		},
+		{
+			name: "hourly budget exceeded",
+			budget: &provider.Budget{
+				MaxHourUSD:  5.00,
+				UsedHourUSD: 7.50,
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderBudgetExceeded,
+		},
+		{
+			name: "hourly budget zero means unlimited",
+			budget: &provider.Budget{
+				MaxHourUSD:  0,
+				UsedHourUSD: 999.99,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := reg.RouteWithBudget(ctx, "", "", tt.budget, nil)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.errCode))
+				assert.Contains(t, err.Error(), "budget")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestRegistry_BudgetEnforcement_DailyUSD(t *testing.T) {
+	reg := provider.NewRegistry()
+	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
+	reg.Register("anthropic", anthropic)
+	reg.SetDefault("anthropic/claude-sonnet-4-5")
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		budget  *provider.Budget
+		wantErr bool
+		errCode sigilerr.Code
+	}{
+		{
+			name: "daily budget not exceeded",
+			budget: &provider.Budget{
+				MaxDayUSD:  50.00,
+				UsedDayUSD: 25.00,
+			},
+			wantErr: false,
+		},
+		{
+			name: "daily budget exactly met",
+			budget: &provider.Budget{
+				MaxDayUSD:  50.00,
+				UsedDayUSD: 50.00,
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderBudgetExceeded,
+		},
+		{
+			name: "daily budget exceeded",
+			budget: &provider.Budget{
+				MaxDayUSD:  50.00,
+				UsedDayUSD: 75.00,
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderBudgetExceeded,
+		},
+		{
+			name: "daily budget zero means unlimited",
+			budget: &provider.Budget{
+				MaxDayUSD:  0,
+				UsedDayUSD: 999.99,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := reg.RouteWithBudget(ctx, "", "", tt.budget, nil)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.errCode))
+				assert.Contains(t, err.Error(), "budget")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestRegistry_BudgetEnforcement_CombinedLimits(t *testing.T) {
+	reg := provider.NewRegistry()
+	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
+	reg.Register("anthropic", anthropic)
+	reg.SetDefault("anthropic/claude-sonnet-4-5")
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		budget  *provider.Budget
+		wantErr bool
+	}{
+		{
+			name: "all limits within bounds",
+			budget: &provider.Budget{
+				MaxSessionTokens:  100000,
+				UsedSessionTokens: 5000,
+				MaxHourUSD:        5.00,
+				UsedHourUSD:       1.00,
+				MaxDayUSD:         50.00,
+				UsedDayUSD:        10.00,
+			},
+			wantErr: false,
+		},
+		{
+			name: "tokens exceeded but USD ok",
+			budget: &provider.Budget{
+				MaxSessionTokens:  1000,
+				UsedSessionTokens: 1500,
+				MaxHourUSD:        5.00,
+				UsedHourUSD:       1.00,
+				MaxDayUSD:         50.00,
+				UsedDayUSD:        10.00,
+			},
+			wantErr: true,
+		},
+		{
+			name: "hourly exceeded but tokens and daily ok",
+			budget: &provider.Budget{
+				MaxSessionTokens:  100000,
+				UsedSessionTokens: 5000,
+				MaxHourUSD:        5.00,
+				UsedHourUSD:       6.00,
+				MaxDayUSD:         50.00,
+				UsedDayUSD:        10.00,
+			},
+			wantErr: true,
+		},
+		{
+			name: "daily exceeded but tokens and hourly ok",
+			budget: &provider.Budget{
+				MaxSessionTokens:  100000,
+				UsedSessionTokens: 5000,
+				MaxHourUSD:        5.00,
+				UsedHourUSD:       1.00,
+				MaxDayUSD:         50.00,
+				UsedDayUSD:        55.00,
+			},
+			wantErr: true,
+		},
+		{
+			name:    "nil budget always passes",
+			budget:  nil,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := reg.RouteWithBudget(ctx, "", "", tt.budget, nil)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestBudget_USDFieldsExist(t *testing.T) {
+	b := provider.Budget{
+		MaxSessionTokens:  100000,
+		UsedSessionTokens: 0,
+		MaxHourUSD:        5.00,
+		UsedHourUSD:       0,
+		MaxDayUSD:         50.00,
+		UsedDayUSD:        0,
+	}
+	assert.Equal(t, 5.00, b.MaxHourUSD)
+	assert.Equal(t, 50.00, b.MaxDayUSD)
+}
