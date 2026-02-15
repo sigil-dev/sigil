@@ -168,19 +168,19 @@ func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStream
 		// SSE spec requires each line of a multi-line payload to be
 		// prefixed with "data: ". Split on newlines and emit each line.
 		if _, err := fmt.Fprintf(w, "event: %s\n", event.Event); err != nil {
-			slog.Debug("sse: write error", "error", err)
+			slog.Warn("sse: write error", "error", err)
 			drainSSEChannel(ch)
 			return
 		}
 		for _, line := range strings.Split(event.Data, "\n") {
 			if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
-				slog.Debug("sse: write error", "error", err)
+				slog.Warn("sse: write error", "error", err)
 				drainSSEChannel(ch)
 				return
 			}
 		}
 		if _, err := fmt.Fprint(w, "\n"); err != nil {
-			slog.Debug("sse: write error", "error", err)
+			slog.Warn("sse: write error", "error", err)
 			drainSSEChannel(ch)
 			return
 		}
@@ -208,7 +208,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 			var err error
 			raw, err = json.Marshal(event.Data)
 			if err != nil {
-				slog.Debug("writeJSON: failed to marshal event data, skipping event", "error", err, "event", event.Event)
+				slog.Warn("writeJSON: failed to marshal event data, skipping event", "error", err, "event", event.Event)
 				continue
 			}
 		}
@@ -229,5 +229,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 func jsonError(w http.ResponseWriter, body string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_, _ = fmt.Fprint(w, body)
+	if _, err := fmt.Fprint(w, body); err != nil {
+		slog.Debug("jsonError: failed to write error response", "error", err, "code", code)
+	}
 }

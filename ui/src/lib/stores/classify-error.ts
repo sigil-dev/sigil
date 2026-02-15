@@ -14,7 +14,7 @@ export function classifyError(error: unknown): ClassifiedError {
     return { message: "Network error — cannot reach gateway", isNetwork: true };
   }
   if (error instanceof TypeError) {
-    return { message: "Unexpected client error", isNetwork: false };
+    return { message: `Client error: ${error.message}`, isNetwork: false };
   }
   if (error instanceof Response || (error && typeof error === "object" && "status" in error)) {
     const status = (error as { status?: number }).status;
@@ -26,5 +26,11 @@ export function classifyError(error: unknown): ClassifiedError {
   if (error instanceof Error) {
     return { message: error.message, isNetwork: false };
   }
-  return { message: "An unexpected error occurred", isNetwork: false };
+  const message =
+    typeof error === "string"
+      ? error
+      : error && typeof error === "object" && "message" in error
+        ? String((error as { message: unknown }).message)
+        : "An unexpected error occurred";
+  return { message, isNetwork: false };
 }

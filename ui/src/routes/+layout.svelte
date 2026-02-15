@@ -17,9 +17,18 @@
 		let cleanup: (() => void) | undefined;
 
 		(async () => {
+			// Try to import Tauri API - if this fails, we're not in Tauri environment
+			let listen;
 			try {
-				const { listen } = await import('@tauri-apps/api/event');
+				({ listen } = await import('@tauri-apps/api/event'));
+			} catch (e) {
+				// Not in Tauri environment - ignore
+				console.debug('Tauri API not available:', e);
+				return;
+			}
 
+			// We're in Tauri - any failures from here on are real errors
+			try {
 				// Listen for sidecar startup errors
 				const errorUnlisten = await listen<string>('sidecar-error', (event) => {
 					console.error('Sidecar error:', event.payload);
@@ -55,8 +64,9 @@
 					retryUnlisten();
 				};
 			} catch (e) {
-				// Not in Tauri environment - ignore
-				console.debug('Tauri API not available:', e);
+				// IPC or listener setup failure - this is a real error
+				console.error('Failed to set up Tauri event listeners:', e);
+				sidecarError = 'Failed to initialize desktop app communication. Please restart the application.';
 			}
 		})();
 

@@ -317,3 +317,80 @@ func TestSSE_DrainOnWriteError(t *testing.T) {
 		t.Fatal("HandleStream goroutine did not exit; channel was not drained (goroutine leak)")
 	}
 }
+
+func TestSSE_MalformedJSONBody(t *testing.T) {
+	srv := newTestSSEServer(t, nil)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "completely invalid json",
+			body: `{this is not json at all}`,
+		},
+		{
+			name: "truncated json",
+			body: `{"content": "Hello", "workspace_id":`,
+		},
+		{
+			name: "random garbage",
+			body: `!@#$%^&*()`,
+		},
+		{
+			name: "empty body",
+			body: ``,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "text/event-stream")
+
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+
+			var errResp map[string]string
+			err := json.Unmarshal(w.Body.Bytes(), &errResp)
+			require.NoError(t, err)
+			assert.Contains(t, errResp["error"], "invalid request body")
+		})
+	}
+}
+
+func TestSSE_JSONResponse_EmptyStream(t *testing.T) {
+	// Handler that closes channel immediately without sending any events.
+	emptyHandler := &mockStreamHandler{events: []server.SSEEvent{}}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(emptyHandler)
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No Accept: text/event-stream — should get JSON.
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+
+	var resp struct {
+		Events []server.SSEEvent `json:"events"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
+
+	// Verify the events array is empty, not null.
+	assert.NotNil(t, resp.Events, "events array should not be nil")
+	assert.Len(t, resp.Events, 0, "events array should be empty")
+
+	// Verify the exact JSON structure matches {"events":[]}.
+	assert.JSONEq(t, `{"events":[]}`, w.Body.String())
+}

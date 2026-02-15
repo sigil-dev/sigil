@@ -40,12 +40,18 @@ func newSessionListCmd() *cobra.Command {
 }
 
 func runSessionList(cmd *cobra.Command, _ []string) error {
-	workspace, _ := cmd.Flags().GetString("workspace")
+	workspace, err := cmd.Flags().GetString("workspace")
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "parsing workspace flag: %w", err)
+	}
 	if workspace == "" {
 		return sigilerr.New(sigilerr.CodeCLIInputInvalid, "--workspace flag is required")
 	}
 
-	addr, _ := cmd.Flags().GetString("address")
+	addr, err := cmd.Flags().GetString("address")
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "parsing address flag: %w", err)
+	}
 	out := cmd.OutOrStdout()
 
 	gw := newGatewayClient(addr)

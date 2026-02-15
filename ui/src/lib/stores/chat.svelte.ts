@@ -184,7 +184,7 @@ export class ChatStore {
         let detail = errText;
         try {
           const errJson = JSON.parse(errText) as { detail?: string };
-          if (errJson.detail) detail = errJson.detail;
+          if (errJson.detail !== undefined) detail = errJson.detail;
         } catch {
           logger.warn("Server returned non-JSON error response", {
             status: response.status,
@@ -209,6 +209,11 @@ export class ChatStore {
       await this.readSSEStream(response.body, assistantMessage.id);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") {
+        // Clean up empty assistant message after user cancellation
+        const msg = this.messages.find((m) => m.id === assistantMessage.id);
+        if (!msg?.content) {
+          this.removeMessage(assistantMessage.id);
+        }
         return;
       }
       if (err instanceof DOMException && err.name === "TimeoutError") {

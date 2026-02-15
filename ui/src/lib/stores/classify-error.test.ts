@@ -23,11 +23,11 @@ describe("classifyError", () => {
     });
   });
 
-  it("classifies TypeError without 'fetch' or 'network' as unexpected client error", () => {
+  it("classifies TypeError without 'fetch' or 'network' as client error with details", () => {
     const error = new TypeError("Something else went wrong");
     const result = classifyError(error);
     expect(result).toEqual({
-      message: "Unexpected client error",
+      message: "Client error: Something else went wrong",
       isNetwork: false,
     });
   });
@@ -80,11 +80,11 @@ describe("classifyError", () => {
     });
   });
 
-  it("classifies unknown value as unexpected error", () => {
+  it("classifies string error by preserving its value", () => {
     const error = "just a string";
     const result = classifyError(error);
     expect(result).toEqual({
-      message: "An unexpected error occurred",
+      message: "just a string",
       isNetwork: false,
     });
   });

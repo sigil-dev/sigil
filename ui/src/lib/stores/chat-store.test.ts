@@ -8,6 +8,7 @@ vi.mock("$lib/api/client", () => ({
   api: {
     GET: vi.fn(),
   },
+  API_BASE: "http://localhost:18789",
 }));
 
 // Mock import.meta.env
