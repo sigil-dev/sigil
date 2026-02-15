@@ -24,15 +24,16 @@ func (s *stubWorkspaceService) Get(context.Context, string) (*WorkspaceDetail, e
 
 type stubPluginService struct{}
 
-func (s *stubPluginService) List(context.Context) ([]PluginSummary, error)       { return nil, nil }
-func (s *stubPluginService) Get(context.Context, string) (*PluginDetail, error)   { return nil, nil }
-func (s *stubPluginService) Reload(context.Context, string) error                 { return nil }
+func (s *stubPluginService) List(context.Context) ([]PluginSummary, error)      { return nil, nil }
+func (s *stubPluginService) Get(context.Context, string) (*PluginDetail, error) { return nil, nil }
+func (s *stubPluginService) Reload(context.Context, string) error               { return nil }
 
 type stubSessionService struct{}
 
 func (s *stubSessionService) List(context.Context, string) ([]SessionSummary, error) {
 	return nil, nil
 }
+
 func (s *stubSessionService) Get(context.Context, string, string) (*SessionDetail, error) {
 	return nil, nil
 }
@@ -57,12 +58,12 @@ func TestNewServices(t *testing.T) {
 		errContain string
 	}{
 		{
-			name:    "all valid",
-			ws:      ws,
-			plugins: ps,
+			name:     "all valid",
+			ws:       ws,
+			plugins:  ps,
 			sessions: ss,
-			users:   us,
-			wantErr: false,
+			users:    us,
+			wantErr:  false,
 		},
 		{
 			name:       "nil workspace service",

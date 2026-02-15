@@ -432,7 +432,6 @@ func TestEnforcer_AuditLogging(t *testing.T) {
 	assert.NotEqual(t, allowed.ID, denied.ID)
 }
 
-
 // --- sigil-anm.17: Nil audit store guard and counter isolation ---
 
 func TestEnforcer_NilAuditStore(t *testing.T) {
@@ -509,4 +508,44 @@ func TestEnforcer_IndependentAuditIDSequences(t *testing.T) {
 
 	// All IDs should be unique (no collision across enforcers)
 	assert.Len(t, ids, 6, "expected 6 unique audit IDs across two independent enforcers")
+}
+
+func TestCheckRequest_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     security.CheckRequest
+		wantErr bool
+	}{
+		{
+			name:    "valid request",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "tool:exec"},
+			wantErr: false,
+		},
+		{
+			name:    "empty plugin",
+			req:     security.CheckRequest{Plugin: "", Capability: "tool:exec"},
+			wantErr: true,
+		},
+		{
+			name:    "empty capability",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: ""},
+			wantErr: true,
+		},
+		{
+			name:    "both empty",
+			req:     security.CheckRequest{Plugin: "", Capability: ""},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

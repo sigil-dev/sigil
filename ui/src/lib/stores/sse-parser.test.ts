@@ -140,7 +140,7 @@ describe("parseSSEEventData", () => {
     it("extracts message field from JSON error payload", () => {
       const result = parseSSEEventData(
         "error",
-        '{"error":"marshal_failure","message":"failed to marshal event data: unexpected EOF"}',
+        "{\"error\":\"marshal_failure\",\"message\":\"failed to marshal event data: unexpected EOF\"}",
       );
       expect(result).toEqual({
         type: "error",
@@ -149,13 +149,13 @@ describe("parseSSEEventData", () => {
     });
 
     it("falls back to error field when message is absent", () => {
-      const result = parseSSEEventData("error", '{"error":"rate_limited"}');
+      const result = parseSSEEventData("error", "{\"error\":\"rate_limited\"}");
       expect(result).toEqual({ type: "error", message: "rate_limited" });
     });
 
     it("uses raw data when JSON has no error or message field", () => {
-      const result = parseSSEEventData("error", '{"code":500}');
-      expect(result).toEqual({ type: "error", message: '{"code":500}' });
+      const result = parseSSEEventData("error", "{\"code\":500}");
+      expect(result).toEqual({ type: "error", message: "{\"code\":500}" });
     });
 
     it("parses done event", () => {

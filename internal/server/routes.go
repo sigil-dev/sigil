@@ -212,10 +212,11 @@ func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWo
 			// Fetch full workspace detail to check membership.
 			detail, detailErr := s.services.Workspaces.Get(ctx, w.ID)
 			if detailErr != nil {
-				continue // skip workspaces we can't verify
+				slog.Warn("skipping workspace during membership filter", "workspace_id", w.ID, "error", detailErr)
+				continue
 			}
 			for _, member := range detail.Members {
-				if member == user.ID {
+				if member == user.ID() {
 					filtered = append(filtered, w)
 					break
 				}

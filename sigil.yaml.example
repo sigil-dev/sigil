@@ -1,10 +1,31 @@
 # Sigil configuration
 # https://github.com/sigil-dev/sigil
 
+# Authentication
+# When tokens are configured, the following API behaviors change:
+# - GET /workspaces filters to only workspaces where the user is a member
+# - GET /plugins, GET /plugins/{id}, POST /plugins/{id}/reload require admin:plugins permission
+# - POST /chat and GET /chat/stream verify the user is a workspace member
+#
+# When no tokens are configured, all endpoints are accessible (development mode).
+# See docs/decisions/decision-log.md (D061) for details.
+#
+# auth:
+#   tokens:
+#     user_token_1:
+#       user_id: "user1"
+#       permissions: ["admin:plugins", "workspace:personal"]
+#     user_token_2:
+#       user_id: "user2"
+#       permissions: ["workspace:personal"]
+
 # Networking
 networking:
   mode: local                       # local | tailscale
   listen: "127.0.0.1:18789"
+  enable_hsts: false                # Enable HTTP Strict Transport Security
+  rate_limit_rps: 0                 # Requests per second per IP (0 = disabled)
+  rate_limit_burst: 0               # Burst size for rate limiting
   # tailscale:
   #   hostname: "my-agent"
   #   auth_key: "${TS_AUTHKEY}"

@@ -29,6 +29,17 @@ type CheckRequest struct {
 	UserPermissions CapabilitySet
 }
 
+// Validate checks that required fields are non-empty.
+func (r CheckRequest) Validate() error {
+	if r.Plugin == "" {
+		return sigilerr.New(sigilerr.CodeSecurityInvalidInput, "CheckRequest: Plugin must not be empty")
+	}
+	if r.Capability == "" {
+		return sigilerr.New(sigilerr.CodeSecurityInvalidInput, "CheckRequest: Capability must not be empty")
+	}
+	return nil
+}
+
 // Enforcer applies plugin, workspace, and user capability policy checks.
 type Enforcer struct {
 	mu             sync.RWMutex
@@ -68,6 +79,10 @@ func (e *Enforcer) UnregisterPlugin(name string) {
 
 // Check enforces plugin, workspace, and user capability policy constraints.
 func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
+	if err := req.Validate(); err != nil {
+		return err
+	}
+
 	e.mu.RLock()
 	pluginCaps, ok := e.plugins[req.Plugin]
 	e.mu.RUnlock()

@@ -301,7 +301,7 @@ func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, user)
-				assert.Equal(t, "user-1", user.ID)
+				assert.Equal(t, "user-1", user.ID())
 			}
 		})
 	}
@@ -322,4 +322,33 @@ func TestGateway_CloseDoesNotPanic(t *testing.T) {
 	// Close is idempotent for both subsystems, so we cannot verify that
 	// errors.Join collects errors from both without injectable mock closers.
 	// This test confirms Close does not panic on a properly initialized Gateway.
+}
+
+func TestWireGateway_RateLimitConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Networking.RateLimitRPS = 10.0
+	cfg.Networking.RateLimitBurst = 20
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	assert.NotNil(t, gw.Server)
+	// Server was created successfully with rate limit config.
+	// The middleware is tested separately in internal/server/ratelimit_test.go
+}
+
+func TestWireGateway_HSTSConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Networking.EnableHSTS = true
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	assert.NotNil(t, gw.Server)
+	// Server was created successfully with HSTS enabled.
+	// The middleware is tested separately in internal/server/hsts_test.go
 }

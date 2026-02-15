@@ -472,11 +472,7 @@ func TestSSE_WorkspaceMembership_ValidMember_Succeeds(t *testing.T) {
 	}
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Valid User",
-				Permissions: []string{"workspace:chat"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Valid User", []string{"workspace:chat"}),
 		},
 	}
 
@@ -510,11 +506,7 @@ func TestSSE_WorkspaceMembership_NonMember_Returns403(t *testing.T) {
 	// User who is NOT a member of the workspace gets 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-2",
-				Name:        "Non-Member User",
-				Permissions: []string{"workspace:chat"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-2", "Non-Member User", []string{"workspace:chat"}),
 		},
 	}
 
@@ -549,11 +541,7 @@ func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns403(t *testing.T) {
 	// Non-existent workspace returns 403 to prevent enumeration.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Valid User",
-				Permissions: []string{"workspace:chat"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Valid User", []string{"workspace:chat"}),
 		},
 	}
 
@@ -608,11 +596,7 @@ func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {
 	// When auth is enabled, empty workspace_id returns 422.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Valid User",
-				Permissions: []string{"workspace:chat"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Valid User", []string{"workspace:chat"}),
 		},
 	}
 
@@ -640,4 +624,115 @@ func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 	assert.Contains(t, w.Body.String(), "workspace_id is required")
+}
+
+// rapidStreamHandler sends events as fast as possible without pausing,
+// respecting context cancellation. Used to test race conditions during drain.
+type rapidStreamHandler struct {
+	eventCount int
+	started    chan struct{}
+	done       chan struct{}
+}
+
+func (h *rapidStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	defer close(ch)
+	defer close(h.done)
+	close(h.started)
+
+	for i := range h.eventCount {
+		select {
+		case ch <- server.SSEEvent{
+			Event: "text_delta",
+			Data:  fmt.Sprintf(`{"text":"chunk-%d"}`, i),
+		}:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func TestSSE_DrainRaceCondition_CancelDuringRapidWrites(t *testing.T) {
+	// Test for race condition between rapid event writes and channel drain.
+	// Scenario: Producer sending many events rapidly, consumer cancels after
+	// receiving only a few, drain goroutine must consume the rest without racing.
+	// Run with `go test -race` to detect data races.
+
+	handler := &rapidStreamHandler{
+		eventCount: 200, // well above channel buffer size (16)
+		started:    make(chan struct{}),
+		done:       make(chan struct{}),
+	}
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content":"test rapid cancellation","workspace_id":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Use a cancellable context to simulate early client disconnect.
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+
+	// countingResponseWriter tracks writes and triggers cancellation after N writes.
+	w := &countingResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		writeTrigger:     3,
+		onTrigger:        cancel,
+	}
+
+	// Start the request handler in a goroutine.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.Handler().ServeHTTP(w, req)
+	}()
+
+	// Wait for handler to start producing events.
+	select {
+	case <-handler.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not start within timeout")
+	}
+
+	// Wait for handler goroutine to finish (channel fully drained).
+	select {
+	case <-handler.done:
+		// success — no goroutine leak, drain worked
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandleStream goroutine did not exit; possible goroutine leak or race in drain logic")
+	}
+
+	// Wait for HTTP handler to finish.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HTTP handler did not finish")
+	}
+
+	// Verify we got at least some events before cancellation.
+	assert.GreaterOrEqual(t, w.writeCount, 3, "should have written at least 3 times before cancellation")
+}
+
+// countingResponseWriter wraps httptest.ResponseRecorder and calls onTrigger
+// after writeTrigger Write calls.
+type countingResponseWriter struct {
+	*httptest.ResponseRecorder
+	writeCount   int
+	writeTrigger int
+	onTrigger    func()
+}
+
+func (w *countingResponseWriter) Write(p []byte) (int, error) {
+	w.writeCount++
+	if w.writeCount == w.writeTrigger && w.onTrigger != nil {
+		w.onTrigger()
+	}
+	return w.ResponseRecorder.Write(p)
+}
+
+func (w *countingResponseWriter) Flush() {
+	w.ResponseRecorder.Flush()
 }

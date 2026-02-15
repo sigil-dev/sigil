@@ -102,6 +102,11 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		CORSOrigins:    cfg.Networking.CORSOrigins,
 		TokenValidator: tokenValidator,
 		BehindProxy:    cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
+		EnableHSTS:     cfg.Networking.EnableHSTS,
+		RateLimit: server.RateLimitConfig{
+			RequestsPerSecond: cfg.Networking.RateLimitRPS,
+			Burst:             cfg.Networking.RateLimitBurst,
+		},
 	})
 	if err != nil {
 		_ = gs.Close()

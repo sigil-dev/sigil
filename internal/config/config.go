@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -39,9 +40,12 @@ type TokenConfig struct {
 
 // NetworkingConfig controls how Sigil listens for connections.
 type NetworkingConfig struct {
-	Mode        string   `mapstructure:"mode"`
-	Listen      string   `mapstructure:"listen"`
-	CORSOrigins []string `mapstructure:"cors_origins"`
+	Mode           string   `mapstructure:"mode"`
+	Listen         string   `mapstructure:"listen"`
+	CORSOrigins    []string `mapstructure:"cors_origins"`
+	EnableHSTS     bool     `mapstructure:"enable_hsts"`
+	RateLimitRPS   float64  `mapstructure:"rate_limit_rps"`
+	RateLimitBurst int      `mapstructure:"rate_limit_burst"`
 }
 
 // ProviderConfig holds credentials and endpoint for an LLM provider.
@@ -211,6 +215,20 @@ func (c *Config) validateNetworking() []error {
 		}
 	}
 
+	if c.Networking.RateLimitRPS < 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: networking.rate_limit_rps must not be negative, got %g",
+			c.Networking.RateLimitRPS,
+		))
+	}
+
+	if c.Networking.RateLimitRPS > 0 && c.Networking.RateLimitBurst <= 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: networking.rate_limit_burst must be positive when rate_limit_rps is set, got burst=%d, rps=%g",
+			c.Networking.RateLimitBurst, c.Networking.RateLimitRPS,
+		))
+	}
+
 	return errs
 }
 
@@ -325,6 +343,7 @@ func validateStringInSet(value, fieldName string, validSet map[string]bool) erro
 		for k := range validSet {
 			validOptions = append(validOptions, k)
 		}
+		sort.Strings(validOptions)
 		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: %s must be one of %v, got %q",
 			fieldName, validOptions, value)

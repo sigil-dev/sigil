@@ -20,9 +20,9 @@ type TokenValidator interface {
 
 // AuthenticatedUser represents a validated user from a bearer token.
 type AuthenticatedUser struct {
-	ID          string
-	Name        string
-	Permissions []string // capability patterns
+	id          string
+	name        string
+	permissions []string // capability patterns
 }
 
 // NewAuthenticatedUser creates an AuthenticatedUser with validation.
@@ -32,10 +32,34 @@ func NewAuthenticatedUser(id, name string, permissions []string) (*Authenticated
 		return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "authenticated user ID must not be empty")
 	}
 	return &AuthenticatedUser{
-		ID:          id,
-		Name:        name,
-		Permissions: permissions,
+		id:          id,
+		name:        name,
+		permissions: append([]string(nil), permissions...),
 	}, nil
+}
+
+// ID returns the user's unique identifier.
+func (u *AuthenticatedUser) ID() string {
+	if u == nil {
+		return ""
+	}
+	return u.id
+}
+
+// Name returns the user's display name.
+func (u *AuthenticatedUser) Name() string {
+	if u == nil {
+		return ""
+	}
+	return u.name
+}
+
+// Permissions returns a copy of the user's permission patterns.
+func (u *AuthenticatedUser) Permissions() []string {
+	if u == nil {
+		return nil
+	}
+	return append([]string(nil), u.permissions...)
 }
 
 // contextKey is an unexported type for context keys in this package.
@@ -57,7 +81,7 @@ func (u *AuthenticatedUser) HasPermission(required string) bool {
 	if u == nil {
 		return false
 	}
-	for _, p := range u.Permissions {
+	for _, p := range u.permissions {
 		if p == "*" || p == required {
 			return true
 		}

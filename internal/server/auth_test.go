@@ -38,13 +38,10 @@ func (v *forbiddenTokenValidator) ValidateToken(_ context.Context, _ string) (*s
 }
 
 func newValidatorWithToken(token, userID, name string, permissions []string) server.TokenValidator {
+	user, _ := server.NewAuthenticatedUser(userID, name, permissions)
 	return &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			token: {
-				ID:          userID,
-				Name:        name,
-				Permissions: permissions,
-			},
+			token: user,
 		},
 	}
 }
@@ -193,9 +190,17 @@ func TestAuthMiddleware_ValidToken_UserInContext(t *testing.T) {
 	wrapped.ServeHTTP(w, req)
 
 	require.NotNil(t, capturedUser, "user must be injected into context")
-	assert.Equal(t, "user-1", capturedUser.ID)
-	assert.Equal(t, "Sean", capturedUser.Name)
-	assert.Equal(t, []string{"admin:*"}, capturedUser.Permissions)
+	assert.Equal(t, "user-1", capturedUser.ID())
+	assert.Equal(t, "Sean", capturedUser.Name())
+	assert.Equal(t, []string{"admin:*"}, capturedUser.Permissions())
+}
+
+func TestAuthenticatedUser_PermissionsCopy(t *testing.T) {
+	user, err := server.NewAuthenticatedUser("user-1", "Test", []string{"admin:*"})
+	require.NoError(t, err)
+	perms := user.Permissions()
+	perms[0] = "hacked"
+	assert.Equal(t, []string{"admin:*"}, user.Permissions())
 }
 
 func TestAuthMiddleware_Disabled_WhenValidatorNil(t *testing.T) {
@@ -345,11 +350,8 @@ func TestAuthenticatedUser_HasPermission(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			user := &server.AuthenticatedUser{
-				ID:          "user-1",
-				Name:        "Test User",
-				Permissions: tt.permissions,
-			}
+			user, err := server.NewAuthenticatedUser("user-1", "Test User", tt.permissions)
+			require.NoError(t, err)
 			got := user.HasPermission(tt.required)
 			assert.Equal(t, tt.want, got)
 		})
@@ -396,6 +398,109 @@ func TestAuthMiddleware_MalformedTokenEdgeCases(t *testing.T) {
 
 			assert.Equal(t, http.StatusUnauthorized, w.Code,
 				"malformed token %q should be rejected", tt.name)
+		})
+	}
+}
+
+func TestAuthMiddleware_MalformedBearerTokens(t *testing.T) {
+	// Test additional malformed bearer token edge cases:
+	// - Bearer with only whitespace
+	// - Bearer with double space between scheme and token
+	// - Bearer with null bytes in token
+	// - Bearer with JWT-like but invalid token
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: newValidatorWithToken("sk-valid-token", "admin", "Admin", []string{"*"}),
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	tests := []struct {
+		name  string
+		value string
+		want  int
+	}{
+		// Bearer with only whitespace
+		{"bearer with only spaces", "Bearer    ", http.StatusUnauthorized},
+		{"bearer with tabs", "Bearer\t\t", http.StatusUnauthorized},
+		{"bearer with mixed whitespace", "Bearer  \t  ", http.StatusUnauthorized},
+
+		// Bearer with double/multiple spaces between scheme and token
+		{"bearer double space before token", "Bearer  token", http.StatusUnauthorized},
+		{"bearer triple space before token", "Bearer   token", http.StatusUnauthorized},
+
+		// Bearer with null bytes in token
+		{"bearer with null byte at start", "Bearer \x00token", http.StatusUnauthorized},
+		{"bearer with null byte in middle", "Bearer tok\x00en", http.StatusUnauthorized},
+		{"bearer with null byte at end", "Bearer token\x00", http.StatusUnauthorized},
+
+		// Bearer with JWT-like token (valid format but not configured)
+		{"bearer jwt-like but unconfigured", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", http.StatusUnauthorized},
+
+		// Bearer with whitespace in token itself
+		{"bearer with space in token", "Bearer token with spaces", http.StatusUnauthorized},
+
+		// Bearer with control characters
+		{"bearer with newline", "Bearer token\n", http.StatusUnauthorized},
+		{"bearer with carriage return", "Bearer token\r", http.StatusUnauthorized},
+
+		// Valid bearer format but unconfigured token
+		{"bearer unconfigured token", "Bearer unconfigured-token", http.StatusUnauthorized},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+			req.Header.Set("Authorization", tt.value)
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, tt.want, w.Code,
+				"auth header %q should return %d", tt.value, tt.want)
+		})
+	}
+}
+
+func TestAuthMiddleware_EmptyAuthorizationHeaderValue(t *testing.T) {
+	// Test that an empty Authorization header (without "Bearer" prefix) returns 401.
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: newValidatorWithToken("sk-valid-token", "admin", "Admin", []string{"*"}),
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"empty string", ""},
+		{"only whitespace", "   "},
+		{"only tabs", "\t\t"},
+		{"only newline", "\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+			if tt.value != "" {
+				req.Header.Set("Authorization", tt.value)
+			}
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code,
+				"empty or whitespace-only auth header should be rejected")
 		})
 	}
 }

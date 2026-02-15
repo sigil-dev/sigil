@@ -57,3 +57,30 @@ func (m *mockProviderBase) Status(ctx context.Context) (provider.ProviderStatus,
 func (m *mockProviderBase) Close() error {
 	return nil
 }
+
+// mockProviderWithHealth extends mockProviderBase with health tracking capabilities.
+// It allows tests to simulate provider health state changes during streaming.
+type mockProviderWithHealth struct {
+	*mockProviderBase
+	healthTracker *provider.HealthTracker
+	chatFunc      func(context.Context, provider.ChatRequest) (<-chan provider.ChatEvent, error)
+}
+
+func (m *mockProviderWithHealth) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	if m.chatFunc != nil {
+		return m.chatFunc(ctx, req)
+	}
+	return m.mockProviderBase.Chat(ctx, req)
+}
+
+func (m *mockProviderWithHealth) RecordFailure() {
+	m.healthTracker.RecordFailure()
+}
+
+func (m *mockProviderWithHealth) RecordSuccess() {
+	m.healthTracker.RecordSuccess()
+}
+
+func (m *mockProviderWithHealth) Available(ctx context.Context) bool {
+	return m.healthTracker.IsHealthy()
+}

@@ -82,7 +82,7 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 	}
 	// Check if user is a member of the workspace.
 	for _, member := range ws.Members {
-		if member == user.ID {
+		if member == user.ID() {
 			return nil
 		}
 	}

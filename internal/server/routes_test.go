@@ -454,11 +454,7 @@ func TestRoutes_ReloadPlugin_InsufficientPermissions_Returns403(t *testing.T) {
 	// User with no admin permissions should get 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Regular User",
-				Permissions: []string{"workspace:read"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Regular User", []string{"workspace:read"}),
 		},
 	}
 
@@ -487,11 +483,7 @@ func TestRoutes_ReloadPlugin_WithAdminWildcard_Succeeds(t *testing.T) {
 	// User with admin:* permission should succeed.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"admin-token": {
-				ID:          "admin-1",
-				Name:        "Admin User",
-				Permissions: []string{"admin:*"},
-			},
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin User", []string{"admin:*"}),
 		},
 	}
 
@@ -520,11 +512,7 @@ func TestRoutes_ReloadPlugin_WithExactPermission_Succeeds(t *testing.T) {
 	// User with exact admin:plugins permission should succeed.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"admin-token": {
-				ID:          "admin-1",
-				Name:        "Admin User",
-				Permissions: []string{"admin:plugins"},
-			},
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin User", []string{"admin:plugins"}),
 		},
 	}
 
@@ -553,11 +541,7 @@ func TestRoutes_ListUsers_InsufficientPermissions_Returns403(t *testing.T) {
 	// User without admin:users permission should get 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Regular User",
-				Permissions: []string{"workspace:read"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Regular User", []string{"workspace:read"}),
 		},
 	}
 
@@ -586,11 +570,7 @@ func TestRoutes_ListPlugins_InsufficientPermissions_Returns403(t *testing.T) {
 	// User without admin:plugins permission should get 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Regular User",
-				Permissions: []string{"workspace:read"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Regular User", []string{"workspace:read"}),
 		},
 	}
 
@@ -619,11 +599,7 @@ func TestRoutes_GetPlugin_InsufficientPermissions_Returns403(t *testing.T) {
 	// User without admin:plugins permission should get 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Regular User",
-				Permissions: []string{"workspace:read"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Regular User", []string{"workspace:read"}),
 		},
 	}
 
@@ -652,11 +628,7 @@ func TestRoutes_GetWorkspace_NonMember_Returns403(t *testing.T) {
 	// User who is NOT a member of the workspace gets 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-2",
-				Name:        "Non-Member User",
-				Permissions: []string{"workspace:read"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-2", "Non-Member User", []string{"workspace:read"}),
 		},
 	}
 
@@ -686,11 +658,7 @@ func TestRoutes_ListSessions_NonMember_Returns403(t *testing.T) {
 	// User who is NOT a member of the workspace gets 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-2",
-				Name:        "Non-Member User",
-				Permissions: []string{"workspace:read"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-2", "Non-Member User", []string{"workspace:read"}),
 		},
 	}
 
@@ -720,11 +688,7 @@ func TestRoutes_GetSession_NonMember_Returns403(t *testing.T) {
 	// User who is NOT a member of the workspace gets 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-2",
-				Name:        "Non-Member User",
-				Permissions: []string{"workspace:read"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-2", "Non-Member User", []string{"workspace:read"}),
 		},
 	}
 
@@ -754,11 +718,7 @@ func TestRoutes_ListWorkspaces_FiltersByMembership(t *testing.T) {
 	// When auth is enabled, only workspaces the user is a member of are returned.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Member User",
-				Permissions: []string{"workspace:read"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Member User", []string{"workspace:read"}),
 		},
 	}
 
@@ -881,11 +841,7 @@ func TestRoutes_SendMessage_WorkspaceMembership_ValidMember_Succeeds(t *testing.
 	}
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Valid User",
-				Permissions: []string{"workspace:chat"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Valid User", []string{"workspace:chat"}),
 		},
 	}
 
@@ -917,11 +873,7 @@ func TestRoutes_SendMessage_WorkspaceMembership_NonMember_Returns403(t *testing.
 	// User who is NOT a member gets 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-2",
-				Name:        "Non-Member User",
-				Permissions: []string{"workspace:chat"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-2", "Non-Member User", []string{"workspace:chat"}),
 		},
 	}
 
@@ -954,11 +906,7 @@ func TestRoutes_SendMessage_WorkspaceMembership_WorkspaceNotFound_Returns403(t *
 	// Non-existent workspace returns 403 to prevent enumeration.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Valid User",
-				Permissions: []string{"workspace:chat"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Valid User", []string{"workspace:chat"}),
 		},
 	}
 
@@ -990,11 +938,7 @@ func TestRoutes_SendMessage_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *tes
 	// When auth is enabled, empty workspace_id returns 422.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"user-token": {
-				ID:          "user-1",
-				Name:        "Valid User",
-				Permissions: []string{"workspace:chat"},
-			},
+			"user-token": mustNewAuthenticatedUser("user-1", "Valid User", []string{"workspace:chat"}),
 		},
 	}
 

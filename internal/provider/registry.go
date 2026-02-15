@@ -27,6 +27,61 @@ type Budget struct {
 	UsedDayUSD  float64
 }
 
+// NewBudget creates a validated Budget. It returns an error if:
+// - Any field is negative
+// - UsedSessionTokens > MaxSessionTokens (when MaxSessionTokens > 0)
+// - UsedHourUSD > MaxHourUSD (when MaxHourUSD > 0)
+// - UsedDayUSD > MaxDayUSD (when MaxDayUSD > 0)
+func NewBudget(maxSessionTokens, usedSessionTokens int, maxHourUSD, usedHourUSD, maxDayUSD, usedDayUSD float64) (*Budget, error) {
+	b := &Budget{
+		MaxSessionTokens:  maxSessionTokens,
+		UsedSessionTokens: usedSessionTokens,
+		MaxHourUSD:        maxHourUSD,
+		UsedHourUSD:       usedHourUSD,
+		MaxDayUSD:         maxDayUSD,
+		UsedDayUSD:        usedDayUSD,
+	}
+	if err := b.Validate(); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// Validate checks that all budget fields are valid.
+func (b *Budget) Validate() error {
+	if b.MaxSessionTokens < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxSessionTokens must be non-negative, got %d", b.MaxSessionTokens)
+	}
+	if b.UsedSessionTokens < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedSessionTokens must be non-negative, got %d", b.UsedSessionTokens)
+	}
+	if b.MaxHourUSD < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxHourUSD must be non-negative, got %.2f", b.MaxHourUSD)
+	}
+	if b.UsedHourUSD < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedHourUSD must be non-negative, got %.2f", b.UsedHourUSD)
+	}
+	if b.MaxDayUSD < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxDayUSD must be non-negative, got %.2f", b.MaxDayUSD)
+	}
+	if b.UsedDayUSD < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedDayUSD must be non-negative, got %.2f", b.UsedDayUSD)
+	}
+
+	// Check that usage doesn't exceed limits (when limits are set).
+	if b.MaxSessionTokens > 0 && b.UsedSessionTokens > b.MaxSessionTokens {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedSessionTokens (%d) exceeds MaxSessionTokens (%d)", b.UsedSessionTokens, b.MaxSessionTokens)
+	}
+	if b.MaxHourUSD > 0 && b.UsedHourUSD > b.MaxHourUSD {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedHourUSD (%.2f) exceeds MaxHourUSD (%.2f)", b.UsedHourUSD, b.MaxHourUSD)
+	}
+	if b.MaxDayUSD > 0 && b.UsedDayUSD > b.MaxDayUSD {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedDayUSD (%.2f) exceeds MaxDayUSD (%.2f)", b.UsedDayUSD, b.MaxDayUSD)
+	}
+
+	return nil
+}
+
 // Registry manages provider registration, lookup, and routing with
 // failover and budget enforcement. It implements the Router interface.
 type Registry struct {

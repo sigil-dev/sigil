@@ -449,3 +449,43 @@ storage:
 	require.Error(t, err, "Load should fail with invalid config")
 	assert.Contains(t, err.Error(), "validating config")
 }
+
+func TestValidate_RateLimitConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		rps     float64
+		burst   int
+		wantErr string
+	}{
+		{"disabled - zero rps and burst", 0, 0, ""},
+		{"valid rate limit", 10.0, 20, ""},
+		{"valid fractional rps", 0.5, 5, ""},
+		{"negative rps", -5.0, 10, "rate_limit_rps must not be negative"},
+		{"rps set but burst zero", 10.0, 0, "rate_limit_burst must be positive"},
+		{"rps set but burst negative", 10.0, -5, "rate_limit_burst must be positive"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Networking.RateLimitRPS = tt.rps
+			cfg.Networking.RateLimitBurst = tt.burst
+			errs := cfg.Validate()
+			if tt.wantErr != "" {
+				require.NotEmpty(t, errs)
+				found := false
+				for _, err := range errs {
+					if strings.Contains(err.Error(), tt.wantErr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected error containing %q, got: %v", tt.wantErr, errs)
+			} else {
+				for _, err := range errs {
+					assert.NotContains(t, err.Error(), "rate_limit")
+				}
+			}
+		})
+	}
+}

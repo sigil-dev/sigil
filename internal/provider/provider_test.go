@@ -197,3 +197,102 @@ func TestProviderInterface_RouterContract(t *testing.T) {
 		_ = closeFunc(nil)
 	})
 }
+
+func TestProvider_MidStreamFailure_HealthTracking(t *testing.T) {
+	tests := []struct {
+		name                string
+		events              []provider.ChatEvent
+		wantHealthyAfter    bool
+		wantRecordedFailure bool
+	}{
+		{
+			name: "successful stream never calls RecordFailure",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeTextDelta, Text: "hello"},
+				{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+				{Type: provider.EventTypeDone},
+			},
+			wantHealthyAfter:    true,
+			wantRecordedFailure: false,
+		},
+		{
+			name: "error after first successful event marks provider unhealthy",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeTextDelta, Text: "hello"},
+				{Type: provider.EventTypeError, Error: "connection lost"},
+			},
+			wantHealthyAfter:    false,
+			wantRecordedFailure: true,
+		},
+		{
+			name: "error after multiple successful events marks provider unhealthy",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeTextDelta, Text: "hello"},
+				{Type: provider.EventTypeTextDelta, Text: " world"},
+				{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+				{Type: provider.EventTypeError, Error: "stream interrupted"},
+			},
+			wantHealthyAfter:    false,
+			wantRecordedFailure: true,
+		},
+		{
+			name: "immediate error before any successful events also marks unhealthy",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeError, Error: "auth failed"},
+			},
+			wantHealthyAfter:    false,
+			wantRecordedFailure: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a mock provider with custom Chat behavior.
+			base := newMockProviderBase("test-provider", true)
+			p := &mockProviderWithHealth{
+				mockProviderBase: base,
+				healthTracker:    provider.NewHealthTracker(provider.DefaultHealthCooldown),
+			}
+
+			// Override Chat to emit the test's event sequence.
+			p.chatFunc = func(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+				ch := make(chan provider.ChatEvent, len(tt.events))
+				for _, ev := range tt.events {
+					ch <- ev
+				}
+				close(ch)
+				return ch, nil
+			}
+
+			ctx := context.Background()
+			req := provider.ChatRequest{
+				Model: "test-model",
+				Messages: []provider.Message{
+					{Role: "user", Content: "test"},
+				},
+			}
+
+			// Start chat stream.
+			eventCh, err := p.Chat(ctx, req)
+			require.NoError(t, err)
+			require.NotNil(t, eventCh)
+
+			// Read all events and simulate the provider's internal health tracking.
+			// In real providers (e.g., anthropic.Provider), RecordFailure is called
+			// internally when an error event is emitted.
+			var sawError bool
+			for ev := range eventCh {
+				if ev.Type == provider.EventTypeError {
+					sawError = true
+					p.RecordFailure()
+				}
+			}
+
+			// Verify health state matches expectations.
+			assert.Equal(t, tt.wantHealthyAfter, p.healthTracker.IsHealthy(),
+				"health status should reflect whether an error occurred")
+			assert.Equal(t, tt.wantRecordedFailure, sawError,
+				"should have seen error event if and only if failure was expected")
+		})
+	}
+}

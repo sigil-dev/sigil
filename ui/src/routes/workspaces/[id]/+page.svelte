@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { api } from '$lib/api/client';
+	import { classifyError } from '$lib/stores/classify-error';
 	import type { components } from '$lib/api/generated/schema';
 
 	type WorkspaceDetail = components['schemas']['WorkspaceDetail'];
@@ -41,7 +42,7 @@
 				sessions = sessResp.data?.sessions || [];
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Unknown error';
+			error = classifyError(e).message;
 		} finally {
 			loading = false;
 		}

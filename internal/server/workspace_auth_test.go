@@ -33,7 +33,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 		name        string
 		user        *server.AuthenticatedUser // nil = auth disabled
 		workspaceID string
-		services    *server.Services          // nil = services not registered
+		services    *server.Services // nil = services not registered
 		wantErr     bool
 		wantStatus  int // expected HTTP status code from huma error
 		wantMsg     string
@@ -47,7 +47,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 		},
 		{
 			name:        "auth enabled with empty workspace_id returns 422",
-			user:        &server.AuthenticatedUser{ID: "user-1", Name: "Sean"},
+			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "",
 			services:    nil,
 			wantErr:     true,
@@ -56,7 +56,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 		},
 		{
 			name:        "nil services returns 503",
-			user:        &server.AuthenticatedUser{ID: "user-1", Name: "Sean"},
+			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "ws-1",
 			services:    nil,
 			wantErr:     true,
@@ -65,7 +65,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 		},
 		{
 			name:        "nil Workspaces field returns 503",
-			user:        &server.AuthenticatedUser{ID: "user-1", Name: "Sean"},
+			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "ws-1",
 			services:    &server.Services{Workspaces: nil},
 			wantErr:     true,
@@ -74,7 +74,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 		},
 		{
 			name:        "workspace not found returns 403 to prevent enumeration",
-			user:        &server.AuthenticatedUser{ID: "user-1", Name: "Sean"},
+			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "nonexistent",
 			services: &server.Services{
 				Workspaces: &stubWorkspaceService{
@@ -89,7 +89,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 		},
 		{
 			name:        "workspace Get returns internal error returns 500",
-			user:        &server.AuthenticatedUser{ID: "user-1", Name: "Sean"},
+			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "ws-broken",
 			services: &server.Services{
 				Workspaces: &stubWorkspaceService{
@@ -104,7 +104,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 		},
 		{
 			name:        "user is not a member returns 403",
-			user:        &server.AuthenticatedUser{ID: "user-99", Name: "Outsider"},
+			user:        mustNewAuthenticatedUser("user-99", "Outsider", nil),
 			workspaceID: "ws-1",
 			services: &server.Services{
 				Workspaces: &stubWorkspaceService{
@@ -122,7 +122,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 		},
 		{
 			name:        "user is a member returns nil",
-			user:        &server.AuthenticatedUser{ID: "user-1", Name: "Sean"},
+			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "ws-1",
 			services: &server.Services{
 				Workspaces: &stubWorkspaceService{

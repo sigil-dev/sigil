@@ -800,3 +800,41 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 - The empty array change is semantically equivalent (null vs empty array both represent "no events")
 
 **Ref:** PR #16 review findings #25, #26
+
+---
+
+## D061: Auth-Enabled API Behavioral Changes
+
+**Question:** When authentication is enabled (tokens configured), how should the following endpoints behave relative to their unauthenticated implementations?
+
+**Changes:**
+
+1. **Workspace listing** — `GET /workspaces` now filters results to only workspaces where the authenticated user is a member. Previously returned all workspaces regardless of user identity.
+
+2. **Plugin endpoints** — `GET /plugins`, `GET /plugins/{id}`, `POST /plugins/{id}/reload` now require `admin:plugins` permission. Previously accessible to any authenticated user.
+
+3. **Chat workspace verification** — `POST /chat` and `GET /chat/stream` now verify the authenticated user is a member of the specified workspace. Previously accepted any workspace ID from any authenticated user.
+
+**Decision:** These three behavioral changes are intentional security hardening measures applied when token validation is enabled.
+
+**Rationale:**
+
+- **Workspace filtering** provides proper access control — users see only workspaces they belong to, preventing accidental or malicious cross-workspace access.
+- **Plugin admin restriction** enforces the principle of least privilege — plugin management (reload, inspect, lifecycle) is a sensitive operation requiring explicit `admin:plugins` capability.
+- **Chat workspace verification** prevents unauthorized conversation access — users cannot initiate chats in workspaces they're not members of, even if they know the workspace ID.
+
+**Impact on existing clients:**
+
+- Clients that previously iterated all workspaces will now see filtered results. Clients should check for empty results gracefully.
+- Clients attempting plugin operations will receive 403 Forbidden unless the token has `admin:plugins` permission.
+- Clients attempting chat in non-member workspaces will receive 403 Forbidden.
+
+**Unauthenticated mode (no tokens configured):**
+
+When no tokens are configured, the gateway operates in development mode: authentication middleware is disabled, and all three endpoints return to their previous behavior (unrestricted workspace access, plugin operations available to all authenticated requests, chat accepted for any workspace). This preserves the development experience while allowing secure production deployments.
+
+**Token permissions:**
+
+Existing tokens and client authentication headers MUST be reviewed after enabling auth. Tokens that worked in unauthenticated mode may now be insufficient if clients relied on implicit access to all workspaces or plugin operations. Token permissions should be updated to grant specific `admin:plugins` or workspace-scoped capabilities as needed.
+
+**Ref:** PR #16, auth enforcement hardening during Phase 7 UI distribution

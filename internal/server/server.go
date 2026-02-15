@@ -25,7 +25,7 @@ type Config struct {
 	CORSOrigins    []string
 	ReadTimeout    time.Duration
 	WriteTimeout   time.Duration
-	TokenValidator TokenValidator  // nil = auth disabled (dev mode)
+	TokenValidator TokenValidator // nil = auth disabled (dev mode)
 	EnableHSTS     bool
 	RateLimit      RateLimitConfig // per-IP rate limiting
 	BehindProxy    bool            // true if behind a reverse proxy (enables RealIP middleware)
@@ -33,12 +33,12 @@ type Config struct {
 
 // Server wraps a chi router with huma API and HTTP server.
 type Server struct {
-	router         chi.Router
-	api            huma.API
-	cfg            Config
-	streamHandler  StreamHandler
-	services       *Services
-	rateLimitDone  chan struct{}
+	router        chi.Router
+	api           huma.API
+	cfg           Config
+	streamHandler StreamHandler
+	services      *Services
+	rateLimitDone chan struct{}
 }
 
 // New creates a Server with chi router, huma API, health endpoint, and CORS.

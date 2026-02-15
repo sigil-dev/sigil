@@ -336,9 +336,13 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 	}
 
 	// Build budget from session token limits so the router can enforce them.
-	budget := &provider.Budget{
-		MaxSessionTokens:  session.TokenBudget.MaxPerSession,
-		UsedSessionTokens: session.TokenBudget.UsedSession,
+	budget, err := provider.NewBudget(
+		session.TokenBudget.MaxPerSession,
+		session.TokenBudget.UsedSession,
+		0, 0, 0, 0, // USD budgets not yet tracked
+	)
+	if err != nil {
+		return nil, sigilerr.Wrap(err, sigilerr.CodeAgentLoopInvalidInput, "invalid budget")
 	}
 
 	maxAttempts := l.providerRouter.MaxAttempts()
@@ -406,7 +410,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		// replaying the full conversation to a fallback provider requires
 		// buffering all events and resending all messages — significant
 		// complexity with partial-output ambiguity. Mid-stream errors surface
-		// to the caller via processEvents. See bead sigil-dxw (docs/decisions/decision-log.md, Mid-stream failover) for tracking.
+		// to the caller via processEvents. See D036 in docs/decisions/decision-log.md (mid-stream failover).
 		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
 		wrappedCh <- firstEvent
 		go func() {
