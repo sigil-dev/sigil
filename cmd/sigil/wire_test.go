@@ -259,7 +259,7 @@ func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
 	assert.Error(t, err, "unknown provider should not be registered")
 }
 
-// Fix #6: Test constant-time token comparison
+// Test constant-time token comparison prevents timing attacks
 func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
 	validator := newConfigTokenValidator([]config.TokenConfig{
 		{Token: "valid-token-123", UserID: "user-1", Name: "Test User"},
@@ -307,8 +307,8 @@ func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
 	}
 }
 
-// Fix #10: Test Gateway.Close attempts to close all subsystems
-func TestGateway_CloseAttemptsAll(t *testing.T) {
+// Test Gateway.Close attempts to close all subsystems
+func TestGateway_CloseDoesNotPanic(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 

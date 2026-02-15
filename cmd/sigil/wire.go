@@ -343,21 +343,27 @@ type configTokenValidator struct {
 func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator {
 	m := make(map[string]*server.AuthenticatedUser, len(tokens))
 	for _, tc := range tokens {
-		m[tc.Token] = &server.AuthenticatedUser{
-			ID:          tc.UserID,
-			Name:        tc.Name,
-			Permissions: tc.Permissions,
+		user, err := server.NewAuthenticatedUser(tc.UserID, tc.Name, tc.Permissions)
+		if err != nil {
+			slog.Warn("skipping token with invalid user config", "error", err, "user_id", tc.UserID)
+			continue
 		}
+		m[tc.Token] = user
 	}
 	return &configTokenValidator{tokens: m}
 }
 
 func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {
-	// Use constant-time comparison to prevent timing attacks.
+	// Iterate all tokens to prevent timing side-channels that leak token count
+	// or matching position. Store match and return after full iteration.
+	var matched *server.AuthenticatedUser
 	for configuredToken, user := range v.tokens {
 		if subtle.ConstantTimeCompare([]byte(token), []byte(configuredToken)) == 1 {
-			return user, nil
+			matched = user
 		}
+	}
+	if matched != nil {
+		return matched, nil
 	}
 	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")
 }

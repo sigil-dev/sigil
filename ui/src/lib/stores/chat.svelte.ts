@@ -139,6 +139,10 @@ export class ChatStore {
    */
   async sendMessage(content: string): Promise<void> {
     if (!content.trim() || this.loading) return;
+    if (!this.workspaceId) {
+      this.error = "No workspace selected";
+      return;
+    }
 
     this.error = null;
 

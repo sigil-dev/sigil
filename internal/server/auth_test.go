@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/server"
@@ -283,4 +284,118 @@ func TestAuthMiddleware_WriteErrorLogged(t *testing.T) {
 	assert.NotPanics(t, func() {
 		srv.Handler().ServeHTTP(w, req)
 	})
+}
+
+func TestAuthenticatedUser_HasPermission(t *testing.T) {
+	tests := []struct {
+		name        string
+		permissions []string
+		required    string
+		want        bool
+	}{
+		{
+			name:        "exact match",
+			permissions: []string{"admin:reload"},
+			required:    "admin:reload",
+			want:        true,
+		},
+		{
+			name:        "wildcard match",
+			permissions: []string{"admin:*"},
+			required:    "admin:reload",
+			want:        true,
+		},
+		{
+			name:        "global wildcard",
+			permissions: []string{"*"},
+			required:    "admin:reload",
+			want:        true,
+		},
+		{
+			name:        "no match",
+			permissions: []string{"workspace:read"},
+			required:    "admin:reload",
+			want:        false,
+		},
+		{
+			name:        "prefix mismatch",
+			permissions: []string{"admin:*"},
+			required:    "workspace:reload",
+			want:        false,
+		},
+		{
+			name:        "empty permissions",
+			permissions: []string{},
+			required:    "admin:reload",
+			want:        false,
+		},
+		{
+			name:        "multiple permissions with match",
+			permissions: []string{"workspace:read", "admin:reload", "channel:send"},
+			required:    "admin:reload",
+			want:        true,
+		},
+		{
+			name:        "multiple permissions with wildcard",
+			permissions: []string{"workspace:read", "admin:*", "channel:send"},
+			required:    "admin:reload",
+			want:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			user := &server.AuthenticatedUser{
+				ID:          "user-1",
+				Name:        "Test User",
+				Permissions: tt.permissions,
+			}
+			got := user.HasPermission(tt.required)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestAuthenticatedUser_HasPermission_NilUser(t *testing.T) {
+	var user *server.AuthenticatedUser
+	got := user.HasPermission("admin:reload")
+	assert.False(t, got, "nil user should not have any permissions")
+}
+
+func TestAuthMiddleware_MalformedTokenEdgeCases(t *testing.T) {
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: newValidatorWithToken("sk-valid-token-abc123", "admin", "Admin", []string{"*"}),
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{"truncated token", "sk-valid"},
+		{"corrupted single char change", "sk-valid-token-abc124"},
+		{"null bytes", "sk-valid\x00token"},
+		{"very long token", strings.Repeat("a", 10000)},
+		{"unicode token", "sk-válíd-tökën-àbc123"},
+		{"whitespace padded", " sk-valid-token-abc123 "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+			req.Header.Set("Authorization", "Bearer "+tt.token)
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code,
+				"malformed token %q should be rejected", tt.name)
+		})
+	}
 }

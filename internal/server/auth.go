@@ -25,6 +25,19 @@ type AuthenticatedUser struct {
 	Permissions []string // capability patterns
 }
 
+// NewAuthenticatedUser creates an AuthenticatedUser with validation.
+// Returns an error if id is empty, since all authenticated users must have an identity.
+func NewAuthenticatedUser(id, name string, permissions []string) (*AuthenticatedUser, error) {
+	if id == "" {
+		return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "authenticated user ID must not be empty")
+	}
+	return &AuthenticatedUser{
+		ID:          id,
+		Name:        name,
+		Permissions: permissions,
+	}, nil
+}
+
 // contextKey is an unexported type for context keys in this package.
 type contextKey int
 
@@ -35,6 +48,28 @@ const authUserKey contextKey = iota
 func UserFromContext(ctx context.Context) *AuthenticatedUser {
 	user, _ := ctx.Value(authUserKey).(*AuthenticatedUser)
 	return user
+}
+
+// HasPermission checks whether the user has a permission matching the given pattern.
+// Uses the same glob matching as capability enforcement: "admin:*" matches "admin:reload".
+// Returns false if user is nil (unauthenticated / auth disabled).
+func (u *AuthenticatedUser) HasPermission(required string) bool {
+	if u == nil {
+		return false
+	}
+	for _, p := range u.Permissions {
+		if p == "*" || p == required {
+			return true
+		}
+		// Simple prefix glob: "admin:*" matches any "admin:..." permission.
+		if len(p) > 1 && p[len(p)-1] == '*' {
+			prefix := p[:len(p)-1]
+			if len(required) >= len(prefix) && required[:len(prefix)] == prefix {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // defaultPublicPaths are paths that never require authentication.

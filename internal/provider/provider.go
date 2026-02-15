@@ -110,6 +110,31 @@ const (
 	EventTypeError     EventType = "error"
 )
 
+// NewTextDeltaEvent creates a ChatEvent for streaming text content.
+func NewTextDeltaEvent(text string) ChatEvent {
+	return ChatEvent{Type: EventTypeTextDelta, Text: text}
+}
+
+// NewToolCallEvent creates a ChatEvent for a tool invocation.
+func NewToolCallEvent(tc *ToolCall) ChatEvent {
+	return ChatEvent{Type: EventTypeToolCall, ToolCall: tc}
+}
+
+// NewUsageEvent creates a ChatEvent with token usage information.
+func NewUsageEvent(usage *Usage) ChatEvent {
+	return ChatEvent{Type: EventTypeUsage, Usage: usage}
+}
+
+// NewDoneEvent creates a ChatEvent signaling stream completion.
+func NewDoneEvent() ChatEvent {
+	return ChatEvent{Type: EventTypeDone}
+}
+
+// NewErrorEvent creates a ChatEvent for stream errors.
+func NewErrorEvent(msg string) ChatEvent {
+	return ChatEvent{Type: EventTypeError, Error: msg}
+}
+
 // ToolCall represents a tool invocation by the LLM.
 type ToolCall struct {
 	ID        string

@@ -86,3 +86,15 @@ func TestHealthTracker_CooldownBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestHealthTracker_MidStreamFailure(t *testing.T) {
+	h := provider.NewHealthTracker(30 * time.Second)
+
+	// Simulate successful start of streaming
+	h.RecordSuccess()
+	assert.True(t, h.IsHealthy(), "should be healthy after initial success")
+
+	// Simulate mid-stream failure (abnormal termination after first event)
+	h.RecordFailure()
+	assert.False(t, h.IsHealthy(), "should be unhealthy after mid-stream failure despite prior success")
+}

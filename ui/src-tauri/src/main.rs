@@ -235,6 +235,9 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 
     if let Some(process) = process_lock.take() {
         let pid = process.pid();
+        // Drop the lock before entering the potentially long polling loop.
+        // We've already taken ownership of the process via take().
+        drop(process_lock);
 
         // Phase 1: Attempt graceful shutdown with SIGTERM (Unix only)
         #[cfg(unix)]

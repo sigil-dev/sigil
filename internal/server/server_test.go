@@ -152,3 +152,28 @@ func TestServer_CORSOrigins_DefaultsToLocalhost(t *testing.T) {
 
 	assert.Equal(t, "http://localhost:5173", w.Header().Get("Access-Control-Allow-Origin"))
 }
+
+func TestServer_HSTSHeader_WhenEnabled(t *testing.T) {
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0",
+		EnableHSTS: true,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Strict-Transport-Security"), "max-age=")
+}
+
+func TestServer_HSTSHeader_DisabledByDefault(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Empty(t, w.Header().Get("Strict-Transport-Security"))
+}

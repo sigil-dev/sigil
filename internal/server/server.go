@@ -24,7 +24,9 @@ type Config struct {
 	CORSOrigins    []string
 	ReadTimeout    time.Duration
 	WriteTimeout   time.Duration
-	TokenValidator TokenValidator // nil = auth disabled (dev mode)
+	TokenValidator TokenValidator  // nil = auth disabled (dev mode)
+	EnableHSTS     bool
+	RateLimit      RateLimitConfig // per-IP rate limiting
 }
 
 // Server wraps a chi router with huma API and HTTP server.
@@ -53,9 +55,10 @@ func New(cfg Config) (*Server, error) {
 	// Middleware
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
-	r.Use(securityHeadersMiddleware())
+	r.Use(securityHeadersMiddleware(cfg.EnableHSTS))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(authMiddleware(cfg.TokenValidator))
+	r.Use(rateLimitMiddleware(cfg.RateLimit))
 
 	// Huma API with OpenAPI spec
 	humaConfig := huma.DefaultConfig("Sigil Gateway", "0.1.0")
@@ -155,13 +158,16 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses.
-func securityHeadersMiddleware() func(http.Handler) http.Handler {
+func securityHeadersMiddleware(enableHSTS bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("X-Frame-Options", "DENY")
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("X-XSS-Protection", "0")
+			if enableHSTS {
+				w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

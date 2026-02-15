@@ -250,6 +250,12 @@ func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*
 }
 
 func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput) (*reloadPluginOutput, error) {
+	// Plugin reload requires admin permission.
+	user := UserFromContext(ctx)
+	if user != nil && !user.HasPermission("admin:reload") {
+		return nil, huma.Error403Forbidden("insufficient permissions to reload plugins")
+	}
+
 	if err := s.services.Plugins.Reload(ctx, input.Name); err != nil {
 		if IsNotFound(err) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
@@ -264,6 +270,11 @@ func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput)
 func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput) (*sendMessageOutput, error) {
 	if s.streamHandler == nil {
 		return nil, huma.Error503ServiceUnavailable("agent not configured")
+	}
+
+	// Verify workspace membership.
+	if err := s.checkWorkspaceMembership(ctx, input.Body.WorkspaceID); err != nil {
+		return nil, err
 	}
 
 	// Derive a cancellable context so we can signal the stream handler to stop
@@ -310,6 +321,14 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 	}
 }
 
+// truncateForLogging returns s truncated to maxLen with "..." suffix if needed.
+func truncateForLogging(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
+}
+
 // extractSessionID parses a session_id event payload and returns the session ID.
 // Falls back to the provided fallback if parsing fails.
 func extractSessionID(data string, fallback string) string {
@@ -317,10 +336,7 @@ func extractSessionID(data string, fallback string) string {
 		SessionID string `json:"session_id"`
 	}
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		truncated := data
-		if len(truncated) > 100 {
-			truncated = truncated[:100] + "..."
-		}
+		truncated := truncateForLogging(data, 100)
 		slog.Warn("failed to parse session_id event, using fallback",
 			"raw_data", truncated,
 			"error", err,
@@ -363,10 +379,7 @@ func extractText(data string) string {
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(data), &delta); err != nil {
-		truncated := data
-		if len(truncated) > 100 {
-			truncated = truncated[:100] + "..."
-		}
+		truncated := truncateForLogging(data, 100)
 		slog.Warn("failed to parse text_delta event, using raw string as fallback",
 			"raw_data", truncated,
 			"error", err,

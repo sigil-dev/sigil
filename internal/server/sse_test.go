@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -400,4 +401,225 @@ func TestSSE_JSONResponse_MarshalFailureEmitsErrorEvent(t *testing.T) {
 	// in writeJSON exists as defensive code but is untestable without
 	// runtime.UnsafeString or similar tricks.
 	t.Skip("json.Marshal on Go strings cannot fail in practice; error path exists but is untestable")
+}
+
+func TestSSE_DrainRaceCondition(t *testing.T) {
+	// Test concurrent write errors + channel drain don't race.
+	// This test relies on `go test -race` to detect data races.
+	const goroutines = 10
+
+	for i := range goroutines {
+		t.Run(fmt.Sprintf("concurrent-%d", i), func(t *testing.T) {
+			t.Parallel()
+			handler := &leakyStreamHandler{
+				eventCount: 100,
+				done:       make(chan struct{}),
+			}
+			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+			require.NoError(t, err)
+			srv.RegisterStreamHandler(handler)
+
+			body := `{"content":"race","workspace_id":"test"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "text/event-stream")
+
+			// Fail after 1 write to trigger drain path quickly.
+			w := newErrResponseWriter(1)
+			srv.Handler().ServeHTTP(w, req)
+
+			select {
+			case <-handler.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("goroutine leak: HandleStream did not exit")
+			}
+		})
+	}
+}
+
+func TestSSE_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(t *testing.T) {
+	// When auth is disabled (no validator), all workspaces are accessible.
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "any-workspace-id"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSSE_WorkspaceMembership_ValidMember_Succeeds(t *testing.T) {
+	// User who is a member of the workspace can stream messages.
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "done", Data: `{}`},
+	}
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-1",
+				Name:        "Valid User",
+				Permissions: []string{"workspace:chat"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+
+	// workspace "homelab" has member "user-1" (see mockWorkspaceService.Get)
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer user-token")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestSSE_WorkspaceMembership_NonMember_Returns403(t *testing.T) {
+	// User who is NOT a member of the workspace gets 403.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-2",
+				Name:        "Non-Member User",
+				Permissions: []string{"workspace:chat"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
+
+	// workspace "homelab" has member "user-1", not "user-2"
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer user-token")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "not a member of workspace")
+}
+
+func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns404(t *testing.T) {
+	// Non-existent workspace returns 404.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-1",
+				Name:        "Valid User",
+				Permissions: []string{"workspace:chat"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
+
+	body := `{"content": "Hello", "workspace_id": "nonexistent"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer user-token")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "not found")
+}
+
+func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {
+	// Empty workspace_id bypasses membership check (validated downstream).
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "done", Data: `{}`},
+	}
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-1",
+				Name:        "Valid User",
+				Permissions: []string{"workspace:chat"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": ""}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer user-token")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
 }
