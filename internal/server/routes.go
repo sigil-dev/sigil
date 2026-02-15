@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -300,10 +301,7 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 				// Cancel context and drain remaining events to unblock the
 				// stream handler goroutine before returning.
 				cancel()
-				go func() {
-					for range ch {
-					}
-				}()
+				drainSSEChannel(ch)
 				return nil, huma.Error502BadGateway(msg)
 			}
 		case <-ctx.Done():
@@ -318,7 +316,23 @@ func extractSessionID(data string, fallback string) string {
 	var payload struct {
 		SessionID string `json:"session_id"`
 	}
-	if err := json.Unmarshal([]byte(data), &payload); err != nil || payload.SessionID == "" {
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		truncated := data
+		if len(truncated) > 100 {
+			truncated = truncated[:100] + "..."
+		}
+		slog.Warn("failed to parse session_id event, using fallback",
+			"raw_data", truncated,
+			"error", err,
+			"fallback", fallback,
+		)
+		return fallback
+	}
+	if payload.SessionID == "" {
+		slog.Warn("session_id event has empty session_id field, using fallback",
+			"raw_data", data,
+			"fallback", fallback,
+		)
 		return fallback
 	}
 	return payload.SessionID
@@ -349,6 +363,14 @@ func extractText(data string) string {
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(data), &delta); err != nil {
+		truncated := data
+		if len(truncated) > 100 {
+			truncated = truncated[:100] + "..."
+		}
+		slog.Warn("failed to parse text_delta event, using raw string as fallback",
+			"raw_data", truncated,
+			"error", err,
+		)
 		return data
 	}
 	return delta.Text

@@ -147,7 +147,10 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 // drainSSEChannel consumes remaining events from ch so that the goroutine
 // writing to ch (HandleStream) does not block on a full buffer.
 func drainSSEChannel(ch <-chan SSEEvent) {
-	go func() { for range ch {} }()
+	go func() {
+		for range ch {
+		}
+	}()
 }
 
 func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStreamRequest) {
@@ -208,7 +211,10 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 			var err error
 			raw, err = json.Marshal(event.Data)
 			if err != nil {
-				slog.Warn("writeJSON: failed to marshal event data, skipping event", "error", err, "event", event.Event)
+				slog.Warn("writeJSON: failed to marshal event data, emitting error event", "error", err, "event", event.Event)
+				// Emit synthetic error event so client knows events were dropped.
+				errMsg := fmt.Sprintf(`{"error":"marshal_failure","message":"failed to marshal event data: %s"}`, err.Error())
+				events = append(events, jsonEvent{Event: "error", Data: json.RawMessage(errMsg)})
 				continue
 			}
 		}

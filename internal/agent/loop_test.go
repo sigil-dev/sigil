@@ -1240,6 +1240,144 @@ func TestAgentLoop_ChatFailureCallsRecordFailure(t *testing.T) {
 		"RecordFailure should be called on pre-stream Chat() error")
 }
 
+// mockProviderEmptyStreamWithHealth is a provider whose Chat() returns a channel
+// that closes immediately without events, and tracks RecordFailure calls.
+type mockProviderEmptyStreamWithHealth struct {
+	mu           sync.Mutex
+	failureCount int
+}
+
+func (p *mockProviderEmptyStreamWithHealth) Name() string { return "mock-empty-stream-health" }
+func (p *mockProviderEmptyStreamWithHealth) Available(_ context.Context) bool {
+	return true
+}
+
+func (p *mockProviderEmptyStreamWithHealth) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-empty-stream-health"}, nil
+}
+
+func (p *mockProviderEmptyStreamWithHealth) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderEmptyStreamWithHealth) Close() error { return nil }
+func (p *mockProviderEmptyStreamWithHealth) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent)
+	close(ch) // Close immediately without sending any events
+	return ch, nil
+}
+
+func (p *mockProviderEmptyStreamWithHealth) RecordFailure() {
+	p.mu.Lock()
+	p.failureCount++
+	p.mu.Unlock()
+}
+func (p *mockProviderEmptyStreamWithHealth) RecordSuccess() {}
+func (p *mockProviderEmptyStreamWithHealth) getFailureCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failureCount
+}
+
+func TestAgentLoop_EmptyStreamCallsRecordFailure(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	healthProv := &mockProviderEmptyStreamWithHealth{}
+	router := &mockProviderRouter{provider: healthProv}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+
+	// RecordFailure should have been called for the empty stream.
+	assert.Equal(t, 1, healthProv.getFailureCount(),
+		"RecordFailure should be called when provider returns empty stream")
+}
+
+// mockProviderFirstEventErrorWithHealth is a provider whose Chat() returns a channel
+// where the first event is an error, and tracks RecordFailure calls.
+type mockProviderFirstEventErrorWithHealth struct {
+	mu           sync.Mutex
+	failureCount int
+}
+
+func (p *mockProviderFirstEventErrorWithHealth) Name() string {
+	return "mock-first-event-error-health"
+}
+
+func (p *mockProviderFirstEventErrorWithHealth) Available(_ context.Context) bool {
+	return true
+}
+
+func (p *mockProviderFirstEventErrorWithHealth) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-first-event-error-health"}, nil
+}
+
+func (p *mockProviderFirstEventErrorWithHealth) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderFirstEventErrorWithHealth) Close() error { return nil }
+func (p *mockProviderFirstEventErrorWithHealth) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 1)
+	ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: "first event is error"}
+	close(ch)
+	return ch, nil
+}
+
+func (p *mockProviderFirstEventErrorWithHealth) RecordFailure() {
+	p.mu.Lock()
+	p.failureCount++
+	p.mu.Unlock()
+}
+func (p *mockProviderFirstEventErrorWithHealth) RecordSuccess() {}
+func (p *mockProviderFirstEventErrorWithHealth) getFailureCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failureCount
+}
+
+func TestAgentLoop_FirstEventErrorCallsRecordFailure(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	healthProv := &mockProviderFirstEventErrorWithHealth{}
+	router := &mockProviderRouter{provider: healthProv}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+	})
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+
+	// RecordFailure should have been called for the first-event error.
+	assert.Equal(t, 1, healthProv.getFailureCount(),
+		"RecordFailure should be called when first event is an error")
+}
+
 // ---------------------------------------------------------------------------
 // Tool loop iteration cap tests
 // ---------------------------------------------------------------------------
@@ -1410,6 +1548,7 @@ func (p *mockProviderMultiToolCall) Available(_ context.Context) bool { return t
 func (p *mockProviderMultiToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-multi-tool"}, nil
 }
+
 func (p *mockProviderMultiToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
@@ -1498,8 +1637,10 @@ func TestAgentLoop_BudgetCumulativeAcrossMultipleToolIterations(t *testing.T) {
 	assert.Equal(t, "Multi-tool done.", out.Content)
 
 	// Verify cumulative session budget: all 4 LLM calls accounted.
-	// Initial call (13) is accounted in ProcessMessage before tool loop.
-	// Loop iterations: 13 + 13 + 27 = 53 accounted inside runToolLoop.
+	// Call 1 (initial): 13 tokens
+	// Call 2 (tool loop iteration 1): 13 tokens
+	// Call 3 (tool loop iteration 2): 13 tokens
+	// Call 4 (tool loop iteration 3, final): 27 tokens
 	// Total: 13 + 13 + 13 + 27 = 66.
 	updated, err := ss.GetSession(ctx, session.ID)
 	require.NoError(t, err)
@@ -1527,6 +1668,7 @@ func (p *mockProviderBlocking) Available(_ context.Context) bool { return true }
 func (p *mockProviderBlocking) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-blocking"}, nil
 }
+
 func (p *mockProviderBlocking) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }

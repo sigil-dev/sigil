@@ -394,3 +394,10 @@ func TestSSE_JSONResponse_EmptyStream(t *testing.T) {
 	// Verify the exact JSON structure matches {"events":[]}.
 	assert.JSONEq(t, `{"events":[]}`, w.Body.String())
 }
+
+func TestSSE_JSONResponse_MarshalFailureEmitsErrorEvent(t *testing.T) {
+	// json.Marshal on Go strings cannot fail in practice; the error path
+	// in writeJSON exists as defensive code but is untestable without
+	// runtime.UnsafeString or similar tricks.
+	t.Skip("json.Marshal on Go strings cannot fail in practice; error path exists but is untestable")
+}

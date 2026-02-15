@@ -444,3 +444,75 @@ func TestRoutes_NotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestRoutes_SendMessage_MalformedTextDelta(t *testing.T) {
+	// This test verifies that malformed JSON in text_delta events is logged,
+	// and the raw string is returned (fallback behavior).
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `not valid json`},
+		{Event: "text_delta", Data: `{"text":"valid"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Content   string `json:"content"`
+		SessionID string `json:"session_id"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// Fallback: raw string returned when JSON parsing fails.
+	assert.Equal(t, "not valid jsonvalid", resp.Content)
+}
+
+func TestRoutes_SendMessage_MalformedSessionID(t *testing.T) {
+	// This test verifies that malformed JSON in session_id events is logged,
+	// and the fallback session ID is returned.
+	events := []server.SSEEvent{
+		{Event: "session_id", Data: `invalid json`},
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab", "session_id": "sess-fallback"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Content   string `json:"content"`
+		SessionID string `json:"session_id"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// Fallback: original session ID returned when JSON parsing fails.
+	assert.Equal(t, "sess-fallback", resp.SessionID)
+}

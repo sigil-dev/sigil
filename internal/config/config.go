@@ -39,8 +39,9 @@ type TokenConfig struct {
 
 // NetworkingConfig controls how Sigil listens for connections.
 type NetworkingConfig struct {
-	Mode   string `mapstructure:"mode"`
-	Listen string `mapstructure:"listen"`
+	Mode        string   `mapstructure:"mode"`
+	Listen      string   `mapstructure:"listen"`
+	CORSOrigins []string `mapstructure:"cors_origins"`
 }
 
 // ProviderConfig holds credentials and endpoint for an LLM provider.

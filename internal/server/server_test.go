@@ -110,3 +110,45 @@ func TestServer_GracefulShutdown(t *testing.T) {
 		t.Fatal("server did not shut down within timeout")
 	}
 }
+
+func TestServer_SecurityHeaders(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+	assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+	assert.Equal(t, "0", w.Header().Get("X-XSS-Protection"))
+}
+
+func TestServer_CORSOrigins_FromConfig(t *testing.T) {
+	srv, err := server.New(server.Config{
+		ListenAddr:  "127.0.0.1:0",
+		CORSOrigins: []string{"https://app.example.com", "https://admin.example.com"},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, "https://app.example.com", w.Header().Get("Access-Control-Allow-Origin"))
+}
+
+func TestServer_CORSOrigins_DefaultsToLocalhost(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, "http://localhost:5173", w.Header().Get("Access-Control-Allow-Origin"))
+}

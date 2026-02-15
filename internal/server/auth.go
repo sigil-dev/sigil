@@ -123,5 +123,11 @@ type authErrorBody struct {
 func writeAuthError(w http.ResponseWriter, msg string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(authErrorBody{Error: msg})
+	if err := json.NewEncoder(w).Encode(authErrorBody{Error: msg}); err != nil {
+		slog.Warn("failed to write auth error response",
+			"error", err,
+			"status", status,
+			"message", msg,
+		)
+	}
 }

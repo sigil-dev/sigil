@@ -10,10 +10,18 @@ use tauri::{
 
 use log::{error, info, warn};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Default gateway port, matching the TypeScript client's API_BASE default.
 /// MUST match: ui/src/lib/api/client.ts API_BASE port
 const DEFAULT_GATEWAY_PORT: u16 = 18789;
+
+/// Timeout for graceful shutdown (SIGTERM) before escalating to SIGKILL.
+/// 5 seconds gives SQLite enough time to flush WAL and close connections.
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Poll interval when waiting for process to exit after SIGTERM.
+const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Errors that can occur during sidecar lifecycle management
 #[derive(Debug, thiserror::Error)]
@@ -25,7 +33,7 @@ enum SidecarError {
     #[error("failed to spawn sidecar: {0}")]
     SpawnFailed(tauri_plugin_shell::Error),
     #[error("sidecar process kill failed: {0}")]
-    KillFailed(std::io::Error),
+    KillFailed(tauri_plugin_shell::Error),
 }
 
 /// Sidecar process handle stored in app state
@@ -60,14 +68,12 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
         .app_data_dir()
         .map_err(SidecarError::AppDataDir)?
         .join("sigil.yaml");
-    let config_path_str = config_path
-        .to_str()
-        .ok_or_else(|| SidecarError::SpawnFailed(
-            tauri_plugin_shell::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "config path contains non-UTF8 characters"
-            ))
-        ))?;
+    let config_path_str = config_path.to_str().ok_or_else(|| {
+        SidecarError::SpawnFailed(tauri_plugin_shell::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "config path contains non-UTF8 characters",
+        )))
+    })?;
 
     // Start sidecar with shell plugin
     let sidecar = tauri_plugin_shell::ShellExt::shell(app)
@@ -178,7 +184,48 @@ fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
     }
 }
 
-/// Stop the Sigil gateway sidecar process
+/// Check whether a process is still running by PID.
+///
+/// On Unix, sends signal 0 which checks for process existence without
+/// actually delivering a signal. Returns `true` if the process exists.
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) is a standard POSIX existence check.
+    // Returns 0 if process exists, -1 with ESRCH if not.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(windows)]
+fn is_process_alive(_pid: u32) -> bool {
+    // On Windows we cannot cheaply poll; rely on kill() timeout.
+    true
+}
+
+/// Send SIGTERM to a process by PID (Unix only).
+///
+/// Returns `Ok(())` if the signal was delivered, `Err` if the process
+/// doesn't exist or we lack permission.
+#[cfg(unix)]
+fn send_sigterm(pid: u32) -> Result<(), std::io::Error> {
+    // SAFETY: Sending SIGTERM to a known child PID we spawned.
+    let ret = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Stop the Sigil gateway sidecar process with graceful shutdown.
+///
+/// Shutdown sequence:
+/// 1. (Unix) Send SIGTERM, giving the gateway time to flush SQLite WAL
+///    and close connections cleanly.
+/// 2. Poll for process exit up to `GRACEFUL_SHUTDOWN_TIMEOUT`.
+/// 3. If the process is still alive, escalate to SIGKILL.
+///
+/// On Windows, `CommandChild::kill()` calls `TerminateProcess` directly
+/// since Windows lacks SIGTERM semantics.
 fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
     let state = app.state::<SidecarState>();
     let mut process_lock = state
@@ -186,12 +233,51 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
         .lock()
         .map_err(|e| SidecarError::LockPoisoned(e.to_string()))?;
 
-    if let Some(mut process) = process_lock.take() {
-        // SIGKILL: process cannot flush buffers or run cleanup handlers. Database integrity
-        // relies on SQLite WAL journal recovery at next open. A future /shutdown endpoint
-        // would allow graceful drain (close connections → flush WAL → exit).
+    if let Some(process) = process_lock.take() {
+        let pid = process.pid();
+
+        // Phase 1: Attempt graceful shutdown with SIGTERM (Unix only)
+        #[cfg(unix)]
+        {
+            match send_sigterm(pid) {
+                Ok(()) => {
+                    info!(
+                        "Sent SIGTERM to gateway (pid {}), waiting for graceful exit",
+                        pid
+                    );
+
+                    let deadline = Instant::now() + GRACEFUL_SHUTDOWN_TIMEOUT;
+                    while Instant::now() < deadline {
+                        if !is_process_alive(pid) {
+                            info!("Gateway (pid {}) exited gracefully after SIGTERM", pid);
+                            return Ok(());
+                        }
+                        std::thread::sleep(SHUTDOWN_POLL_INTERVAL);
+                    }
+
+                    warn!(
+                        "Gateway (pid {}) did not exit within {}s after SIGTERM, sending SIGKILL",
+                        pid,
+                        GRACEFUL_SHUTDOWN_TIMEOUT.as_secs()
+                    );
+                }
+                Err(e) => {
+                    // ESRCH (no such process) means it already exited
+                    if e.raw_os_error() == Some(libc::ESRCH) {
+                        info!("Gateway (pid {}) already exited", pid);
+                        return Ok(());
+                    }
+                    warn!(
+                        "Failed to send SIGTERM to gateway (pid {}): {}, falling back to SIGKILL",
+                        pid, e
+                    );
+                }
+            }
+        }
+
+        // Phase 2: Forceful shutdown (SIGKILL on Unix, TerminateProcess on Windows)
         process.kill().map_err(SidecarError::KillFailed)?;
-        info!("Sigil gateway stopped");
+        info!("Sigil gateway (pid {}) stopped via SIGKILL", pid);
     }
 
     Ok(())

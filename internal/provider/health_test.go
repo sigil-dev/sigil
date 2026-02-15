@@ -49,23 +49,23 @@ func TestHealthTracker_CooldownBoundary(t *testing.T) {
 	now := time.Now()
 
 	tests := []struct {
-		name     string
-		elapsed  time.Duration
+		name        string
+		elapsed     time.Duration
 		wantHealthy bool
 	}{
 		{
-			name:     "before cooldown",
-			elapsed:  9 * time.Second,
+			name:        "before cooldown",
+			elapsed:     9 * time.Second,
 			wantHealthy: false,
 		},
 		{
-			name:     "at exact cooldown boundary",
-			elapsed:  10 * time.Second,
+			name:        "at exact cooldown boundary",
+			elapsed:     10 * time.Second,
 			wantHealthy: true,
 		},
 		{
-			name:     "after cooldown",
-			elapsed:  11 * time.Second,
+			name:        "after cooldown",
+			elapsed:     11 * time.Second,
 			wantHealthy: true,
 		},
 	}

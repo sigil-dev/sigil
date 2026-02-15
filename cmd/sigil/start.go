@@ -45,7 +45,10 @@ func runStart(cmd *cobra.Command, _ []string) error {
 
 	dataDir := v.GetString("data_dir")
 	if dataDir == "" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "getting user home directory: %w", err)
+		}
 		dataDir = filepath.Join(home, ".sigil")
 	}
 

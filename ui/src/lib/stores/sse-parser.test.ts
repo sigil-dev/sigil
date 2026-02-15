@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parseSSEEventData, parseSSEStream } from "./sse-parser";
 
 describe("parseSSEEventData", () => {
   describe("text_delta", () => {
     it("parses valid text_delta event", () => {
-      const result = parseSSEEventData("text_delta", '{"text":"hello"}');
+      const result = parseSSEEventData("text_delta", "{\"text\":\"hello\"}");
       expect(result).toEqual({ type: "text_delta", text: "hello" });
     });
 
     it("returns parse_error for wrong shape JSON", () => {
-      const result = parseSSEEventData("text_delta", '{"foo":1}');
+      const result = parseSSEEventData("text_delta", "{\"foo\":1}");
       expect(result.type).toBe("parse_error");
       if (result.type === "parse_error") {
         expect(result.eventType).toBe("text_delta");
-        expect(result.rawData).toBe('{"foo":1}');
+        expect(result.rawData).toBe("{\"foo\":1}");
         expect(result.error).toContain("text");
       }
     });
@@ -31,7 +31,7 @@ describe("parseSSEEventData", () => {
     });
 
     it("returns parse_error for wrong type (number instead of string)", () => {
-      const result = parseSSEEventData("text_delta", '{"text":123}');
+      const result = parseSSEEventData("text_delta", "{\"text\":123}");
       expect(result.type).toBe("parse_error");
       if (result.type === "parse_error") {
         expect(result.error).toContain("text");
@@ -41,16 +41,16 @@ describe("parseSSEEventData", () => {
 
   describe("session_id", () => {
     it("parses valid session_id event", () => {
-      const result = parseSSEEventData("session_id", '{"session_id":"sess-123"}');
+      const result = parseSSEEventData("session_id", "{\"session_id\":\"sess-123\"}");
       expect(result).toEqual({ type: "session_id", sessionId: "sess-123" });
     });
 
     it("returns parse_error for wrong shape JSON", () => {
-      const result = parseSSEEventData("session_id", '{"foo":"bar"}');
+      const result = parseSSEEventData("session_id", "{\"foo\":\"bar\"}");
       expect(result.type).toBe("parse_error");
       if (result.type === "parse_error") {
         expect(result.eventType).toBe("session_id");
-        expect(result.rawData).toBe('{"foo":"bar"}');
+        expect(result.rawData).toBe("{\"foo\":\"bar\"}");
         expect(result.error).toContain("session_id");
       }
     });
@@ -68,7 +68,7 @@ describe("parseSSEEventData", () => {
     it("parses valid tool_call with input", () => {
       const result = parseSSEEventData(
         "tool_call",
-        '{"name":"search","input":{"query":"test"}}'
+        "{\"name\":\"search\",\"input\":{\"query\":\"test\"}}",
       );
       expect(result).toEqual({
         type: "tool_call",
@@ -78,7 +78,7 @@ describe("parseSSEEventData", () => {
     });
 
     it("parses valid tool_call without input", () => {
-      const result = parseSSEEventData("tool_call", '{"name":"ping"}');
+      const result = parseSSEEventData("tool_call", "{\"name\":\"ping\"}");
       expect(result).toEqual({
         type: "tool_call",
         name: "ping",
@@ -87,7 +87,7 @@ describe("parseSSEEventData", () => {
     });
 
     it("returns parse_error for missing name field", () => {
-      const result = parseSSEEventData("tool_call", '{"input":{"x":1}}');
+      const result = parseSSEEventData("tool_call", "{\"input\":{\"x\":1}}");
       expect(result.type).toBe("parse_error");
       if (result.type === "parse_error") {
         expect(result.error).toContain("name");
@@ -95,7 +95,7 @@ describe("parseSSEEventData", () => {
     });
 
     it("returns parse_error for wrong type (name as number)", () => {
-      const result = parseSSEEventData("tool_call", '{"name":123}');
+      const result = parseSSEEventData("tool_call", "{\"name\":123}");
       expect(result.type).toBe("parse_error");
     });
   });
@@ -104,7 +104,7 @@ describe("parseSSEEventData", () => {
     it("parses valid tool_result with result", () => {
       const result = parseSSEEventData(
         "tool_result",
-        '{"name":"search","result":["a","b"]}'
+        "{\"name\":\"search\",\"result\":[\"a\",\"b\"]}",
       );
       expect(result).toEqual({
         type: "tool_result",
@@ -114,7 +114,7 @@ describe("parseSSEEventData", () => {
     });
 
     it("parses valid tool_result without result", () => {
-      const result = parseSSEEventData("tool_result", '{"name":"ping"}');
+      const result = parseSSEEventData("tool_result", "{\"name\":\"ping\"}");
       expect(result).toEqual({
         type: "tool_result",
         name: "ping",
@@ -123,7 +123,7 @@ describe("parseSSEEventData", () => {
     });
 
     it("returns parse_error for missing name field", () => {
-      const result = parseSSEEventData("tool_result", '{"result":"ok"}');
+      const result = parseSSEEventData("tool_result", "{\"result\":\"ok\"}");
       expect(result.type).toBe("parse_error");
       if (result.type === "parse_error") {
         expect(result.error).toContain("name");
@@ -157,17 +157,16 @@ describe("parseSSEEventData", () => {
 
 describe("parseSSEStream", () => {
   it("parses single text_delta event", () => {
-    const raw = 'event: text_delta\ndata: {"text":"hello"}\n\n';
+    const raw = "event: text_delta\ndata: {\"text\":\"hello\"}\n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ type: "text_delta", text: "hello" });
   });
 
   it("parses multiple events", () => {
-    const raw =
-      'event: session_id\ndata: {"session_id":"s1"}\n\n' +
-      'event: text_delta\ndata: {"text":"hi"}\n\n' +
-      "event: done\ndata: \n\n";
+    const raw = "event: session_id\ndata: {\"session_id\":\"s1\"}\n\n"
+      + "event: text_delta\ndata: {\"text\":\"hi\"}\n\n"
+      + "event: done\ndata: \n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(3);
     expect(events[0]).toEqual({ type: "session_id", sessionId: "s1" });
@@ -176,32 +175,32 @@ describe("parseSSEStream", () => {
   });
 
   it("handles parse errors in stream", () => {
-    const raw = 'event: text_delta\ndata: {"wrong":"shape"}\n\n';
+    const raw = "event: text_delta\ndata: {\"wrong\":\"shape\"}\n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("parse_error");
   });
 
   it("strips leading space from data values per SSE spec", () => {
-    const raw = 'event: text_delta\ndata: {"text":"test"}\n\n';
+    const raw = "event: text_delta\ndata: {\"text\":\"test\"}\n\n";
     const events = parseSSEStream(raw);
     expect(events[0]).toEqual({ type: "text_delta", text: "test" });
   });
 
   it("joins multiple data lines with newlines", () => {
-    const raw = 'event: error\ndata: line1\ndata: line2\n\n';
+    const raw = "event: error\ndata: line1\ndata: line2\n\n";
     const events = parseSSEStream(raw);
     expect(events[0]).toEqual({ type: "error", message: "line1\nline2" });
   });
 
   it("ignores incomplete events (no trailing blank line)", () => {
-    const raw = 'event: text_delta\ndata: {"text":"incomplete"}';
+    const raw = "event: text_delta\ndata: {\"text\":\"incomplete\"}";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(0);
   });
 
   it("ignores comment lines", () => {
-    const raw = ': this is a comment\nevent: done\ndata: \n\n';
+    const raw = ": this is a comment\nevent: done\ndata: \n\n";
     const events = parseSSEStream(raw);
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual({ type: "done" });

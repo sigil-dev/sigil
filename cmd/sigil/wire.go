@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -91,11 +93,13 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	var tokenValidator server.TokenValidator
 	if len(cfg.Auth.Tokens) > 0 {
 		tokenValidator = newConfigTokenValidator(cfg.Auth.Tokens)
+	} else {
+		slog.Warn("authentication disabled: no API tokens configured — all endpoints are unauthenticated")
 	}
 
 	srv, err := server.New(server.Config{
 		ListenAddr:     cfg.Networking.Listen,
-		CORSOrigins:    nil, // use defaults
+		CORSOrigins:    cfg.Networking.CORSOrigins,
 		TokenValidator: tokenValidator,
 	})
 	if err != nil {
@@ -132,18 +136,18 @@ func (gw *Gateway) Start(ctx context.Context) error {
 
 // Close releases all resources held by the gateway.
 func (gw *Gateway) Close() error {
-	var firstErr error
+	var errs []error
 	if gw.WorkspaceManager != nil {
-		if err := gw.WorkspaceManager.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := gw.WorkspaceManager.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if gw.GatewayStore != nil {
-		if err := gw.GatewayStore.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := gw.GatewayStore.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }
 
 func convertBindings(bindings []config.BindingConfig) []workspace.Binding {
@@ -349,8 +353,11 @@ func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator 
 }
 
 func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {
-	if user, ok := v.tokens[token]; ok {
-		return user, nil
+	// Use constant-time comparison to prevent timing attacks.
+	for configuredToken, user := range v.tokens {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(configuredToken)) == 1 {
+			return user, nil
+		}
 	}
 	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")
 }

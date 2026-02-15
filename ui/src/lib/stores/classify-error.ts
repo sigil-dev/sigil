@@ -26,11 +26,13 @@ export function classifyError(error: unknown): ClassifiedError {
   if (error instanceof Error) {
     return { message: error.message, isNetwork: false };
   }
-  const message =
-    typeof error === "string"
-      ? error
-      : error && typeof error === "object" && "message" in error
-        ? String((error as { message: unknown }).message)
-        : "An unexpected error occurred";
+  let message: string;
+  if (typeof error === "string") {
+    message = error;
+  } else if (error && typeof error === "object" && "message" in error) {
+    message = String((error as { message: unknown }).message);
+  } else {
+    message = "An unexpected error occurred";
+  }
   return { message, isNetwork: false };
 }

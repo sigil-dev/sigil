@@ -779,3 +779,24 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** The `TokenValidator` interface keeps the middleware decoupled from the token storage backend. Config-backed static tokens are sufficient for the current phase. When ABAC is implemented, the interface extends naturally without changing the middleware wiring. The 9 auth tests provide confidence in the security boundary.
 
 **Ref:** PR #15, D049, `sigil-9s6`, `internal/server/auth.go`, `internal/server/auth_test.go`
+
+---
+
+## D060: Phase 7 API Behavioral Changes
+
+**Question:** Two API behavioral changes were made during Phase 7 UI development. Should these be documented?
+
+**Changes:**
+
+1. **Anthropic stream-end-without-`message_stop` error emission**: Previously, if an Anthropic SSE stream ended without a `message_stop` event, the provider would emit a "done" event. Now it emits an error event instead, allowing the agent loop to detect incomplete streams.
+
+2. **SSE JSON empty response format**: The `/api/v1/chat/send` SSE endpoint previously returned `{"events":null}` when no events were available. Now it returns `{"events":[]}` for consistency with JSON array semantics.
+
+**Rationale:** The first change improves error detection for malformed provider responses. The second change aligns the API response format with standard JSON array representation. Both changes were made during implementation to match expected UI client behavior.
+
+**Impact:** Both changes affect wire format but are non-breaking in practice:
+
+- The stream-end change only affects error cases (streams should always include `message_stop`)
+- The empty array change is semantically equivalent (null vs empty array both represent "no events")
+
+**Ref:** PR #16 review findings #25, #26

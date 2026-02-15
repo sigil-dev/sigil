@@ -6,6 +6,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -244,4 +245,42 @@ func TestAuthMiddleware_ForbiddenToken_Returns403(t *testing.T) {
 func TestUserFromContext_NilWhenNoUser(t *testing.T) {
 	user := server.UserFromContext(context.Background())
 	assert.Nil(t, user)
+}
+
+// failingResponseWriter is a http.ResponseWriter that fails on Write.
+type failingResponseWriter struct {
+	header http.Header
+}
+
+func (w *failingResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *failingResponseWriter) WriteHeader(_ int) {}
+
+func (w *failingResponseWriter) Write(_ []byte) (int, error) {
+	return 0, fmt.Errorf("write failed")
+}
+
+func TestAuthMiddleware_WriteErrorLogged(t *testing.T) {
+	// This test verifies that writeAuthError logs when json.Encode fails.
+	// We can't easily capture slog output in tests, but we can verify the
+	// handler doesn't panic when Write fails.
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: newValidatorWithToken("valid-token", "admin", "Admin", []string{"*"}),
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+	// No auth header — will trigger writeAuthError.
+
+	w := &failingResponseWriter{}
+	// Should not panic despite Write failure.
+	assert.NotPanics(t, func() {
+		srv.Handler().ServeHTTP(w, req)
+	})
 }

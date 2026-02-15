@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
-import { z } from "zod";
 import { logger } from "$lib/logger";
+import { z } from "zod";
 
 /** Parsed SSE event types returned by the parser. */
 export type ParsedSSEEvent =
@@ -21,14 +21,16 @@ const ToolCallPayload = z.object({ name: z.string(), input: z.unknown().optional
 const ToolResultPayload = z.object({ name: z.string(), result: z.unknown().optional() });
 
 /**
- * Safely parse JSON string and return unknown value.
- * Returns undefined if JSON parsing fails.
+ * Safely parse JSON string and return a result object.
+ * On success, returns { success: true, data: unknown }.
+ * On failure, returns { success: false, error: string } with the parse error message.
  */
-function safeJsonParse(data: string): unknown {
+function safeJsonParse(data: string): { success: true; data: unknown } | { success: false; error: string } {
   try {
-    return JSON.parse(data);
-  } catch {
-    return undefined;
+    return { success: true, data: JSON.parse(data) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown JSON parse error";
+    return { success: false, error: message };
   }
 }
 
@@ -40,7 +42,16 @@ function safeJsonParse(data: string): unknown {
 export function parseSSEEventData(eventType: string, data: string): ParsedSSEEvent {
   switch (eventType) {
     case "text_delta": {
-      const result = TextDeltaPayload.safeParse(safeJsonParse(data));
+      const parseResult = safeJsonParse(data);
+      if (!parseResult.success) {
+        return {
+          type: "parse_error",
+          eventType,
+          rawData: data,
+          error: parseResult.error,
+        };
+      }
+      const result = TextDeltaPayload.safeParse(parseResult.data);
       if (!result.success) {
         return {
           type: "parse_error",
@@ -52,7 +63,16 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
       return { type: "text_delta", text: result.data.text };
     }
     case "session_id": {
-      const result = SessionIdPayload.safeParse(safeJsonParse(data));
+      const parseResult = safeJsonParse(data);
+      if (!parseResult.success) {
+        return {
+          type: "parse_error",
+          eventType,
+          rawData: data,
+          error: parseResult.error,
+        };
+      }
+      const result = SessionIdPayload.safeParse(parseResult.data);
       if (!result.success) {
         return {
           type: "parse_error",
@@ -64,7 +84,16 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
       return { type: "session_id", sessionId: result.data.session_id };
     }
     case "tool_call": {
-      const result = ToolCallPayload.safeParse(safeJsonParse(data));
+      const parseResult = safeJsonParse(data);
+      if (!parseResult.success) {
+        return {
+          type: "parse_error",
+          eventType,
+          rawData: data,
+          error: parseResult.error,
+        };
+      }
+      const result = ToolCallPayload.safeParse(parseResult.data);
       if (!result.success) {
         return {
           type: "parse_error",
@@ -76,7 +105,16 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
       return { type: "tool_call", name: result.data.name, input: result.data.input };
     }
     case "tool_result": {
-      const result = ToolResultPayload.safeParse(safeJsonParse(data));
+      const parseResult = safeJsonParse(data);
+      if (!parseResult.success) {
+        return {
+          type: "parse_error",
+          eventType,
+          rawData: data,
+          error: parseResult.error,
+        };
+      }
+      const result = ToolResultPayload.safeParse(parseResult.data);
       if (!result.success) {
         return {
           type: "parse_error",

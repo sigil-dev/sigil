@@ -3,8 +3,8 @@
 
 import { api, API_BASE } from "$lib/api/client";
 import { logger } from "$lib/logger";
-import { parseSSEEventData } from "./sse-parser";
 import { classifyError } from "./classify-error";
+import { parseSSEEventData } from "./sse-parser";
 
 /** Maximum SSE stream duration before automatic abort (5 minutes) */
 const SSE_STREAM_TIMEOUT_MS = 5 * 60 * 1000;
@@ -96,7 +96,7 @@ export class ChatStore {
           }
 
           return { id: ws.id, description: ws.description, sessions, loadError };
-        })
+        }),
       );
       this.workspaceGroups = groups;
     } catch (error) {

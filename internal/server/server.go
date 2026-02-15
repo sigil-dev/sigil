@@ -53,6 +53,7 @@ func New(cfg Config) (*Server, error) {
 	// Middleware
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
+	r.Use(securityHeadersMiddleware())
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(authMiddleware(cfg.TokenValidator))
 
@@ -151,4 +152,17 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 		AllowCredentials: true,
 		MaxAge:           300,
 	})
+}
+
+// securityHeadersMiddleware adds standard security headers to all responses.
+func securityHeadersMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-XSS-Protection", "0")
+			next.ServeHTTP(w, r)
+		})
+	}
 }

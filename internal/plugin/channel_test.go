@@ -616,9 +616,9 @@ func TestChannelRouter_ConcurrentPairingCreation(t *testing.T) {
 	// Release all goroutines simultaneously
 	close(barrier)
 
-	// Allow a moment for all GetByUser calls to complete (all will see empty)
-	// then release all Create calls at once to maximize race window
-	// NOTE: This is a synchronization mechanism to trigger the race, not a sleep-based delay
+	// Release all Create calls at once to maximize the TOCTOU race window.
+	// This channel-based coordination ensures all goroutines reach the
+	// check-then-create sequence simultaneously.
 	go func() {
 		for i := 0; i < goroutines; i++ {
 			ps.createDelay <- struct{}{}

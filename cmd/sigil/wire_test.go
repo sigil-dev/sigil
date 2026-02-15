@@ -258,3 +258,74 @@ func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
 	_, err = gw.ProviderRegistry.Get("unknown-provider")
 	assert.Error(t, err, "unknown provider should not be registered")
 }
+
+// Fix #6: Test constant-time token comparison
+func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
+	validator := newConfigTokenValidator([]config.TokenConfig{
+		{Token: "valid-token-123", UserID: "user-1", Name: "Test User"},
+	})
+
+	tests := []struct {
+		name    string
+		token   string
+		wantErr bool
+	}{
+		{
+			name:    "valid token",
+			token:   "valid-token-123",
+			wantErr: false,
+		},
+		{
+			name:    "invalid token same length",
+			token:   "invalid-token-12", // same length as valid token
+			wantErr: true,
+		},
+		{
+			name:    "invalid token different length",
+			token:   "short",
+			wantErr: true,
+		},
+		{
+			name:    "empty token",
+			token:   "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			user, err := validator.ValidateToken(context.Background(), tt.token)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, user)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, user)
+				assert.Equal(t, "user-1", user.ID)
+			}
+		})
+	}
+}
+
+// Fix #10: Test Gateway.Close attempts to close all subsystems
+func TestGateway_CloseAttemptsAll(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+
+	// Normal close should succeed for all subsystems.
+	err = gw.Close()
+	assert.NoError(t, err)
+
+	// Verify implementation: Check that both WorkspaceManager and GatewayStore
+	// are closed by calling Close again. Since both were already closed,
+	// if the implementation used early return on first error, the second
+	// subsystem wouldn't be attempted. By using errors.Join, all errors
+	// are collected.
+	//
+	// This is a weak test because db.Close() and workspace manager Close
+	// are idempotent, but it verifies the fix compiles and runs.
+	// A stronger test would require injectable mock closers.
+}

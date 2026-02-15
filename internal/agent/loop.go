@@ -376,10 +376,8 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 			// via the failover chain. The HealthTracker's cooldown acts
 			// as a circuit breaker, re-enabling the provider after the
 			// cooldown period for recovery.
-			if hr, ok := prov.(provider.HealthReporter); ok {
-				hr.RecordFailure()
-			}
-			lastErr = sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "chat call to %s", prov.Name())
+			l.recordProviderFailure(prov)
+			lastErr = sigilerr.Wrap(err, sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("chat call to %s", prov.Name()), sigilerr.FieldProvider(prov.Name()))
 			continue
 		}
 
@@ -390,21 +388,15 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		// this provider via the failover chain if needed.
 		firstEvent, ok := <-eventCh
 		if !ok {
-			if hr, ok := prov.(provider.HealthReporter); ok {
-				hr.RecordFailure()
-			}
-			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: stream closed without events", prov.Name())
+			l.recordProviderFailure(prov)
+			lastErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("provider %s: stream closed without events", prov.Name()), sigilerr.FieldProvider(prov.Name()))
 			continue
 		}
 
 		if firstEvent.Type == provider.EventTypeError {
-			if hr, ok := prov.(provider.HealthReporter); ok {
-				hr.RecordFailure()
-			}
-			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: %s", prov.Name(), firstEvent.Error)
-			// Drain remaining events so the goroutine can exit.
-			for range eventCh {
-			}
+			l.recordProviderFailure(prov)
+			lastErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("provider %s: %s", prov.Name(), firstEvent.Error), sigilerr.FieldProvider(prov.Name()))
+			l.drainEventChannel(eventCh)
 			continue
 		}
 
@@ -459,6 +451,22 @@ func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*prov
 	}
 
 	return buf.String(), toolCalls, usage, streamErr
+}
+
+// recordProviderFailure marks a provider as unhealthy if it implements HealthReporter.
+// Used to trigger failover to the next provider in the chain via the HealthTracker's
+// cooldown-based circuit breaker.
+func (l *Loop) recordProviderFailure(prov provider.Provider) {
+	if hr, ok := prov.(provider.HealthReporter); ok {
+		hr.RecordFailure()
+	}
+}
+
+// drainEventChannel consumes all remaining events from ch to prevent the
+// goroutine writing to ch from blocking on a full buffer. Blocks until ch is closed.
+func (l *Loop) drainEventChannel(ch <-chan provider.ChatEvent) {
+	for range ch {
+	}
 }
 
 // accountUsage increments the session's token budget counters with the
