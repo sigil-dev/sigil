@@ -72,7 +72,8 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 	ws, err := s.services.Workspaces.Get(ctx, workspaceID)
 	if err != nil {
 		if IsNotFound(err) {
-			return huma.Error404NotFound(fmt.Sprintf("workspace %q not found", workspaceID))
+			// Return 403 (not 404) to prevent workspace ID enumeration.
+			return huma.Error403Forbidden("access denied")
 		}
 		return huma.Error500InternalServerError(fmt.Sprintf("checking workspace %q", workspaceID), err)
 	}
@@ -82,7 +83,7 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 			return nil
 		}
 	}
-	return huma.Error403Forbidden(fmt.Sprintf("user %q is not a member of workspace %q", user.ID, workspaceID))
+	return huma.Error403Forbidden("access denied")
 }
 
 func (s *Server) registerSSERoute() {
@@ -174,8 +175,15 @@ func (s *Server) registerSSERoute() {
 }
 
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	// Limit request body to 1MB to prevent memory exhaustion.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 	var req ChatStreamRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err.Error() == "http: request body too large" {
+			jsonError(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
 		jsonError(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}

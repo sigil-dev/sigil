@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"os"
@@ -341,43 +340,32 @@ func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, er
 	return out, nil
 }
 
-// configTokenValidator validates bearer tokens against static config entries.
+// configTokenValidator validates bearer tokens against pre-computed SHA256
+// hashes of static config entries. Hashing at init time avoids per-request
+// rehashing and keeps raw tokens out of long-lived memory.
 type configTokenValidator struct {
-	tokens map[string]*server.AuthenticatedUser
+	tokens map[[32]byte]*server.AuthenticatedUser
 }
 
 func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator {
-	m := make(map[string]*server.AuthenticatedUser, len(tokens))
+	m := make(map[[32]byte]*server.AuthenticatedUser, len(tokens))
 	for _, tc := range tokens {
 		user, err := server.NewAuthenticatedUser(tc.UserID, tc.Name, tc.Permissions)
 		if err != nil {
 			slog.Warn("skipping token with invalid user config", "error", err, "user_id", tc.UserID)
 			continue
 		}
-		m[tc.Token] = user
+		hash := sha256.Sum256([]byte(tc.Token))
+		m[hash] = user
 	}
 	return &configTokenValidator{tokens: m}
 }
 
 func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {
-	// Hash the incoming token to prevent length-based timing leaks.
-	// sha256 ensures constant-time comparison regardless of token length differences.
 	tokenHash := sha256.Sum256([]byte(token))
-
-	// Iterate all tokens to prevent timing side-channels that leak token count
-	// or matching position. Store match and return after full iteration.
-	var matched *server.AuthenticatedUser
-	for configuredToken, user := range v.tokens {
-		configuredHash := sha256.Sum256([]byte(configuredToken))
-		if subtle.ConstantTimeCompare(tokenHash[:], configuredHash[:]) == 1 {
-			matched = user
-		}
+	if user, ok := v.tokens[tokenHash]; ok {
+		return user, nil
 	}
-	if matched != nil {
-		return matched, nil
-	}
-	slog.Debug("token validation failed: no configured token matched",
-		"configured_count", len(v.tokens),
-	)
+	slog.Debug("token validation failed: no configured token matched")
 	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")
 }

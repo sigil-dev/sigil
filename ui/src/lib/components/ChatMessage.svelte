@@ -37,7 +37,8 @@
 	function formatJson(value: unknown): string {
 		try {
 			return JSON.stringify(value, null, 2);
-		} catch {
+		} catch (e) {
+			console.warn('formatJson: failed to stringify value', e);
 			return String(value);
 		}
 	}

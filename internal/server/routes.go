@@ -197,6 +197,10 @@ func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWo
 }
 
 func (s *Server) handleGetWorkspace(ctx context.Context, input *getWorkspaceInput) (*getWorkspaceOutput, error) {
+	if err := s.checkWorkspaceMembership(ctx, input.ID); err != nil {
+		return nil, err
+	}
+
 	ws, err := s.services.Workspaces.Get(ctx, input.ID)
 	if err != nil {
 		if IsNotFound(err) {
@@ -208,6 +212,10 @@ func (s *Server) handleGetWorkspace(ctx context.Context, input *getWorkspaceInpu
 }
 
 func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInput) (*listSessionsOutput, error) {
+	if err := s.checkWorkspaceMembership(ctx, input.ID); err != nil {
+		return nil, err
+	}
+
 	sessions, err := s.services.Sessions.List(ctx, input.ID)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("listing sessions", err)
@@ -218,6 +226,10 @@ func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInpu
 }
 
 func (s *Server) handleGetSession(ctx context.Context, input *getSessionInput) (*getSessionOutput, error) {
+	if err := s.checkWorkspaceMembership(ctx, input.ID); err != nil {
+		return nil, err
+	}
+
 	session, err := s.services.Sessions.Get(ctx, input.ID, input.SessionID)
 	if err != nil {
 		if IsNotFound(err) {
@@ -254,7 +266,7 @@ func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput)
 	user := UserFromContext(ctx)
 	if user == nil {
 		slog.Warn("plugin reload without authentication (auth disabled)", "plugin", input.Name)
-	} else if !user.HasPermission("admin:reload") {
+	} else if !user.HasPermission("admin:plugins") {
 		return nil, huma.Error403Forbidden("insufficient permissions to reload plugins")
 	}
 
@@ -392,6 +404,14 @@ func extractText(data string) string {
 }
 
 func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOutput, error) {
+	// User enumeration requires admin permission.
+	user := UserFromContext(ctx)
+	if user == nil {
+		slog.Warn("user list without authentication (auth disabled)")
+	} else if !user.HasPermission("admin:users") {
+		return nil, huma.Error403Forbidden("insufficient permissions to list users")
+	}
+
 	users, err := s.services.Users.List(ctx)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("listing users", err)

@@ -542,11 +542,11 @@ func TestSSE_WorkspaceMembership_NonMember_Returns403(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), "not a member of workspace")
+	assert.Contains(t, w.Body.String(), "access denied")
 }
 
-func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns404(t *testing.T) {
-	// Non-existent workspace returns 404.
+func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns403(t *testing.T) {
+	// Non-existent workspace returns 403 to prevent enumeration.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
 			"user-token": {
@@ -579,8 +579,29 @@ func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns404(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
-	assert.Contains(t, w.Body.String(), "not found")
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "access denied")
+}
+
+func TestSSE_RequestBodyTooLarge(t *testing.T) {
+	srv := newTestSSEServer(t, nil)
+
+	// Build a body larger than 1MB.
+	huge := `{"content":"` + strings.Repeat("x", 1<<20+1) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(huge))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+
+	var errResp map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], "request body too large")
 }
 
 func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {

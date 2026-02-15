@@ -87,12 +87,7 @@
       ]
     },
     "updater": {
-      "active": false,
-      "endpoints": [
-        "https://releases.sigil.dev/{{target}}/{{arch}}/{{current_version}}"
-      ],
-      "dialog": true,
-      "pubkey": ""
+      "active": false
     }
   }
 }

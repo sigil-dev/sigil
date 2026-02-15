@@ -509,13 +509,13 @@ func TestRoutes_ReloadPlugin_WithAdminWildcard_Succeeds(t *testing.T) {
 }
 
 func TestRoutes_ReloadPlugin_WithExactPermission_Succeeds(t *testing.T) {
-	// User with exact admin:reload permission should succeed.
+	// User with exact admin:plugins permission should succeed.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
 			"admin-token": {
 				ID:          "admin-1",
 				Name:        "Admin User",
-				Permissions: []string{"admin:reload"},
+				Permissions: []string{"admin:plugins"},
 			},
 		},
 	}
@@ -696,11 +696,11 @@ func TestRoutes_SendMessage_WorkspaceMembership_NonMember_Returns403(t *testing.
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), "not a member of workspace")
+	assert.Contains(t, w.Body.String(), "access denied")
 }
 
-func TestRoutes_SendMessage_WorkspaceMembership_WorkspaceNotFound_Returns404(t *testing.T) {
-	// Non-existent workspace returns 404.
+func TestRoutes_SendMessage_WorkspaceMembership_WorkspaceNotFound_Returns403(t *testing.T) {
+	// Non-existent workspace returns 403 to prevent enumeration.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
 			"user-token": {
@@ -731,8 +731,8 @@ func TestRoutes_SendMessage_WorkspaceMembership_WorkspaceNotFound_Returns404(t *
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
-	assert.Contains(t, w.Body.String(), "not found")
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "access denied")
 }
 
 func TestRoutes_SendMessage_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {

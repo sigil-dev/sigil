@@ -280,7 +280,7 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 
         // Phase 2: Forceful shutdown (SIGKILL on Unix, TerminateProcess on Windows)
         process.kill().map_err(SidecarError::KillFailed)?;
-        info!("Sigil gateway (pid {}) stopped via SIGKILL", pid);
+        info!("Sigil gateway (pid {}) terminated", pid);
     }
 
     Ok(())

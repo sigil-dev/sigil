@@ -125,8 +125,21 @@ export function parseSSEEventData(eventType: string, data: string): ParsedSSEEve
       }
       return { type: "tool_result", name: result.data.name, result: result.data.result };
     }
-    case "error":
+    case "error": {
+      // Server may send JSON payloads like {"error":"...","message":"..."}.
+      // Extract the human-readable message field when available.
+      const errParse = safeJsonParse(data);
+      if (errParse.success && typeof errParse.data === "object" && errParse.data !== null) {
+        const obj = errParse.data as Record<string, unknown>;
+        if (typeof obj.message === "string") {
+          return { type: "error", message: obj.message };
+        }
+        if (typeof obj.error === "string") {
+          return { type: "error", message: obj.error };
+        }
+      }
       return { type: "error", message: data };
+    }
     case "done":
       return { type: "done" };
     default:
