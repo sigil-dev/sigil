@@ -13,35 +13,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockRegistryProvider implements provider.Provider for registry tests.
+// mockRegistryProvider embeds mockProviderBase for registry tests.
 type mockRegistryProvider struct {
-	name      string
-	available bool
-}
-
-func (m *mockRegistryProvider) Name() string                     { return m.name }
-func (m *mockRegistryProvider) Available(_ context.Context) bool { return m.available }
-func (m *mockRegistryProvider) Close() error                     { return nil }
-
-func (m *mockRegistryProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
-	return nil, nil
-}
-
-func (m *mockRegistryProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
-	ch := make(chan provider.ChatEvent, 1)
-	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
-	close(ch)
-	return ch, nil
-}
-
-func (m *mockRegistryProvider) Status(_ context.Context) (provider.ProviderStatus, error) {
-	return provider.ProviderStatus{Available: m.available, Provider: m.name}, nil
+	*mockProviderBase
 }
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	reg := provider.NewRegistry()
 
-	p := &mockRegistryProvider{name: "anthropic", available: true}
+	p := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", p)
 
 	got, err := reg.Get("anthropic")
@@ -56,7 +36,7 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 func TestRegistry_RouteDefault(t *testing.T) {
 	reg := provider.NewRegistry()
 
-	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
 	reg.SetDefault("anthropic/claude-sonnet-4-5")
 
@@ -70,8 +50,8 @@ func TestRegistry_RouteDefault(t *testing.T) {
 func TestRegistry_RouteWorkspaceOverride(t *testing.T) {
 	reg := provider.NewRegistry()
 
-	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
-	openai := &mockRegistryProvider{name: "openai", available: true}
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
+	openai := &mockRegistryProvider{mockProviderBase: newMockProviderBase("openai", true)}
 	reg.Register("anthropic", anthropic)
 	reg.Register("openai", openai)
 
@@ -96,8 +76,8 @@ func TestRegistry_RouteWorkspaceOverride(t *testing.T) {
 func TestRegistry_Failover(t *testing.T) {
 	reg := provider.NewRegistry()
 
-	anthropic := &mockRegistryProvider{name: "anthropic", available: false}
-	openai := &mockRegistryProvider{name: "openai", available: true}
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", false)}
+	openai := &mockRegistryProvider{mockProviderBase: newMockProviderBase("openai", true)}
 	reg.Register("anthropic", anthropic)
 	reg.Register("openai", openai)
 
@@ -114,8 +94,8 @@ func TestRegistry_Failover(t *testing.T) {
 func TestRegistry_AllProvidersDown(t *testing.T) {
 	reg := provider.NewRegistry()
 
-	anthropic := &mockRegistryProvider{name: "anthropic", available: false}
-	openai := &mockRegistryProvider{name: "openai", available: false}
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", false)}
+	openai := &mockRegistryProvider{mockProviderBase: newMockProviderBase("openai", false)}
 	reg.Register("anthropic", anthropic)
 	reg.Register("openai", openai)
 
@@ -132,7 +112,7 @@ func TestRegistry_AllProvidersDown(t *testing.T) {
 func TestRegistry_BudgetEnforcement(t *testing.T) {
 	reg := provider.NewRegistry()
 
-	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
 	reg.SetDefault("anthropic/claude-sonnet-4-5")
 
@@ -156,7 +136,7 @@ func TestRegistry_ImplementsRouter(t *testing.T) {
 
 func TestRegistry_RegisterProvider(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := &mockRegistryProvider{name: "test", available: true}
+	p := &mockRegistryProvider{mockProviderBase: newMockProviderBase("test", true)}
 
 	// RegisterProvider is the Router interface method.
 	err := reg.RegisterProvider("test", p)
@@ -169,7 +149,7 @@ func TestRegistry_RegisterProvider(t *testing.T) {
 
 func TestRegistry_Close(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := &mockRegistryProvider{name: "test", available: true}
+	p := &mockRegistryProvider{mockProviderBase: newMockProviderBase("test", true)}
 	reg.Register("test", p)
 
 	err := reg.Close()
@@ -189,7 +169,7 @@ func TestRegistry_MaxAttempts(t *testing.T) {
 
 func TestRegistry_BudgetEnforcement_HourlyUSD(t *testing.T) {
 	reg := provider.NewRegistry()
-	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
 	reg.SetDefault("anthropic/claude-sonnet-4-5")
 
@@ -253,7 +233,7 @@ func TestRegistry_BudgetEnforcement_HourlyUSD(t *testing.T) {
 
 func TestRegistry_BudgetEnforcement_DailyUSD(t *testing.T) {
 	reg := provider.NewRegistry()
-	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
 	reg.SetDefault("anthropic/claude-sonnet-4-5")
 
@@ -317,7 +297,7 @@ func TestRegistry_BudgetEnforcement_DailyUSD(t *testing.T) {
 
 func TestRegistry_BudgetEnforcement_CombinedLimits(t *testing.T) {
 	reg := provider.NewRegistry()
-	anthropic := &mockRegistryProvider{name: "anthropic", available: true}
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
 	reg.SetDefault("anthropic/claude-sonnet-4-5")
 

@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import type { components } from '$lib/api/generated/schema';
+	import { classifyError } from '$lib/stores/classify-error';
 
 	type PluginSummary = components['schemas']['PluginSummary'];
 	type PluginDetail = components['schemas']['PluginDetail'];
@@ -29,7 +30,8 @@
 				plugins = data?.plugins || [];
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Unknown error';
+			const classified = classifyError(e);
+			error = classified.message;
 		} finally {
 			loading = false;
 		}
@@ -46,7 +48,8 @@
 				selectedPlugin = data;
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Unknown error';
+			const classified = classifyError(e);
+			error = classified.message;
 		}
 	}
 
@@ -65,7 +68,8 @@
 				}
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Unknown error';
+			const classified = classifyError(e);
+			error = classified.message;
 		} finally {
 			reloading = null;
 		}

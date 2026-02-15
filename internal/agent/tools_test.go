@@ -860,6 +860,35 @@ func TestToolDispatcher_AuditNotCalledOnDeny(t *testing.T) {
 	assert.Len(t, auditStore.entries, 0, "no audit entry should be created when capability is denied")
 }
 
+func TestToolDispatcher_AuditFailureDoesNotFailExecution(t *testing.T) {
+	// Audit store that always returns an error.
+	failingAuditStore := &mockAuditStoreError{err: assert.AnError}
+
+	d := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:      newMockEnforcer(),
+		PluginManager: newMockPluginManager(),
+		AuditStore:    failingAuditStore,
+	})
+
+	result, err := d.Execute(context.Background(), agent.ToolCallRequest{
+		ToolName:        "search",
+		Arguments:       `{}`,
+		SessionID:       "sess-1",
+		WorkspaceID:     "ws-1",
+		PluginName:      "test-plugin",
+		WorkspaceAllow:  wildcardCaps(),
+		UserPermissions: wildcardCaps(),
+	})
+
+	// Tool execution should succeed despite audit failure (best-effort semantics).
+	require.NoError(t, err, "tool execution should succeed even when audit logging fails")
+	require.NotNil(t, result)
+	assert.Equal(t, "executed", result.Content)
+
+	// Verify audit was attempted.
+	assert.Equal(t, int32(1), failingAuditStore.appendCount.Load(), "audit append should have been attempted")
+}
+
 // ---------------------------------------------------------------------------
 // ToolRegistry tests
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ type Config struct {
 	TokenValidator TokenValidator  // nil = auth disabled (dev mode)
 	EnableHSTS     bool
 	RateLimit      RateLimitConfig // per-IP rate limiting
+	BehindProxy    bool            // true if behind a reverse proxy (enables RealIP middleware)
 }
 
 // Server wraps a chi router with huma API and HTTP server.
@@ -63,7 +64,10 @@ func New(cfg Config) (*Server, error) {
 
 	// Middleware
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.RealIP)
+	// Only trust proxy headers when actually behind a proxy (tailscale or production)
+	if cfg.BehindProxy {
+		r.Use(middleware.RealIP)
+	}
 	r.Use(securityHeadersMiddleware(cfg.EnableHSTS))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(authMiddleware(cfg.TokenValidator))
@@ -117,9 +121,12 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	srv := &http.Server{
-		Handler:      s.router,
-		ReadTimeout:  s.cfg.ReadTimeout,
-		WriteTimeout: s.cfg.WriteTimeout,
+		Handler:           s.router,
+		ReadTimeout:       s.cfg.ReadTimeout,
+		WriteTimeout:      s.cfg.WriteTimeout,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
 	}
 
 	errCh := make(chan error, 1)

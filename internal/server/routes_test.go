@@ -31,14 +31,22 @@ func (m *mockWorkspaceService) List(_ context.Context) ([]server.WorkspaceSummar
 }
 
 func (m *mockWorkspaceService) Get(_ context.Context, id string) (*server.WorkspaceDetail, error) {
-	if id == "homelab" {
+	switch id {
+	case "homelab":
 		return &server.WorkspaceDetail{
 			ID:          "homelab",
 			Description: "Home automation",
 			Members:     []string{"user-1"},
 		}, nil
+	case "dev":
+		return &server.WorkspaceDetail{
+			ID:          "dev",
+			Description: "Development",
+			Members:     []string{"user-3"},
+		}, nil
+	default:
+		return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "workspace %q not found", id)
 	}
-	return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "workspace %q not found", id)
 }
 
 type mockPluginService struct{}
@@ -539,6 +547,249 @@ func TestRoutes_ReloadPlugin_WithExactPermission_Succeeds(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "reloaded")
+}
+
+func TestRoutes_ListUsers_InsufficientPermissions_Returns403(t *testing.T) {
+	// User without admin:users permission should get 403.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-1",
+				Name:        "Regular User",
+				Permissions: []string{"workspace:read"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "insufficient permissions")
+}
+
+func TestRoutes_ListPlugins_InsufficientPermissions_Returns403(t *testing.T) {
+	// User without admin:plugins permission should get 403.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-1",
+				Name:        "Regular User",
+				Permissions: []string{"workspace:read"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "insufficient permissions")
+}
+
+func TestRoutes_GetPlugin_InsufficientPermissions_Returns403(t *testing.T) {
+	// User without admin:plugins permission should get 403.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-1",
+				Name:        "Regular User",
+				Permissions: []string{"workspace:read"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins/anthropic", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "insufficient permissions")
+}
+
+func TestRoutes_GetWorkspace_NonMember_Returns403(t *testing.T) {
+	// User who is NOT a member of the workspace gets 403.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-2",
+				Name:        "Non-Member User",
+				Permissions: []string{"workspace:read"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	// workspace "homelab" has member "user-1", not "user-2"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/homelab", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "access denied")
+}
+
+func TestRoutes_ListSessions_NonMember_Returns403(t *testing.T) {
+	// User who is NOT a member of the workspace gets 403.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-2",
+				Name:        "Non-Member User",
+				Permissions: []string{"workspace:read"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	// workspace "homelab" has member "user-1", not "user-2"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/homelab/sessions", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "access denied")
+}
+
+func TestRoutes_GetSession_NonMember_Returns403(t *testing.T) {
+	// User who is NOT a member of the workspace gets 403.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-2",
+				Name:        "Non-Member User",
+				Permissions: []string{"workspace:read"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	// workspace "homelab" has member "user-1", not "user-2"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/homelab/sessions/sess-1", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "access denied")
+}
+
+func TestRoutes_ListWorkspaces_FiltersByMembership(t *testing.T) {
+	// When auth is enabled, only workspaces the user is a member of are returned.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": {
+				ID:          "user-1",
+				Name:        "Member User",
+				Permissions: []string{"workspace:read"},
+			},
+		},
+	}
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Workspaces []server.WorkspaceSummary `json:"workspaces"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// user-1 is only a member of "homelab" (see mockWorkspaceService.Get),
+	// "dev" workspace returns not-found from Get so it's filtered out.
+	assert.Len(t, resp.Workspaces, 1)
+	assert.Equal(t, "homelab", resp.Workspaces[0].ID)
 }
 
 func TestRoutes_SendMessage_MalformedTextDelta(t *testing.T) {

@@ -101,6 +101,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		ListenAddr:     cfg.Networking.Listen,
 		CORSOrigins:    cfg.Networking.CORSOrigins,
 		TokenValidator: tokenValidator,
+		BehindProxy:    cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
 	})
 	if err != nil {
 		_ = gs.Close()
@@ -357,6 +358,9 @@ func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator 
 		}
 		hash := sha256.Sum256([]byte(tc.Token))
 		m[hash] = user
+	}
+	if len(tokens) > 0 && len(m) == 0 {
+		slog.Error("no valid auth tokens configured — all tokens failed validation")
 	}
 	return &configTokenValidator{tokens: m}
 }

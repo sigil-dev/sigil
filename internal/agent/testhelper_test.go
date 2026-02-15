@@ -449,6 +449,21 @@ func (s *mockAuditStore) Query(_ context.Context, _ store.AuditFilter) ([]*store
 	return nil, nil
 }
 
+// mockAuditStoreError is an audit store that always returns an error from Append.
+type mockAuditStoreError struct {
+	appendCount atomic.Int32
+	err         error
+}
+
+func (s *mockAuditStoreError) Append(_ context.Context, _ *store.AuditEntry) error {
+	s.appendCount.Add(1)
+	return s.err
+}
+
+func (s *mockAuditStoreError) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // Security enforcer helpers
 // ---------------------------------------------------------------------------

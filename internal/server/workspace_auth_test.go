@@ -100,7 +100,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			},
 			wantErr:    true,
 			wantStatus: 500,
-			wantMsg:    "checking workspace",
+			wantMsg:    "internal server error",
 		},
 		{
 			name:        "user is not a member returns 403",

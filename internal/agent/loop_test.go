@@ -1731,3 +1731,36 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 		t.Fatal("timeout waiting for ProcessMessage to terminate after context cancellation")
 	}
 }
+
+func TestAgentLoop_AuditFailureDoesNotFailTurn(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Audit store that always returns an error.
+	failingAuditStore := &mockAuditStoreError{err: assert.AnError}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     failingAuditStore,
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "test audit failure",
+	})
+
+	// ProcessMessage should succeed despite audit failure (best-effort semantics).
+	require.NoError(t, err, "ProcessMessage should succeed even when audit logging fails")
+	require.NotNil(t, out)
+	assert.Equal(t, session.ID, out.SessionID)
+	assert.Contains(t, out.Content, "Hello, world!")
+
+	// Verify audit was attempted.
+	assert.Equal(t, int32(1), failingAuditStore.appendCount.Load(), "audit append should have been attempted")
+}

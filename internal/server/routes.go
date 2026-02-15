@@ -186,11 +186,44 @@ type statusOutput struct {
 
 // --- Handlers ---
 
+// notFoundOr500 maps a service error to a 404 (if the error carries the
+// not-found code) or a generic 500. The full error is logged server-side
+// so that 5xx responses never leak internal details.
+func notFoundOr500(err error, notFoundMsg, context string) error {
+	if IsNotFound(err) {
+		return huma.Error404NotFound(notFoundMsg)
+	}
+	slog.Error("internal error", "context", context, "error", err)
+	return huma.Error500InternalServerError("internal server error")
+}
+
 func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWorkspacesOutput, error) {
 	ws, err := s.services.Workspaces.List(ctx)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("listing workspaces", err)
+		slog.Error("internal error", "context", "listing workspaces", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
 	}
+
+	// When auth is enabled, filter workspaces to only those the user is a member of.
+	user := UserFromContext(ctx)
+	if user != nil {
+		filtered := make([]WorkspaceSummary, 0, len(ws))
+		for _, w := range ws {
+			// Fetch full workspace detail to check membership.
+			detail, detailErr := s.services.Workspaces.Get(ctx, w.ID)
+			if detailErr != nil {
+				continue // skip workspaces we can't verify
+			}
+			for _, member := range detail.Members {
+				if member == user.ID {
+					filtered = append(filtered, w)
+					break
+				}
+			}
+		}
+		ws = filtered
+	}
+
 	out := &listWorkspacesOutput{}
 	out.Body.Workspaces = ws
 	return out, nil
@@ -203,10 +236,9 @@ func (s *Server) handleGetWorkspace(ctx context.Context, input *getWorkspaceInpu
 
 	ws, err := s.services.Workspaces.Get(ctx, input.ID)
 	if err != nil {
-		if IsNotFound(err) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("workspace %q not found", input.ID))
-		}
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting workspace %q", input.ID), err)
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("workspace %q not found", input.ID),
+			fmt.Sprintf("getting workspace %q", input.ID))
 	}
 	return &getWorkspaceOutput{Body: *ws}, nil
 }
@@ -218,7 +250,8 @@ func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInpu
 
 	sessions, err := s.services.Sessions.List(ctx, input.ID)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("listing sessions", err)
+		slog.Error("internal error", "context", "listing sessions", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listSessionsOutput{}
 	out.Body.Sessions = sessions
@@ -232,18 +265,26 @@ func (s *Server) handleGetSession(ctx context.Context, input *getSessionInput) (
 
 	session, err := s.services.Sessions.Get(ctx, input.ID, input.SessionID)
 	if err != nil {
-		if IsNotFound(err) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("session %q not found", input.SessionID))
-		}
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting session %q", input.SessionID), err)
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("session %q not found", input.SessionID),
+			fmt.Sprintf("getting session %q", input.SessionID))
 	}
 	return &getSessionOutput{Body: *session}, nil
 }
 
 func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPluginsOutput, error) {
+	// Plugin listing requires admin:plugins permission.
+	user := UserFromContext(ctx)
+	if user == nil {
+		slog.Warn("plugin list without authentication (auth disabled)")
+	} else if !user.HasPermission("admin:plugins") {
+		return nil, huma.Error403Forbidden("insufficient permissions to list plugins")
+	}
+
 	plugins, err := s.services.Plugins.List(ctx)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("listing plugins", err)
+		slog.Error("internal error", "context", "listing plugins", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listPluginsOutput{}
 	out.Body.Plugins = plugins
@@ -251,12 +292,19 @@ func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPlugi
 }
 
 func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*getPluginOutput, error) {
+	// Plugin details require admin:plugins permission.
+	user := UserFromContext(ctx)
+	if user == nil {
+		slog.Warn("plugin get without authentication (auth disabled)", "plugin", input.Name)
+	} else if !user.HasPermission("admin:plugins") {
+		return nil, huma.Error403Forbidden("insufficient permissions to get plugin details")
+	}
+
 	p, err := s.services.Plugins.Get(ctx, input.Name)
 	if err != nil {
-		if IsNotFound(err) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
-		}
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting plugin %q", input.Name), err)
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("plugin %q not found", input.Name),
+			fmt.Sprintf("getting plugin %q", input.Name))
 	}
 	return &getPluginOutput{Body: *p}, nil
 }
@@ -265,16 +313,15 @@ func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput)
 	// Plugin reload requires admin permission.
 	user := UserFromContext(ctx)
 	if user == nil {
-		slog.Warn("plugin reload without authentication (auth disabled)", "plugin", input.Name)
+		slog.Error("admin operation invoked without authentication", "op", "plugin-reload", "plugin", input.Name)
 	} else if !user.HasPermission("admin:plugins") {
 		return nil, huma.Error403Forbidden("insufficient permissions to reload plugins")
 	}
 
 	if err := s.services.Plugins.Reload(ctx, input.Name); err != nil {
-		if IsNotFound(err) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
-		}
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("reloading plugin %q", input.Name), err)
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("plugin %q not found", input.Name),
+			fmt.Sprintf("reloading plugin %q", input.Name))
 	}
 	out := &reloadPluginOutput{}
 	out.Body.Status = "reloaded"
@@ -375,6 +422,11 @@ func extractErrorMessage(data string) string {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		truncated := truncateForLogging(data, 100)
+		slog.Warn("failed to parse error event, using raw string as fallback",
+			"raw_data", truncated,
+			"error", err,
+		)
 		return data
 	}
 	if payload.Message != "" {
@@ -407,14 +459,15 @@ func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOu
 	// User enumeration requires admin permission.
 	user := UserFromContext(ctx)
 	if user == nil {
-		slog.Warn("user list without authentication (auth disabled)")
+		slog.Error("admin operation invoked without authentication", "op", "list-users")
 	} else if !user.HasPermission("admin:users") {
 		return nil, huma.Error403Forbidden("insufficient permissions to list users")
 	}
 
 	users, err := s.services.Users.List(ctx)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("listing users", err)
+		slog.Error("internal error", "context", "listing users", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listUsersOutput{}
 	out.Body.Users = users

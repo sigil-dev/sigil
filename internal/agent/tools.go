@@ -298,7 +298,14 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 	}
 
 	// Best-effort audit; do not fail the tool execution on audit errors.
-	_ = d.auditStore.Append(ctx, entry)
+	if err := d.auditStore.Append(ctx, entry); err != nil {
+		slog.Warn("audit store append failed",
+			"error", err,
+			"plugin", req.PluginName,
+			"tool", req.ToolName,
+			"session_id", req.SessionID,
+		)
+	}
 }
 
 // scanToolOutput scans tool output for prompt injection patterns.

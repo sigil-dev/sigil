@@ -12,44 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockProvider implements provider.Provider for testing.
+// mockProvider embeds mockProviderBase for testing.
 type mockProvider struct {
-	name      string
-	available bool
-	models    []provider.ModelInfo
-}
-
-func (m *mockProvider) Name() string {
-	return m.name
-}
-
-func (m *mockProvider) Available(ctx context.Context) bool {
-	return m.available
-}
-
-func (m *mockProvider) ListModels(ctx context.Context) ([]provider.ModelInfo, error) {
-	return m.models, nil
-}
-
-func (m *mockProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
-	ch := make(chan provider.ChatEvent, 3)
-	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "hello"}
-	ch <- provider.ChatEvent{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}}
-	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
-	close(ch)
-	return ch, nil
-}
-
-func (m *mockProvider) Status(ctx context.Context) (provider.ProviderStatus, error) {
-	return provider.ProviderStatus{
-		Available: m.available,
-		Provider:  m.name,
-		Message:   "ok",
-	}, nil
-}
-
-func (m *mockProvider) Close() error {
-	return nil
+	*mockProviderBase
 }
 
 // Compile-time interface satisfaction checks.
@@ -86,33 +51,31 @@ func TestChatEventTypes(t *testing.T) {
 
 func TestProviderInterface_MultiProviderSupport(t *testing.T) {
 	// Compile-time proof that mockProvider satisfies provider.Provider.
-	var p provider.Provider = &mockProvider{
-		name:      "test-provider",
-		available: true,
-		models: []provider.ModelInfo{
-			{
-				ID:       "model-1",
-				Name:     "Test Model",
-				Provider: "test-provider",
-				Capabilities: provider.ModelCapabilities{
-					SupportsTools:     true,
-					SupportsStreaming: true,
-					MaxContextTokens:  128000,
-					MaxOutputTokens:   4096,
-				},
+	base := newMockProviderBase("test-provider", true)
+	base.models = []provider.ModelInfo{
+		{
+			ID:       "model-1",
+			Name:     "Test Model",
+			Provider: "test-provider",
+			Capabilities: provider.ModelCapabilities{
+				SupportsTools:     true,
+				SupportsStreaming: true,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   4096,
 			},
-			{
-				ID:       "model-2",
-				Name:     "Test Model Small",
-				Provider: "test-provider",
-				Capabilities: provider.ModelCapabilities{
-					SupportsStreaming: true,
-					MaxContextTokens:  32000,
-					MaxOutputTokens:   2048,
-				},
+		},
+		{
+			ID:       "model-2",
+			Name:     "Test Model Small",
+			Provider: "test-provider",
+			Capabilities: provider.ModelCapabilities{
+				SupportsStreaming: true,
+				MaxContextTokens:  32000,
+				MaxOutputTokens:   2048,
 			},
 		},
 	}
+	var p provider.Provider = &mockProvider{mockProviderBase: base}
 
 	ctx := context.Background()
 
@@ -149,9 +112,9 @@ func TestProviderInterface_MultiProviderSupport(t *testing.T) {
 
 func TestProviderInterface_MultiProviderFailover(t *testing.T) {
 	providers := []provider.Provider{
-		&mockProvider{name: "primary", available: false},
-		&mockProvider{name: "secondary", available: true},
-		&mockProvider{name: "tertiary", available: true},
+		&mockProvider{mockProviderBase: newMockProviderBase("primary", false)},
+		&mockProvider{mockProviderBase: newMockProviderBase("secondary", true)},
+		&mockProvider{mockProviderBase: newMockProviderBase("tertiary", true)},
 	}
 
 	ctx := context.Background()
@@ -170,7 +133,7 @@ func TestProviderInterface_MultiProviderFailover(t *testing.T) {
 }
 
 func TestProviderInterface_ChatStreaming(t *testing.T) {
-	p := &mockProvider{name: "streaming-test", available: true}
+	p := &mockProvider{mockProviderBase: newMockProviderBase("streaming-test", true)}
 
 	ctx := context.Background()
 	req := provider.ChatRequest{

@@ -108,7 +108,9 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
+				if _, err := w.Write([]byte(`{"error":"rate limit exceeded"}`)); err != nil {
+					slog.Debug("failed to write rate limit response", "error", err)
+				}
 				return
 			}
 			v.tokens--

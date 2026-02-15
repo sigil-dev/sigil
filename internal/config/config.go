@@ -181,11 +181,8 @@ func (c *Config) validateNetworking() []error {
 	var errs []error
 
 	validModes := map[string]bool{"local": true, "tailscale": true}
-	if !validModes[c.Networking.Mode] {
-		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"config: networking.mode must be one of [local, tailscale], got %q",
-			c.Networking.Mode,
-		))
+	if err := validateStringInSet(c.Networking.Mode, "networking.mode", validModes); err != nil {
+		errs = append(errs, err)
 	}
 
 	if c.Networking.Listen == "" {
@@ -221,11 +218,8 @@ func (c *Config) validateStorage() []error {
 	var errs []error
 
 	validBackends := map[string]bool{"sqlite": true}
-	if !validBackends[c.Storage.Backend] {
-		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"config: storage.backend must be one of [sqlite], got %q",
-			c.Storage.Backend,
-		))
+	if err := validateStringInSet(c.Storage.Backend, "storage.backend", validBackends); err != nil {
+		errs = append(errs, err)
 	}
 
 	return errs
@@ -301,11 +295,8 @@ func (c *Config) validateSessions() []error {
 	}
 
 	validStrategies := map[string]bool{"summarize": true, "truncate": true}
-	if !validStrategies[c.Sessions.Memory.Compaction.Strategy] {
-		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"config: sessions.memory.compaction.strategy must be one of [summarize, truncate], got %q",
-			c.Sessions.Memory.Compaction.Strategy,
-		))
+	if err := validateStringInSet(c.Sessions.Memory.Compaction.Strategy, "sessions.memory.compaction.strategy", validStrategies); err != nil {
+		errs = append(errs, err)
 	}
 
 	if c.Sessions.Memory.Compaction.BatchSize <= 0 {
@@ -324,4 +315,19 @@ func providerFromModel(model string) string {
 		return model[:idx]
 	}
 	return model
+}
+
+// validateStringInSet checks if a value is in a set of valid options.
+// Returns an error with the given field name if the value is not valid.
+func validateStringInSet(value, fieldName string, validSet map[string]bool) error {
+	if !validSet[value] {
+		validOptions := make([]string, 0, len(validSet))
+		for k := range validSet {
+			validOptions = append(validOptions, k)
+		}
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: %s must be one of %v, got %q",
+			fieldName, validOptions, value)
+	}
+	return nil
 }

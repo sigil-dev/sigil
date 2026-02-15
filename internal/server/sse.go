@@ -4,8 +4,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -75,7 +77,8 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 			// Return 403 (not 404) to prevent workspace ID enumeration.
 			return huma.Error403Forbidden("access denied")
 		}
-		return huma.Error500InternalServerError(fmt.Sprintf("checking workspace %q", workspaceID), err)
+		slog.Error("internal error", "context", fmt.Sprintf("checking workspace %q", workspaceID), "error", err)
+		return huma.Error500InternalServerError("internal server error")
 	}
 	// Check if user is a member of the workspace.
 	for _, member := range ws.Members {
@@ -180,6 +183,13 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	var req ChatStreamRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Type-safe detection of MaxBytesError (Go 1.19+).
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			jsonError(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
+		// Fallback for older Go versions or wrapped errors.
 		if err.Error() == "http: request body too large" {
 			jsonError(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
 			return
@@ -316,10 +326,14 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 			if err != nil {
 				slog.Warn("writeJSON: failed to marshal event data, emitting error event", "error", err, "event", event.Event)
 				// Emit synthetic error event so client knows events were dropped.
-				errPayload, _ := json.Marshal(marshalError{
+				errPayload, innerErr := json.Marshal(marshalError{
 					Error:   "marshal_failure",
 					Message: fmt.Sprintf("failed to marshal event data: %s", err.Error()),
 				})
+				if innerErr != nil {
+					slog.Warn("writeJSON: failed to marshal error event payload", "error", innerErr)
+					continue
+				}
 				events = append(events, jsonEvent{Event: "error", Data: json.RawMessage(errPayload)})
 				continue
 			}
@@ -332,8 +346,15 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 		Events []jsonEvent `json:"events"`
 	}{Events: events}
 
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	// Encode to buffer first to detect errors before writing to ResponseWriter.
+	// This ensures correct HTTP semantics — either full response or error, not partial.
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
 		http.Error(w, `{"error":"encoding response"}`, http.StatusInternalServerError)
+		return
+	}
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		slog.Warn("writeJSON: failed to write response", "error", err)
 	}
 }
 

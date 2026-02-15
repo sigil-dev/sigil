@@ -235,6 +235,9 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 
     if let Some(process) = process_lock.take() {
         let pid = process.pid();
+        // Log PID at Error level before kill attempt to ensure it's available for manual cleanup if kill fails
+        error!("Attempting to terminate Sigil gateway process with PID {}", pid);
+
         // Drop the lock before entering the potentially long polling loop.
         // We've already taken ownership of the process via take().
         drop(process_lock);
@@ -279,7 +282,14 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
         }
 
         // Phase 2: Forceful shutdown (SIGKILL on Unix, TerminateProcess on Windows)
-        process.kill().map_err(SidecarError::KillFailed)?;
+        if let Err(kill_err) = process.kill() {
+            // Log the error with PID at Error level so users can manually kill the process
+            error!(
+                "Failed to kill Sigil gateway process (PID {}): {}. Process may be orphaned. Manual cleanup required: kill {}",
+                pid, kill_err, pid
+            );
+            return Err(SidecarError::KillFailed(kill_err));
+        }
         info!("Sigil gateway (pid {}) terminated", pid);
     }
 
@@ -449,7 +459,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
+        .unwrap_or_else(|e| panic!("error while building tauri application: {}", e))
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 // Clean up sidecar on app exit
