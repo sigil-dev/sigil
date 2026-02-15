@@ -4,6 +4,7 @@
 import { api, API_BASE } from "$lib/api/client";
 import { logger } from "$lib/logger";
 import { parseSSEEventData } from "./sse-parser";
+import { classifyError } from "./classify-error";
 
 /** Maximum SSE stream duration before automatic abort (5 minutes) */
 const SSE_STREAM_TIMEOUT_MS = 5 * 60 * 1000;
@@ -48,31 +49,6 @@ function generateMessageId(): string {
   return `msg-${Date.now()}-${nextMessageId++}`;
 }
 
-/** Classified error for user-facing display */
-interface ClassifiedError {
-  message: string;
-  isNetwork: boolean;
-  httpStatus?: number;
-}
-
-/** Classify a caught error into a user-facing message */
-function classifyError(error: unknown): ClassifiedError {
-  if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
-    return { message: "Network error — cannot reach gateway", isNetwork: true };
-  }
-  if (error instanceof TypeError) {
-    return { message: "Unexpected client error", isNetwork: false };
-  }
-  if (error instanceof Response || (error && typeof error === "object" && "status" in error)) {
-    const status = (error as { status?: number }).status;
-    return { message: `Gateway error (HTTP ${status ?? "unknown"})`, isNetwork: false, httpStatus: status };
-  }
-  if (error instanceof Error) {
-    return { message: error.message, isNetwork: false };
-  }
-  return { message: "An unexpected error occurred", isNetwork: false };
-}
-
 /**
  * Chat store using Svelte 5 runes for reactivity.
  * Manages messages, session state, SSE streaming, and sidebar data.
@@ -99,28 +75,29 @@ export class ChatStore {
       }
       const workspaces = wsData?.workspaces ?? [];
 
-      const groups: WorkspaceGroup[] = [];
-      for (const ws of workspaces) {
-        const { data: sessData, error: sessErr } = await api.GET("/api/v1/workspaces/{id}/sessions", {
-          params: { path: { id: ws.id } },
-        });
+      const groups = await Promise.all(
+        workspaces.map(async (ws) => {
+          const { data: sessData, error: sessErr } = await api.GET("/api/v1/workspaces/{id}/sessions", {
+            params: { path: { id: ws.id } },
+          });
 
-        let sessions: SessionEntry[] = [];
-        let loadError: string | undefined;
+          let sessions: SessionEntry[] = [];
+          let loadError: string | undefined;
 
-        if (sessErr) {
-          logger.warn("Failed to load sessions for workspace", { workspaceId: ws.id, error: sessErr });
-          loadError = sessErr.detail || "Failed to load sessions";
-        } else {
-          sessions = (sessData?.sessions ?? []).map((s) => ({
-            id: s.id,
-            workspaceId: s.workspace_id,
-            status: s.status,
-          }));
-        }
+          if (sessErr) {
+            logger.warn("Failed to load sessions for workspace", { workspaceId: ws.id, error: sessErr });
+            loadError = sessErr.detail || "Failed to load sessions";
+          } else {
+            sessions = (sessData?.sessions ?? []).map((s) => ({
+              id: s.id,
+              workspaceId: s.workspace_id,
+              status: s.status,
+            }));
+          }
 
-        groups.push({ id: ws.id, description: ws.description, sessions, loadError });
-      }
+          return { id: ws.id, description: ws.description, sessions, loadError };
+        })
+      );
       this.workspaceGroups = groups;
     } catch (error) {
       logger.error("Failed to load sidebar", { error });
@@ -232,6 +209,15 @@ export class ChatStore {
       await this.readSSEStream(response.body, assistantMessage.id);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        logger.warn("Request timed out");
+        this.error = "Request timed out — the gateway took too long to respond";
+        const msg = this.messages.find((m) => m.id === assistantMessage.id);
+        if (!msg?.content) {
+          this.removeMessage(assistantMessage.id);
+        }
         return;
       }
       logger.error("SSE stream error", { error: err });

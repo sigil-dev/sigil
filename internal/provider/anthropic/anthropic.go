@@ -5,6 +5,8 @@ package anthropic
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -229,9 +231,13 @@ func extractSchema(raw map[string]any) anthropicsdk.ToolInputSchemaParam {
 			for _, v := range arr {
 				if s, ok := v.(string); ok {
 					strs = append(strs, s)
+				} else {
+					slog.Warn("extractSchema: non-string element in required array", "value", v)
 				}
 			}
 			schema.Required = strs
+		} else {
+			slog.Warn("extractSchema: required field is not an array", "type", fmt.Sprintf("%T", req))
 		}
 	}
 	return schema
@@ -330,6 +336,7 @@ func (p *Provider) streamChat(ctx context.Context, params anthropicsdk.MessageNe
 	}
 
 	// If we exit the loop without a message_stop, still send done.
+	slog.Warn("anthropic: stream ended without message_stop event")
 	p.health.RecordSuccess()
 	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
 }

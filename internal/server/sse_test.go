@@ -7,10 +7,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sigil-dev/sigil/internal/server"
 	"github.com/stretchr/testify/assert"
@@ -239,4 +241,79 @@ func TestSSE_JSONResponse(t *testing.T) {
 	// Events must include their type alongside data.
 	assert.Equal(t, "text_delta", resp.Events[0].Event)
 	assert.Equal(t, "done", resp.Events[1].Event)
+}
+
+// leakyStreamHandler sends many events (more than channel buffer) and signals
+// completion via the done channel. Used to verify goroutine cleanup on write errors.
+type leakyStreamHandler struct {
+	eventCount int
+	done       chan struct{}
+}
+
+func (h *leakyStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	defer close(ch)
+	defer close(h.done)
+	for i := range h.eventCount {
+		select {
+		case ch <- server.SSEEvent{Event: "text_delta", Data: `{"text":"chunk"}` + strings.Repeat("x", i)}:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// errResponseWriter is an http.ResponseWriter that returns errors after a
+// configured number of successful Write calls, simulating a client disconnect.
+type errResponseWriter struct {
+	header     http.Header
+	writes     int
+	maxWrites  int
+	statusCode int
+}
+
+func newErrResponseWriter(maxWrites int) *errResponseWriter {
+	return &errResponseWriter{
+		header:    make(http.Header),
+		maxWrites: maxWrites,
+	}
+}
+
+func (w *errResponseWriter) Header() http.Header { return w.header }
+
+func (w *errResponseWriter) WriteHeader(code int) { w.statusCode = code }
+
+func (w *errResponseWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.maxWrites {
+		return 0, errors.New("client disconnected")
+	}
+	return len(p), nil
+}
+
+func TestSSE_DrainOnWriteError(t *testing.T) {
+	handler := &leakyStreamHandler{
+		eventCount: 50, // well above the 16-capacity channel buffer
+		done:       make(chan struct{}),
+	}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content":"hello","workspace_id":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Allow only 2 writes before failing, triggering the drain path.
+	w := newErrResponseWriter(2)
+	srv.Handler().ServeHTTP(w, req)
+
+	// HandleStream must finish (channel drained) within a reasonable timeout.
+	// If the drain logic is missing, HandleStream blocks forever → test times out.
+	select {
+	case <-handler.done:
+		// success — goroutine exited
+	case <-time.After(3 * time.Second):
+		t.Fatal("HandleStream goroutine did not exit; channel was not drained (goroutine leak)")
+	}
 }

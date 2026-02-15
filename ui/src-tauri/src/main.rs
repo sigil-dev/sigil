@@ -59,21 +59,27 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
         .path()
         .app_data_dir()
         .map_err(SidecarError::AppDataDir)?
-        .join("sigil.yaml")
-        .to_string_lossy()
-        .to_string();
+        .join("sigil.yaml");
+    let config_path_str = config_path
+        .to_str()
+        .ok_or_else(|| SidecarError::SpawnFailed(
+            tauri_plugin_shell::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "config path contains non-UTF8 characters"
+            ))
+        ))?;
 
     // Start sidecar with shell plugin
     let sidecar = tauri_plugin_shell::ShellExt::shell(app)
         .sidecar("sigil")
         .map_err(SidecarError::SpawnFailed)?
-        .args(&["start", "--config", &config_path])
+        .args(&["start", "--config", config_path_str])
         .spawn()
         .map_err(SidecarError::SpawnFailed)?;
 
     *process_lock = Some(sidecar);
 
-    info!("Sigil gateway started with config: {}", config_path);
+    info!("Sigil gateway started with config: {}", config_path_str);
 
     // Health check: verify the gateway is running with 3 attempts (1s, 2s, 4s delays)
     let app_handle = app.clone();
@@ -84,10 +90,12 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
             std::thread::sleep(std::time::Duration::from_millis(*delay_ms));
 
             // Emit checking event before each attempt
-            let _ = app_handle.emit(
+            if let Err(e) = app_handle.emit(
                 "sidecar-checking",
                 format!("Health check attempt {}/{}", attempt + 1, delays.len()),
-            );
+            ) {
+                warn!("Failed to emit sidecar-checking: {}", e);
+            }
 
             match health_check_sidecar() {
                 Ok(true) => {
@@ -106,14 +114,16 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
                         attempt + 1,
                         delays.len()
                     );
-                    let _ = app_handle.emit(
+                    if let Err(e) = app_handle.emit(
                         "sidecar-retry",
                         format!(
                             "Attempt {}/{} failed — not responding",
                             attempt + 1,
                             delays.len()
                         ),
-                    );
+                    ) {
+                        warn!("Failed to emit sidecar-retry: {}", e);
+                    }
                 }
                 Err(e) => {
                     error!(
@@ -122,10 +132,12 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
                         delays.len(),
                         e
                     );
-                    let _ = app_handle.emit(
+                    if let Err(emit_err) = app_handle.emit(
                         "sidecar-retry",
                         format!("Attempt {}/{} error: {}", attempt + 1, delays.len(), e),
-                    );
+                    ) {
+                        warn!("Failed to emit sidecar-retry: {}", emit_err);
+                    }
                 }
             }
         }

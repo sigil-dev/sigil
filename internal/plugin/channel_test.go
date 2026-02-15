@@ -638,17 +638,14 @@ func TestChannelRouter_ConcurrentPairingCreation(t *testing.T) {
 	// pairings may be created. Ideally, only 1 pairing should be created,
 	// but the current implementation allows duplicates due to TOCTOU.
 	//
-	// This assertion documents the race — if createdCount > 1, the race occurred.
+	// Current behavior: race condition may create duplicate pairings.
+	// Ideal behavior would be exactly 1 pairing (requires transactional
+	// create-if-not-exists or mutex around check-then-create).
 	// A proper fix would add transactional create-if-not-exists semantics or
 	// use a mutex around the entire check-then-create sequence.
+	assert.GreaterOrEqual(t, createdCount, 1, "at least one pairing must be created")
 	if createdCount > 1 {
-		t.Logf("RACE DETECTED: %d pairings created for same user/channel/workspace (expected 1)", createdCount)
-		// This is the current behavior — multiple pairings may be created
-		assert.Greater(t, createdCount, 1, "race condition allows duplicate pairings")
-	} else {
-		t.Logf("No race detected: %d pairing created", createdCount)
-		// If the code is fixed in the future, this assertion will pass
-		assert.Equal(t, 1, createdCount, "exactly one pairing should be created")
+		t.Logf("NOTE: race condition created %d pairings (expected 1)", createdCount)
 	}
 
 	// Verify all created pairings have the correct parameters

@@ -1510,3 +1510,101 @@ func TestAgentLoop_BudgetCumulativeAcrossMultipleToolIterations(t *testing.T) {
 	assert.Equal(t, 20, out.Usage.InputTokens, "returned usage should be from final LLM call")
 	assert.Equal(t, 7, out.Usage.OutputTokens, "returned usage should be from final LLM call")
 }
+
+// ---------------------------------------------------------------------------
+// Context cancellation test
+// ---------------------------------------------------------------------------
+
+// mockProviderBlocking blocks on Chat() until context is cancelled, then
+// emits an error event to signal the cancellation.
+type mockProviderBlocking struct {
+	mu       sync.Mutex
+	chatCall chan struct{}
+}
+
+func (p *mockProviderBlocking) Name() string                     { return "mock-blocking" }
+func (p *mockProviderBlocking) Available(_ context.Context) bool { return true }
+func (p *mockProviderBlocking) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-blocking"}, nil
+}
+func (p *mockProviderBlocking) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderBlocking) Close() error { return nil }
+
+func (p *mockProviderBlocking) Chat(ctx context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	p.chatCall <- struct{}{} // signal that Chat was called
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, 2)
+	go func() {
+		defer close(ch)
+		// Emit first event so failover doesn't kick in
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Starting..."}
+		// Block until context is cancelled
+		<-ctx.Done()
+		// Emit error event after cancellation
+		ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: ctx.Err().Error()}
+	}()
+	return ch, nil
+}
+
+func TestAgentLoop_ContextCancellation(t *testing.T) {
+	sm := newMockSessionManager()
+	bgCtx := context.Background()
+
+	session, err := sm.Create(bgCtx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	blockingProv := &mockProviderBlocking{
+		chatCall: make(chan struct{}, 1),
+	}
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: blockingProv},
+		AuditStore:     newMockAuditStore(),
+	})
+
+	// Create a cancellable context
+	ctx, cancel := context.WithCancel(bgCtx)
+	defer cancel()
+
+	// Run ProcessMessage in a goroutine
+	errCh := make(chan error, 1)
+	resultCh := make(chan *agent.OutboundMessage, 1)
+	go func() {
+		out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+			SessionID:   session.ID,
+			WorkspaceID: "ws-1",
+			UserID:      "user-1",
+			Content:     "test cancellation",
+		})
+		resultCh <- out
+		errCh <- err
+	}()
+
+	// Wait for Chat to be called
+	select {
+	case <-blockingProv.chatCall:
+		// Chat was called, now cancel the context
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for Chat to be called")
+	}
+
+	// Cancel the context
+	cancel()
+
+	// Wait for ProcessMessage to return with an error
+	select {
+	case err := <-errCh:
+		out := <-resultCh
+		require.Error(t, err, "ProcessMessage should return error when context is cancelled")
+		assert.Nil(t, out, "out should be nil when error occurs")
+		// Verify the operation terminated promptly after cancellation
+		// (reaching this point means it didn't hang)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for ProcessMessage to terminate after context cancellation")
+	}
+}

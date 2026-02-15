@@ -109,20 +109,6 @@ func TestGoogleProvider_Close(t *testing.T) {
 	assert.NoError(t, p.Close())
 }
 
-func TestGoogleProvider_JSONMarshalingErrorInToolCall(t *testing.T) {
-	// This test verifies that if json.Marshal fails when processing tool call args,
-	// the provider emits an error event instead of silently discarding the error.
-	// We test this by ensuring the provider handles the error case correctly.
-	// Since we cannot easily force json.Marshal to fail with the Google SDK's types,
-	// this test documents the expected behavior if such a failure occurs.
-	// The fix ensures the error is handled, not ignored with _, which was the bug.
-
-	// NOTE: This is a unit test documenting expected behavior. The actual fix
-	// handles json.Marshal errors in streamChat at line 256. Integration tests
-	// with malformed responses would fully exercise this path.
-	t.Skip("Skipping: json.Marshal failure is difficult to trigger with Google SDK types in unit tests")
-}
-
 // mustNewProvider creates a provider with a dummy API key for unit tests.
 func mustNewProvider(t *testing.T) *google.Provider {
 	t.Helper()

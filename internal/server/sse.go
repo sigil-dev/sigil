@@ -143,6 +143,12 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, req)
 }
 
+// drainSSEChannel consumes remaining events from ch so that the goroutine
+// writing to ch (HandleStream) does not block on a full buffer.
+func drainSSEChannel(ch <-chan SSEEvent) {
+	go func() { for range ch {} }()
+}
+
 func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStreamRequest) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -162,14 +168,17 @@ func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStream
 		// SSE spec requires each line of a multi-line payload to be
 		// prefixed with "data: ". Split on newlines and emit each line.
 		if _, err := fmt.Fprintf(w, "event: %s\n", event.Event); err != nil {
+			drainSSEChannel(ch)
 			return
 		}
 		for _, line := range strings.Split(event.Data, "\n") {
 			if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
+				drainSSEChannel(ch)
 				return
 			}
 		}
 		if _, err := fmt.Fprint(w, "\n"); err != nil {
+			drainSSEChannel(ch)
 			return
 		}
 		if flusher != nil {

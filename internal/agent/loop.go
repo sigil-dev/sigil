@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -389,11 +390,17 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		// this provider via the failover chain if needed.
 		firstEvent, ok := <-eventCh
 		if !ok {
+			if hr, ok := prov.(provider.HealthReporter); ok {
+				hr.RecordFailure()
+			}
 			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: stream closed without events", prov.Name())
 			continue
 		}
 
 		if firstEvent.Type == provider.EventTypeError {
+			if hr, ok := prov.(provider.HealthReporter); ok {
+				hr.RecordFailure()
+			}
 			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: %s", prov.Name(), firstEvent.Error)
 			// Drain remaining events so the goroutine can exit.
 			for range eventCh {
@@ -635,5 +642,11 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 	}
 
 	// Best-effort audit; do not fail the response on audit errors.
-	_ = l.auditStore.Append(ctx, entry)
+	if err := l.auditStore.Append(ctx, entry); err != nil {
+		slog.Error("audit store append failed",
+			"error", err,
+			"workspace_id", msg.WorkspaceID,
+			"session_id", msg.SessionID,
+		)
+	}
 }

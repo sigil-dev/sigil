@@ -53,7 +53,7 @@
 	async function reloadPlugin(name: string) {
 		reloading = name;
 		try {
-			const { data, error: err } = await api.POST('/api/v1/plugins/{name}/reload', {
+			const { error: err } = await api.POST('/api/v1/plugins/{name}/reload', {
 				params: { path: { name } }
 			});
 			if (err) {
@@ -190,8 +190,8 @@
 </div>
 
 {#if selectedPlugin}
-	<div class="modal-overlay" onclick={closeDetails} role="button" tabindex="0" onkeydown={(e) => e.key === 'Escape' && closeDetails()}>
-		<div class="modal" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="dialog" tabindex="-1">
+	<div class="modal-overlay" onclick={closeDetails} role="presentation" onkeydown={(e) => e.key === 'Escape' && closeDetails()}>
+		<div class="modal" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Plugin details" tabindex="-1">
 			<header>
 				<h2>{selectedPlugin.name}</h2>
 				<button class="close-btn" onclick={closeDetails}>&times;</button>
