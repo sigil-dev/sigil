@@ -26,8 +26,7 @@ type Provider interface {
 	// Chat sends a chat request and streams responses.
 	Chat(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error)
 
-	// Status returns detailed health and capability information about the provider.
-	// Includes health state, supported models, error details, and rate limit information.
+	// Status returns the provider's current availability and name.
 	Status(ctx context.Context) (ProviderStatus, error)
 
 	// Close cleans up provider resources.

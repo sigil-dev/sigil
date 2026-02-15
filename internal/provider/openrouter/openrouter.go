@@ -6,7 +6,6 @@ package openrouter
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"slices"
 
@@ -322,9 +321,10 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 		acc := toolCalls[idx]
 		if !json.Valid([]byte(acc.partialArgs)) {
 			p.health.RecordFailure()
+			err := sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "openrouter: tool call %q has invalid JSON arguments", acc.name)
 			ch <- provider.ChatEvent{
 				Type:  provider.EventTypeError,
-				Error: fmt.Sprintf("openrouter: tool call %q has invalid JSON arguments", acc.name),
+				Error: err.Error(),
 			}
 			return
 		}

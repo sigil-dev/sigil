@@ -89,13 +89,13 @@ const (
 	CodeChannelBackendFailure  Code = "channel.backend.failure"
 )
 
-// Field is a structured key/value context attached to an error.
+// Attr is a structured key/value context attached to an error.
 type Attr struct {
 	Key   string
 	Value any
 }
 
-// Field creates a structured error field.
+// FieldValue creates a structured error field.
 func FieldValue(key string, value any) Attr {
 	return Attr{Key: key, Value: value}
 }

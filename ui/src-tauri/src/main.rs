@@ -81,7 +81,7 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 
     info!("Sigil gateway started with config: {}", config_path_str);
 
-    // Health check: verify the gateway is running with 3 attempts (1s, 2s, 4s delays)
+    // Health check: verify the gateway is running with 3 attempts (sleeps of 1s, 2s, 4s; total ~7s)
     let app_handle = app.clone();
     std::thread::spawn(move || {
         let delays = [1000u64, 2000, 4000];

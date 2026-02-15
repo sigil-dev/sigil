@@ -126,7 +126,7 @@ export function parseSSEStream(raw: string): ParsedSSEEvent[] {
     } else if (line.startsWith("event:")) {
       eventType = line.slice(6).trim();
     } else if (line.startsWith("data:")) {
-      // Per SSE spec: strip exactly one leading space if present (U+0020)
+      // Per SSE spec: strip at most one leading space if present (U+0020)
       let value = line.slice(5);
       if (value.length > 0 && value.charCodeAt(0) === 0x20) {
         value = value.slice(1);

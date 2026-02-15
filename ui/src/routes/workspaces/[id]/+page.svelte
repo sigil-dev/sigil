@@ -68,6 +68,8 @@
 					<dd>{workspace.model || 'None (use gateway default)'}</dd>
 					<dt>Members</dt>
 					<dd>{workspace.members?.length || 0} user(s)</dd>
+					<dt>Budget</dt>
+					<dd>Coming soon</dd>
 				</dl>
 			</section>
 

@@ -336,7 +336,7 @@ Security is Sigil's primary differentiator. All code MUST follow these principle
 | ---------------------- | -------------------------------------------------------------------- |
 | Default deny           | Plugins have zero capabilities unless explicitly granted in manifest |
 | Capability enforcement | Every plugin operation checked against manifest capabilities         |
-| Agent loop integrity   | LLM outputs are validated before tool dispatch (7-step checks)       |
+| Agent loop integrity   | LLM outputs are validated before tool dispatch (6-step pipeline)     |
 | Plugin isolation       | Execution tier determines sandbox boundary                           |
 | No trust escalation    | A plugin cannot grant capabilities it doesn't have                   |
 

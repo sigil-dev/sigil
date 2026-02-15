@@ -414,7 +414,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		// replaying the full conversation to a fallback provider requires
 		// buffering all events and resending all messages — significant
 		// complexity with partial-output ambiguity. Mid-stream errors surface
-		// to the caller via processEvents. See sigil-dxw for tracking.
+		// to the caller via processEvents. See bead sigil-dxw (docs/decisions/decision-log.md, Mid-stream failover) for tracking.
 		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
 		wrappedCh <- firstEvent
 		go func() {

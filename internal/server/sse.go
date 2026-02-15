@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -156,8 +157,7 @@ func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStream
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		// httptest.ResponseRecorder doesn't implement Flusher,
-		// but we still write the events for testability.
+		// Graceful degradation if response writer does not support Flush.
 		flusher = nil
 	}
 
@@ -168,16 +168,19 @@ func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStream
 		// SSE spec requires each line of a multi-line payload to be
 		// prefixed with "data: ". Split on newlines and emit each line.
 		if _, err := fmt.Fprintf(w, "event: %s\n", event.Event); err != nil {
+			slog.Debug("sse: write error", "error", err)
 			drainSSEChannel(ch)
 			return
 		}
 		for _, line := range strings.Split(event.Data, "\n") {
 			if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
+				slog.Debug("sse: write error", "error", err)
 				drainSSEChannel(ch)
 				return
 			}
 		}
 		if _, err := fmt.Fprint(w, "\n"); err != nil {
+			slog.Debug("sse: write error", "error", err)
 			drainSSEChannel(ch)
 			return
 		}
@@ -197,12 +200,17 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 	ch := make(chan SSEEvent, 16)
 	go s.streamHandler.HandleStream(r.Context(), req, ch)
 
-	var events []jsonEvent
+	events := make([]jsonEvent, 0)
 	for event := range ch {
 		raw := []byte(event.Data)
 		if !json.Valid(raw) {
 			// Wrap non-JSON text as a JSON string so the response stays valid.
-			raw, _ = json.Marshal(event.Data)
+			var err error
+			raw, err = json.Marshal(event.Data)
+			if err != nil {
+				slog.Debug("writeJSON: failed to marshal event data, skipping event", "error", err, "event", event.Event)
+				continue
+			}
 		}
 		events = append(events, jsonEvent{Event: event.Event, Data: raw})
 	}

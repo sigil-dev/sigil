@@ -337,6 +337,6 @@ func (p *Provider) streamChat(ctx context.Context, params anthropicsdk.MessageNe
 
 	// If we exit the loop without a message_stop, still send done.
 	slog.Warn("anthropic: stream ended without message_stop event")
-	p.health.RecordSuccess()
+	p.health.RecordFailure()
 	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
 }
