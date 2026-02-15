@@ -16,7 +16,7 @@ import (
 
 // SSEEventType defines the allowed event types for server-sent events.
 // These correspond to provider.EventType values plus server-specific types.
-type SSEEventType = string
+type SSEEventType string
 
 // SSE event type constants.
 const (
@@ -53,20 +53,21 @@ func (s *Server) RegisterStreamHandler(h StreamHandler) {
 }
 
 // checkWorkspaceMembership verifies the authenticated user has access to the
-// requested workspace. Returns nil when auth is disabled (user is nil) or
-// when workspace_id is empty (will be validated downstream).
+// requested workspace. Returns nil when auth is disabled (user is nil).
+// When auth is enabled, workspace_id is required and workspace service must be available.
 func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID string) error {
-	if workspaceID == "" {
-		return nil
-	}
 	user := UserFromContext(ctx)
 	if user == nil {
-		// Auth disabled — allow all access.
+		// Auth disabled — skip membership check.
 		return nil
 	}
+	if workspaceID == "" {
+		// Auth enabled but no workspace specified — reject.
+		return huma.Error422UnprocessableEntity("workspace_id is required")
+	}
 	if s.services == nil || s.services.Workspaces == nil {
-		// Services not registered yet — skip check.
-		return nil
+		// Services not registered — fail closed.
+		return huma.Error503ServiceUnavailable("workspace service not available")
 	}
 	ws, err := s.services.Workspaces.Get(ctx, workspaceID)
 	if err != nil {
@@ -189,7 +190,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		if se, ok := err.(huma.StatusError); ok {
 			status = se.GetStatus()
 		}
-		errBody, _ := json.Marshal(map[string]string{"error": err.Error()})
+		errBody, marshalErr := json.Marshal(map[string]string{"error": err.Error()})
+		if marshalErr != nil {
+			jsonError(w, `{"error":"internal error"}`, status)
+			return
+		}
 		jsonError(w, string(errBody), status)
 		return
 	}
@@ -207,8 +212,15 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, req)
 }
 
-// drainSSEChannel consumes remaining events from ch so that the goroutine
-// writing to ch (HandleStream) does not block on a full buffer.
+// validateEventType checks if an SSE event type contains invalid newline characters.
+// Returns true if the event type is valid (no newlines).
+func validateEventType(eventType SSEEventType) bool {
+	return !strings.ContainsAny(string(eventType), "\r\n")
+}
+
+// drainSSEChannel consumes remaining events from ch in a background goroutine
+// so that the producer (HandleStream) does not block on a full buffer after
+// the consumer has stopped reading. The goroutine exits when ch is closed.
 func drainSSEChannel(ch <-chan SSEEvent) {
 	go func() {
 		for range ch {
@@ -240,7 +252,7 @@ func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStream
 	go s.streamHandler.HandleStream(r.Context(), req, ch)
 
 	for event := range ch {
-		if strings.ContainsAny(event.Event, "\r\n") {
+		if !validateEventType(event.Event) {
 			slog.Warn("sse: skipping event with invalid type containing newlines", "event_type", event.Event)
 			continue
 		}
@@ -274,7 +286,7 @@ type marshalError struct {
 
 // jsonEvent pairs an event type with its data payload for JSON responses.
 type jsonEvent struct {
-	Event string          `json:"event"`
+	Event SSEEventType    `json:"event"`
 	Data  json.RawMessage `json:"data"`
 }
 
@@ -284,7 +296,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 
 	events := make([]jsonEvent, 0)
 	for event := range ch {
-		if strings.ContainsAny(event.Event, "\r\n") {
+		if !validateEventType(event.Event) {
 			slog.Warn("sse: skipping event with invalid type containing newlines", "event_type", event.Event)
 			continue
 		}

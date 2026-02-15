@@ -252,7 +252,9 @@ func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*
 func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput) (*reloadPluginOutput, error) {
 	// Plugin reload requires admin permission.
 	user := UserFromContext(ctx)
-	if user != nil && !user.HasPermission("admin:reload") {
+	if user == nil {
+		slog.Warn("plugin reload without authentication (auth disabled)", "plugin", input.Name)
+	} else if !user.HasPermission("admin:reload") {
 		return nil, huma.Error403Forbidden("insufficient permissions to reload plugins")
 	}
 

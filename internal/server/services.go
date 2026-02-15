@@ -25,6 +25,29 @@ type Services struct {
 	Users      UserService
 }
 
+// NewServices creates a Services instance with validation.
+// Returns an error if any required service is nil.
+func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService) (*Services, error) {
+	if ws == nil {
+		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "workspace service is required")
+	}
+	if plugins == nil {
+		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "plugin service is required")
+	}
+	if sessions == nil {
+		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "session service is required")
+	}
+	if users == nil {
+		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "user service is required")
+	}
+	return &Services{
+		Workspaces: ws,
+		Plugins:    plugins,
+		Sessions:   sessions,
+		Users:      users,
+	}, nil
+}
+
 // WorkspaceService provides workspace operations for REST handlers.
 type WorkspaceService interface {
 	List(ctx context.Context) ([]WorkspaceSummary, error)

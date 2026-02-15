@@ -345,13 +345,17 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
             "restart" => {
                 if let Err(e) = restart_sidecar(app) {
                     error!("Failed to restart gateway: {}", e);
-                    let _ = app.emit("sidecar-error", format!("Restart failed: {}", e));
+                    if let Err(emit_err) = app.emit("sidecar-error", format!("Restart failed: {}", e)) {
+                        error!("Failed to emit restart error notification: {}", emit_err);
+                    }
                 }
             }
             "quit" => {
                 if let Err(e) = stop_sidecar(app) {
                     error!("Failed to stop gateway: {}", e);
-                    let _ = app.emit("sidecar-error", format!("Stop failed: {}", e));
+                    if let Err(emit_err) = app.emit("sidecar-error", format!("Stop failed: {}", e)) {
+                        error!("Failed to emit stop error notification: {}", emit_err);
+                    }
                 }
                 app.exit(0);
             }

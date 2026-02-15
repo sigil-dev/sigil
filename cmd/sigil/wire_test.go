@@ -319,13 +319,7 @@ func TestGateway_CloseDoesNotPanic(t *testing.T) {
 	err = gw.Close()
 	assert.NoError(t, err)
 
-	// Verify implementation: Check that both WorkspaceManager and GatewayStore
-	// are closed by calling Close again. Since both were already closed,
-	// if the implementation used early return on first error, the second
-	// subsystem wouldn't be attempted. By using errors.Join, all errors
-	// are collected.
-	//
-	// This is a weak test because db.Close() and workspace manager Close
-	// are idempotent, but it verifies the fix compiles and runs.
-	// A stronger test would require injectable mock closers.
+	// Close is idempotent for both subsystems, so we cannot verify that
+	// errors.Join collects errors from both without injectable mock closers.
+	// This test confirms Close does not panic on a properly initialized Gateway.
 }

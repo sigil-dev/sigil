@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -31,11 +32,12 @@ type Config struct {
 
 // Server wraps a chi router with huma API and HTTP server.
 type Server struct {
-	router        chi.Router
-	api           huma.API
-	cfg           Config
-	streamHandler StreamHandler
-	services      *Services
+	router         chi.Router
+	api            huma.API
+	cfg            Config
+	streamHandler  StreamHandler
+	services       *Services
+	rateLimitDone  chan struct{}
 }
 
 // New creates a Server with chi router, huma API, health endpoint, and CORS.
@@ -50,6 +52,13 @@ func New(cfg Config) (*Server, error) {
 		cfg.WriteTimeout = 60 * time.Second
 	}
 
+	// Validate rate limit config
+	if err := cfg.RateLimit.Validate(); err != nil {
+		return nil, err
+	}
+
+	rateLimitDone := make(chan struct{})
+
 	r := chi.NewRouter()
 
 	// Middleware
@@ -58,7 +67,7 @@ func New(cfg Config) (*Server, error) {
 	r.Use(securityHeadersMiddleware(cfg.EnableHSTS))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(authMiddleware(cfg.TokenValidator))
-	r.Use(rateLimitMiddleware(cfg.RateLimit))
+	r.Use(rateLimitMiddleware(cfg.RateLimit, rateLimitDone))
 
 	// Huma API with OpenAPI spec
 	humaConfig := huma.DefaultConfig("Sigil Gateway", "0.1.0")
@@ -77,9 +86,10 @@ func New(cfg Config) (*Server, error) {
 	})
 
 	srv := &Server{
-		router: r,
-		api:    api,
-		cfg:    cfg,
+		router:        r,
+		api:           api,
+		cfg:           cfg,
+		rateLimitDone: rateLimitDone,
 	}
 
 	// Register SSE route (returns 503 until a StreamHandler is set).
@@ -129,6 +139,9 @@ func (s *Server) Start(ctx context.Context) error {
 		return sigilerr.Errorf(sigilerr.CodeServerShutdownFailure, "shutting down: %w", err)
 	}
 
+	// Signal rate limiter cleanup goroutine to exit
+	close(s.rateLimitDone)
+
 	return <-errCh
 }
 
@@ -144,6 +157,7 @@ type HealthResponse struct {
 
 func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 	if len(origins) == 0 {
+		slog.Warn("no CORS origins configured, defaulting to http://localhost:5173 (development only)")
 		origins = []string{"http://localhost:5173"}
 	}
 

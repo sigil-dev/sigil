@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"log/slog"
@@ -108,12 +109,17 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	}
 
 	// Wire service adapters for REST endpoints.
-	srv.RegisterServices(&server.Services{
-		Workspaces: &workspaceServiceAdapter{cfg: cfg},
-		Plugins:    &pluginServiceAdapter{mgr: pluginMgr},
-		Sessions:   &sessionServiceAdapter{wsMgr: wsMgr},
-		Users:      &userServiceAdapter{store: gs.Users()},
-	})
+	services, err := server.NewServices(
+		&workspaceServiceAdapter{cfg: cfg},
+		&pluginServiceAdapter{mgr: pluginMgr},
+		&sessionServiceAdapter{wsMgr: wsMgr},
+		&userServiceAdapter{store: gs.Users()},
+	)
+	if err != nil {
+		_ = gs.Close()
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
+	}
+	srv.RegisterServices(services)
 
 	// Register stub stream handler so chat endpoints return a helpful
 	// message instead of 503. Will be replaced by real agent loop.
@@ -354,16 +360,24 @@ func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator 
 }
 
 func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {
+	// Hash the incoming token to prevent length-based timing leaks.
+	// sha256 ensures constant-time comparison regardless of token length differences.
+	tokenHash := sha256.Sum256([]byte(token))
+
 	// Iterate all tokens to prevent timing side-channels that leak token count
 	// or matching position. Store match and return after full iteration.
 	var matched *server.AuthenticatedUser
 	for configuredToken, user := range v.tokens {
-		if subtle.ConstantTimeCompare([]byte(token), []byte(configuredToken)) == 1 {
+		configuredHash := sha256.Sum256([]byte(configuredToken))
+		if subtle.ConstantTimeCompare(tokenHash[:], configuredHash[:]) == 1 {
 			matched = user
 		}
 	}
 	if matched != nil {
 		return matched, nil
 	}
+	slog.Debug("token validation failed: no configured token matched",
+		"configured_count", len(v.tokens),
+	)
 	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")
 }

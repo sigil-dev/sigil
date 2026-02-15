@@ -1177,11 +1177,31 @@ func (r *mockProviderRouterWithAttempts) callCount() int {
 	return r.calls
 }
 
+// mockProviderHealthBase provides common health tracking functionality.
+// Embed this in mock providers to track RecordFailure/RecordSuccess calls.
+type mockProviderHealthBase struct {
+	mu           sync.Mutex
+	failureCount int
+}
+
+func (p *mockProviderHealthBase) RecordFailure() {
+	p.mu.Lock()
+	p.failureCount++
+	p.mu.Unlock()
+}
+
+func (p *mockProviderHealthBase) RecordSuccess() {}
+
+func (p *mockProviderHealthBase) getFailureCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failureCount
+}
+
 // mockProviderChatErrorWithHealth is a provider whose Chat() fails and
 // implements provider.HealthReporter to track RecordFailure calls.
 type mockProviderChatErrorWithHealth struct {
-	mu           sync.Mutex
-	failureCount int
+	mockProviderHealthBase
 }
 
 func (p *mockProviderChatErrorWithHealth) Name() string                     { return "mock-health-error" }
@@ -1196,19 +1216,6 @@ func (p *mockProviderChatErrorWithHealth) ListModels(_ context.Context) ([]provi
 func (p *mockProviderChatErrorWithHealth) Close() error { return nil }
 func (p *mockProviderChatErrorWithHealth) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	return nil, assert.AnError
-}
-
-func (p *mockProviderChatErrorWithHealth) RecordFailure() {
-	p.mu.Lock()
-	p.failureCount++
-	p.mu.Unlock()
-}
-func (p *mockProviderChatErrorWithHealth) RecordSuccess() {}
-
-func (p *mockProviderChatErrorWithHealth) getFailureCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.failureCount
 }
 
 func TestAgentLoop_ChatFailureCallsRecordFailure(t *testing.T) {
@@ -1243,8 +1250,7 @@ func TestAgentLoop_ChatFailureCallsRecordFailure(t *testing.T) {
 // mockProviderEmptyStreamWithHealth is a provider whose Chat() returns a channel
 // that closes immediately without events, and tracks RecordFailure calls.
 type mockProviderEmptyStreamWithHealth struct {
-	mu           sync.Mutex
-	failureCount int
+	mockProviderHealthBase
 }
 
 func (p *mockProviderEmptyStreamWithHealth) Name() string { return "mock-empty-stream-health" }
@@ -1264,18 +1270,6 @@ func (p *mockProviderEmptyStreamWithHealth) Chat(_ context.Context, _ provider.C
 	ch := make(chan provider.ChatEvent)
 	close(ch) // Close immediately without sending any events
 	return ch, nil
-}
-
-func (p *mockProviderEmptyStreamWithHealth) RecordFailure() {
-	p.mu.Lock()
-	p.failureCount++
-	p.mu.Unlock()
-}
-func (p *mockProviderEmptyStreamWithHealth) RecordSuccess() {}
-func (p *mockProviderEmptyStreamWithHealth) getFailureCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.failureCount
 }
 
 func TestAgentLoop_EmptyStreamCallsRecordFailure(t *testing.T) {
@@ -1310,8 +1304,7 @@ func TestAgentLoop_EmptyStreamCallsRecordFailure(t *testing.T) {
 // mockProviderFirstEventErrorWithHealth is a provider whose Chat() returns a channel
 // where the first event is an error, and tracks RecordFailure calls.
 type mockProviderFirstEventErrorWithHealth struct {
-	mu           sync.Mutex
-	failureCount int
+	mockProviderHealthBase
 }
 
 func (p *mockProviderFirstEventErrorWithHealth) Name() string {
@@ -1335,18 +1328,6 @@ func (p *mockProviderFirstEventErrorWithHealth) Chat(_ context.Context, _ provid
 	ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: "first event is error"}
 	close(ch)
 	return ch, nil
-}
-
-func (p *mockProviderFirstEventErrorWithHealth) RecordFailure() {
-	p.mu.Lock()
-	p.failureCount++
-	p.mu.Unlock()
-}
-func (p *mockProviderFirstEventErrorWithHealth) RecordSuccess() {}
-func (p *mockProviderFirstEventErrorWithHealth) getFailureCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.failureCount
 }
 
 func TestAgentLoop_FirstEventErrorCallsRecordFailure(t *testing.T) {

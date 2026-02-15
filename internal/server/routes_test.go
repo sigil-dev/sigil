@@ -736,11 +736,7 @@ func TestRoutes_SendMessage_WorkspaceMembership_WorkspaceNotFound_Returns404(t *
 }
 
 func TestRoutes_SendMessage_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {
-	// Empty workspace_id bypasses membership check.
-	events := []server.SSEEvent{
-		{Event: "text_delta", Data: `{"text":"Hello"}`},
-		{Event: "done", Data: `{}`},
-	}
+	// When auth is enabled, empty workspace_id returns 422.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
 			"user-token": {
@@ -762,7 +758,7 @@ func TestRoutes_SendMessage_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *tes
 		Sessions:   &mockSessionService{},
 		Users:      &mockUserService{},
 	})
-	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
 
 	body := `{"content": "Hello", "workspace_id": ""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
@@ -771,5 +767,6 @@ func TestRoutes_SendMessage_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *tes
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Contains(t, w.Body.String(), "workspace_id is required")
 }

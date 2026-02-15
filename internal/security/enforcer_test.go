@@ -256,46 +256,41 @@ func TestEnforcer_AuditEntryIDsAreUnique(t *testing.T) {
 	assert.NotEqual(t, entries[0].ID, entries[1].ID)
 }
 
-func TestEnforcer_DenyWhenAuditAppendFailsReturnsCapabilityDenied(t *testing.T) {
+func TestEnforcer_AuditFailure_DeniedStillDenies(t *testing.T) {
 	t.Parallel()
 
-	audit := &mockAuditStore{err: errors.New("audit backend unavailable")}
+	audit := &mockAuditStore{err: errors.New("database offline")}
 	enforcer := security.NewEnforcer(audit)
-	enforcer.RegisterPlugin("telegram", security.NewCapabilitySet(
-		"sessions.read",
-	), security.NewCapabilitySet())
+	enforcer.RegisterPlugin("test-plugin", security.NewCapabilitySet("read"), security.NewCapabilitySet())
 
+	// A denied check should still return the capability denied error, not an audit error.
 	err := enforcer.Check(context.Background(), security.CheckRequest{
-		Plugin:          "telegram",
-		Capability:      "exec.run",
-		WorkspaceID:     "ws-1",
-		WorkspaceAllow:  security.NewCapabilitySet("*"),
-		UserPermissions: security.NewCapabilitySet("*"),
+		Plugin:          "test-plugin",
+		Capability:      "write", // not in allow set
+		WorkspaceAllow:  security.NewCapabilitySet("write"),
+		UserPermissions: security.NewCapabilitySet("write"),
 	})
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied))
-	assert.Contains(t, err.Error(), "denied")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied),
+		"denied check should return capability denied error, not audit error")
 	assert.Empty(t, audit.snapshot())
 }
 
-func TestEnforcer_AllowWhenAuditAppendFailsReturnsStoreFailure(t *testing.T) {
+func TestEnforcer_AuditFailure_BestEffort(t *testing.T) {
 	t.Parallel()
 
-	audit := &mockAuditStore{err: errors.New("audit backend unavailable")}
+	audit := &mockAuditStore{err: errors.New("database offline")}
 	enforcer := security.NewEnforcer(audit)
-	enforcer.RegisterPlugin("telegram", security.NewCapabilitySet(
-		"sessions.read",
-	), security.NewCapabilitySet())
+	enforcer.RegisterPlugin("test-plugin", security.NewCapabilitySet("read"), security.NewCapabilitySet())
 
+	// An allowed check should succeed even when audit store fails (best-effort).
 	err := enforcer.Check(context.Background(), security.CheckRequest{
-		Plugin:          "telegram",
-		Capability:      "sessions.read",
-		WorkspaceID:     "ws-1",
-		WorkspaceAllow:  security.NewCapabilitySet("*"),
-		UserPermissions: security.NewCapabilitySet("*"),
+		Plugin:          "test-plugin",
+		Capability:      "read",
+		WorkspaceAllow:  security.NewCapabilitySet("read"),
+		UserPermissions: security.NewCapabilitySet("read"),
 	})
-	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeStoreDatabaseFailure))
+	assert.NoError(t, err, "allowed check should not fail when audit store is unavailable")
 	assert.Empty(t, audit.snapshot())
 }
 
@@ -437,51 +432,6 @@ func TestEnforcer_AuditLogging(t *testing.T) {
 	assert.NotEqual(t, allowed.ID, denied.ID)
 }
 
-func TestEnforcer_AuditFailure_BestEffortSemantics(t *testing.T) {
-	// Verify that audit store failure does not prevent the capability decision
-	// from being returned. The enforcer uses best-effort audit logging:
-	// decisions are still made correctly even when audit persistence fails.
-	//
-	// For "allow" decisions: the error is attached to the result but the
-	// operation is permitted.
-	// For "deny" decisions: the denial is returned regardless of audit status.
-
-	audit := &mockAuditStore{err: errors.New("storage unavailable")}
-	enforcer := security.NewEnforcer(audit)
-	enforcer.RegisterPlugin("test-plugin", security.NewCapabilitySet(
-		"sessions.read",
-	), security.NewCapabilitySet())
-
-	// Allow decision with failing audit: should still return non-nil error
-	// (indicating audit failure) but the operation should logically be allowed
-	req := security.CheckRequest{
-		Plugin:          "test-plugin",
-		Capability:      "sessions.read",
-		WorkspaceID:     "ws-1",
-		WorkspaceAllow:  security.NewCapabilitySet("*"),
-		UserPermissions: security.NewCapabilitySet("*"),
-	}
-	err := enforcer.Check(context.Background(), req)
-	// The allow path returns the audit error, not a capability denied error
-	require.Error(t, err, "audit failure should be surfaced")
-	assert.False(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied),
-		"should NOT be a capability denied error — the operation was allowed")
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeStoreDatabaseFailure),
-		"should be a store failure error from the audit write")
-
-	// Deny decision with failing audit: should return capability denied
-	denyReq := security.CheckRequest{
-		Plugin:          "test-plugin",
-		Capability:      "admin.shutdown",
-		WorkspaceID:     "ws-1",
-		WorkspaceAllow:  security.NewCapabilitySet("*"),
-		UserPermissions: security.NewCapabilitySet("*"),
-	}
-	err = enforcer.Check(context.Background(), denyReq)
-	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied),
-		"should be a capability denied error regardless of audit failure")
-}
 
 // --- sigil-anm.17: Nil audit store guard and counter isolation ---
 

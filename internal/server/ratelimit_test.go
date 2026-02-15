@@ -14,6 +14,9 @@ import (
 )
 
 func TestRateLimitMiddleware_Disabled(t *testing.T) {
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -23,7 +26,7 @@ func TestRateLimitMiddleware_Disabled(t *testing.T) {
 	middleware := rateLimitMiddleware(RateLimitConfig{
 		RequestsPerSecond: 0,
 		Burst:             10,
-	})
+	}, done)
 
 	wrapped := middleware(handler)
 
@@ -41,6 +44,9 @@ func TestRateLimitMiddleware_Disabled(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_WithinLimit(t *testing.T) {
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -49,7 +55,7 @@ func TestRateLimitMiddleware_WithinLimit(t *testing.T) {
 	middleware := rateLimitMiddleware(RateLimitConfig{
 		RequestsPerSecond: 10,
 		Burst:             5,
-	})
+	}, done)
 
 	wrapped := middleware(handler)
 
@@ -67,6 +73,9 @@ func TestRateLimitMiddleware_WithinLimit(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_ExceedsLimit(t *testing.T) {
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -75,7 +84,7 @@ func TestRateLimitMiddleware_ExceedsLimit(t *testing.T) {
 	middleware := rateLimitMiddleware(RateLimitConfig{
 		RequestsPerSecond: 10,
 		Burst:             3,
-	})
+	}, done)
 
 	wrapped := middleware(handler)
 
@@ -106,6 +115,9 @@ func TestRateLimitMiddleware_ExceedsLimit(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_PerIPIsolation(t *testing.T) {
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -114,7 +126,7 @@ func TestRateLimitMiddleware_PerIPIsolation(t *testing.T) {
 	middleware := rateLimitMiddleware(RateLimitConfig{
 		RequestsPerSecond: 10,
 		Burst:             2,
-	})
+	}, done)
 
 	wrapped := middleware(handler)
 
@@ -148,6 +160,9 @@ func TestRateLimitMiddleware_PerIPIsolation(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_TokenRefill(t *testing.T) {
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -157,7 +172,7 @@ func TestRateLimitMiddleware_TokenRefill(t *testing.T) {
 	middleware := rateLimitMiddleware(RateLimitConfig{
 		RequestsPerSecond: 10,
 		Burst:             2,
-	})
+	}, done)
 
 	wrapped := middleware(handler)
 
@@ -191,6 +206,9 @@ func TestRateLimitMiddleware_TokenRefill(t *testing.T) {
 }
 
 func TestRateLimitMiddleware_RetryAfterHeader(t *testing.T) {
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -198,7 +216,7 @@ func TestRateLimitMiddleware_RetryAfterHeader(t *testing.T) {
 	middleware := rateLimitMiddleware(RateLimitConfig{
 		RequestsPerSecond: 10,
 		Burst:             1,
-	})
+	}, done)
 
 	wrapped := middleware(handler)
 
@@ -219,4 +237,69 @@ func TestRateLimitMiddleware_RetryAfterHeader(t *testing.T) {
 
 	assert.Equal(t, http.StatusTooManyRequests, w.Code)
 	assert.Equal(t, "1", w.Header().Get("Retry-After"), "Retry-After header should be set to 1 second")
+}
+
+func TestRateLimitMiddleware_CleanupShutdown(t *testing.T) {
+	done := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := rateLimitMiddleware(RateLimitConfig{RequestsPerSecond: 10, Burst: 5}, done)
+	wrapped := mw(handler)
+
+	// Fire a request to ensure goroutine is running
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+	w := httptest.NewRecorder()
+	wrapped.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Close done channel - cleanup goroutine should exit
+	close(done)
+	// If the goroutine doesn't exit, this test will leak (detectable by goleak)
+}
+
+func TestRateLimitConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     RateLimitConfig
+		wantErr bool
+	}{
+		{
+			name:    "valid config",
+			cfg:     RateLimitConfig{RequestsPerSecond: 10, Burst: 5},
+			wantErr: false,
+		},
+		{
+			name:    "disabled",
+			cfg:     RateLimitConfig{RequestsPerSecond: 0, Burst: 0},
+			wantErr: false,
+		},
+		{
+			name:    "zero burst with positive rate",
+			cfg:     RateLimitConfig{RequestsPerSecond: 10, Burst: 0},
+			wantErr: true,
+		},
+		{
+			name:    "negative rate",
+			cfg:     RateLimitConfig{RequestsPerSecond: -1, Burst: 5},
+			wantErr: true,
+		},
+		{
+			name:    "negative burst with zero rate",
+			cfg:     RateLimitConfig{RequestsPerSecond: 0, Burst: -1},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

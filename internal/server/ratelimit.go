@@ -5,9 +5,12 @@ package server
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // RateLimitConfig configures per-IP rate limiting.
@@ -18,9 +21,25 @@ type RateLimitConfig struct {
 	Burst int
 }
 
+// Validate checks that the RateLimitConfig is valid.
+func (c RateLimitConfig) Validate() error {
+	if c.RequestsPerSecond > 0 && c.Burst <= 0 {
+		return sigilerr.Errorf(sigilerr.CodeServerConfigInvalid,
+			"rate limit burst must be positive when rate is set (got burst=%d, rate=%g)",
+			c.Burst, c.RequestsPerSecond)
+	}
+	if c.RequestsPerSecond < 0 {
+		return sigilerr.Errorf(sigilerr.CodeServerConfigInvalid,
+			"rate limit requests per second must not be negative (got %g)",
+			c.RequestsPerSecond)
+	}
+	return nil
+}
+
 // rateLimitMiddleware returns middleware that enforces per-IP rate limits.
 // Returns a pass-through middleware when cfg.RequestsPerSecond is zero.
-func rateLimitMiddleware(cfg RateLimitConfig) func(http.Handler) http.Handler {
+// The done channel signals the cleanup goroutine to exit on shutdown.
+func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Handler) http.Handler {
 	if cfg.RequestsPerSecond <= 0 {
 		return func(next http.Handler) http.Handler { return next }
 	}
@@ -32,22 +51,34 @@ func rateLimitMiddleware(cfg RateLimitConfig) func(http.Handler) http.Handler {
 
 	// Periodically clean up stale entries to prevent unbounded growth.
 	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
 		for {
-			time.Sleep(5 * time.Minute)
-			mu.Lock()
-			now := time.Now()
-			for ip, v := range visitors {
-				if now.Sub(v.lastSeen) > 10*time.Minute {
-					delete(visitors, ip)
+			select {
+			case <-ticker.C:
+				mu.Lock()
+				now := time.Now()
+				for ip, v := range visitors {
+					if now.Sub(v.lastSeen) > 10*time.Minute {
+						delete(visitors, ip)
+					}
 				}
+				mu.Unlock()
+			case <-done:
+				return
 			}
-			mu.Unlock()
 		}
 	}()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr
+			// Strip port from RemoteAddr to prevent trivial bypass
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				// RemoteAddr might not have a port (e.g., in tests)
+				host = r.RemoteAddr
+			}
+			ip := host
 
 			mu.Lock()
 			v, exists := visitors[ip]

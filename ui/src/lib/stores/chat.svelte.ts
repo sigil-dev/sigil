@@ -61,6 +61,7 @@ export class ChatStore {
   error = $state<string | null>(null);
   workspaceGroups = $state<WorkspaceGroup[]>([]);
   sidebarLoading = $state(false);
+  authToken = $state<string | null>(null);
 
   private abortController: AbortController | null = null;
 
@@ -172,13 +173,18 @@ export class ChatStore {
 
       // Note: Using raw fetch for SSE streaming endpoint instead of typed client.
       // openapi-fetch does not support ReadableStream responses; revisit when it does.
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      };
+      if (this.authToken) {
+        headers["Authorization"] = `Bearer ${this.authToken}`;
+      }
+
       const timeoutSignal = AbortSignal.timeout(SSE_STREAM_TIMEOUT_MS);
       const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
+        headers,
         body: JSON.stringify(body),
         signal: AbortSignal.any([this.abortController.signal, timeoutSignal]),
       });

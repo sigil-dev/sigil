@@ -96,8 +96,13 @@ func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
 		return e.deny(ctx, req, "user_permission_missing", pluginAllow, pluginDeny, workspaceAllow, userAllow)
 	}
 
+	// Audit logging is best-effort — allowed decisions still succeed if audit fails.
 	if err := e.auditDecision(ctx, req, "allowed", "ok", pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
-		return err
+		slog.Warn("audit log failure on allowed decision (best-effort, not blocking)",
+			"plugin", req.Plugin,
+			"capability", req.Capability,
+			"error", err,
+		)
 	}
 
 	return nil
@@ -120,8 +125,13 @@ func (e *Enforcer) deny(
 		reason,
 	)
 
+	// Audit logging is best-effort — denied decisions still return the denial.
 	if err := e.auditDecision(ctx, req, "denied", reason, pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
-		return sigilerr.With(deniedErr, sigilerr.Field("audit_append_error", err.Error()))
+		slog.Warn("audit log failure on denied decision (best-effort, not blocking)",
+			"plugin", req.Plugin,
+			"capability", req.Capability,
+			"error", err,
+		)
 	}
 
 	return deniedErr
