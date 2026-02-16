@@ -490,6 +490,111 @@ func TestGateway_CloseCallsServerClose(t *testing.T) {
 	}, "Server.Close should be idempotent, proving Gateway.Close called it")
 }
 
+// Test malformed authentication token edge cases to ensure graceful handling.
+// Verifies that tokens with invalid formats, corrupted content, and length issues
+// are rejected without panics or unexpected behavior.
+func TestConfigTokenValidator_MalformedTokens(t *testing.T) {
+	validator, err := newConfigTokenValidator([]config.TokenConfig{
+		{Token: "valid-token-abc123def456", UserID: "user-1", Name: "Test User", Permissions: []string{"*"}},
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		token           string
+		wantErr         bool
+		shouldNotPanic  bool
+		description     string
+	}{
+		{
+			name:           "truncated token - partial base64",
+			token:          "dGVzdC10b2tlbi1hYmM=",  // valid base64 fragment
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Partial base64 should be rejected gracefully",
+		},
+		{
+			name:           "token with invalid base64 characters",
+			token:          "invalid@#$%^&*()[]{}",
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Non-base64 characters should not cause panic",
+		},
+		{
+			name:           "correct format but corrupted content",
+			token:          "dGhpcyBpcyBhIHRlc3QgdG9rZW4gd2l0aCBjb3JydXB0ZWQgY29udGVudA==",
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Valid base64 but wrong token should be rejected",
+		},
+		{
+			name:           "empty string after whitespace trimming",
+			token:          "",
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Empty token should be rejected gracefully",
+		},
+		{
+			name:           "whitespace-only token",
+			token:          "   ",
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Whitespace-only token should be rejected",
+		},
+		{
+			name:           "token exceeding expected length",
+			token:          strings.Repeat("a", 10000),
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Very long token should be rejected without memory issues",
+		},
+		{
+			name:           "token with null bytes",
+			token:          "token\x00with\x00nulls",
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Null bytes in token should be handled safely",
+		},
+		{
+			name:           "UTF-8 multi-byte characters in token",
+			token:          "token-with-emoji-🔐-symbols",
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "UTF-8 special characters should not cause panic",
+		},
+		{
+			name:           "newline characters in token",
+			token:          "token\nwith\nnewlines",
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Newline characters should be rejected safely",
+		},
+		{
+			name:           "single character token",
+			token:          "a",
+			wantErr:        true,
+			shouldNotPanic: true,
+			description:    "Single character token should be rejected",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify no panic occurs
+			assert.NotPanics(t, func() {
+				user, err := validator.ValidateToken(context.Background(), tt.token)
+				if tt.wantErr {
+					assert.Error(t, err, tt.description)
+					assert.Nil(t, user, "user should be nil for invalid token")
+				} else {
+					assert.NoError(t, err, tt.description)
+					assert.NotNil(t, user, "user should not be nil for valid token")
+				}
+			}, "ValidateToken should not panic for malformed token: %s", tt.description)
+		})
+	}
+}
+
 // Test that token validation timing is constant regardless of token position in the map.
 // This test verifies that the implementation iterates through ALL tokens before returning,
 // preventing timing attacks that could reveal which token position matched.
