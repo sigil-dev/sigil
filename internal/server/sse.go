@@ -370,7 +370,10 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 					continue
 				}
 				events = append(events, jsonEvent{Event: "error", Data: json.RawMessage(errPayload)})
-				continue
+				// Drain the channel to prevent blocking the producer, then stop processing.
+				// Further events are dropped since we can't guarantee valid JSON serialization.
+				for range ch {}
+				break
 			}
 		}
 		events = append(events, jsonEvent{Event: event.Event, Data: raw})

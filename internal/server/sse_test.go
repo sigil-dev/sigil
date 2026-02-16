@@ -1425,3 +1425,4 @@ func TestSSE_DrainRaceCondition_BurstyPattern(t *testing.T) {
 		t.Fatal("HandleStream did not exit; drain failed with bursty pattern")
 	}
 }
+
