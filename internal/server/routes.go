@@ -113,7 +113,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/status",
 		Summary:     "Gateway status",
 		Tags:        []string{"system"},
-		Errors:      []int{http.StatusTooManyRequests},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleStatus)
 }
 
