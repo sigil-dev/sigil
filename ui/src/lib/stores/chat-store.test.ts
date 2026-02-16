@@ -110,6 +110,30 @@ describe("ChatStore", () => {
       expect(store.messages).toHaveLength(0);
     });
 
+    it("prevents sending message without workspaceId", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      // Don't call newSession - leave workspaceId null
+      await store.sendMessage("hello");
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(store.error).toBe("No workspace selected");
+      expect(store.messages).toHaveLength(0);
+    });
+
+    it("prevents sending message with empty workspaceId", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      store.workspaceId = "   "; // whitespace-only
+      await store.sendMessage("hello");
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(store.error).toBe("No workspace selected");
+      expect(store.messages).toHaveLength(0);
+    });
+
     it("prevents concurrent messages while loading", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
         mockSSEResponse("event: done\ndata: {}\n\n"),
