@@ -737,6 +737,73 @@ func (w *countingResponseWriter) Flush() {
 	w.ResponseRecorder.Flush()
 }
 
+// burstyStreamHandler sends many events in a burst, used to test event limit enforcement.
+type burstyStreamHandler struct {
+	eventCount int
+}
+
+func (h *burstyStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	defer close(ch)
+	for i := range h.eventCount {
+		select {
+		case ch <- server.SSEEvent{
+			Event: "text_delta",
+			Data:  fmt.Sprintf(`{"text":"event-%d"}`, i),
+		}:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// TestSSE_JSONResponse_EventOverflow tests that writeJSON stops accumulating events
+// after maxSSEEvents and emits an overflow error event.
+func TestSSE_JSONResponse_EventOverflow(t *testing.T) {
+	// Create a handler that emits way more events than maxSSEEvents.
+	// Since maxSSEEvents = 10000, we emit 15000 to ensure we exceed the limit.
+	handler := &burstyStreamHandler{eventCount: 15000}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No Accept: text/event-stream — should get JSON.
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	type jsonEvent struct {
+		Event string          `json:"event"`
+		Data  json.RawMessage `json:"data"`
+	}
+	type errPayload struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	var resp struct {
+		Events []jsonEvent `json:"events"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
+
+	// The events array should be capped at maxSSEEvents + 1 (the overflow error).
+	assert.LessOrEqual(t, len(resp.Events), 10001, "events should not exceed maxSSEEvents + 1")
+
+	// The last event should be an overflow error.
+	lastEvent := resp.Events[len(resp.Events)-1]
+	assert.Equal(t, "error", lastEvent.Event)
+
+	var overflow errPayload
+	err = json.Unmarshal(lastEvent.Data, &overflow)
+	require.NoError(t, err)
+	assert.Equal(t, "stream_overflow", overflow.Error)
+	assert.Contains(t, overflow.Message, "exceeded maximum limit")
+}
+
 // TestSSE_DrainOnContextCancellation tests R18#31: SSE drain on context cancellation.
 // Only write-error drain is tested elsewhere; this tests the context.Done path.
 func TestSSE_DrainOnContextCancellation(t *testing.T) {

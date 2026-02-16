@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // SSEEventType defines the allowed event types for server-sent events.
@@ -28,6 +29,11 @@ const (
 	SSEEventDone      SSEEventType = "done"
 	SSEEventError     SSEEventType = "error"
 	SSEEventSessionID SSEEventType = "session_id"
+
+	// maxSSEEvents limits the number of events accumulated in writeJSON to prevent
+	// unbounded memory growth from buggy or malicious StreamHandlers. When exceeded,
+	// an error event is emitted and remaining events are dropped.
+	maxSSEEvents = 10000
 )
 
 // SSEEvent represents a single server-sent event.
@@ -313,7 +319,29 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 	go s.streamHandler.HandleStream(r.Context(), req, ch)
 
 	events := make([]jsonEvent, 0)
+	overflowed := false
 	for event := range ch {
+		// Check if we've reached the max event limit before processing.
+		if len(events) >= maxSSEEvents {
+			if !overflowed {
+				overflowed = true
+				slog.Warn("writeJSON: SSE event accumulation exceeded maximum limit", "limit", maxSSEEvents)
+				// Emit an overflow error event to signal to the client that events were dropped.
+				err := sigilerr.New(sigilerr.CodeServerInternalFailure, "SSE event stream exceeded maximum limit")
+				errPayload, innerErr := json.Marshal(marshalError{
+					Error:   "stream_overflow",
+					Message: err.Error(),
+				})
+				if innerErr != nil {
+					slog.Warn("writeJSON: failed to marshal overflow error event payload", "error", innerErr)
+				} else {
+					events = append(events, jsonEvent{Event: SSEEventError, Data: json.RawMessage(errPayload)})
+				}
+			}
+			// Continue draining the channel to avoid blocking the producer, but drop remaining events.
+			continue
+		}
+
 		if !validateEventType(event.Event) {
 			slog.Warn("sse: skipping event with invalid type containing newlines", "event_type", event.Event)
 			continue
