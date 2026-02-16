@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -40,6 +41,7 @@ type Server struct {
 	streamHandler StreamHandler
 	services      *Services
 	rateLimitDone chan struct{}
+	closeOnce     sync.Once
 }
 
 // New creates a Server with chi router, huma API, health endpoint, and CORS.
@@ -140,6 +142,15 @@ func (s *Server) API() huma.API {
 	return s.api
 }
 
+// Close signals cleanup goroutines to exit (e.g., rate limiter cleanup).
+// Safe to call multiple times. Users of Handler() without Start() MUST call Close() to prevent goroutine leaks.
+func (s *Server) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.rateLimitDone)
+	})
+	return nil
+}
+
 // Start runs the HTTP server and blocks until the context is cancelled,
 // then performs graceful shutdown.
 func (s *Server) Start(ctx context.Context) error {
@@ -175,7 +186,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	// Signal rate limiter cleanup goroutine to exit
-	close(s.rateLimitDone)
+	_ = s.Close()
 
 	return <-errCh
 }

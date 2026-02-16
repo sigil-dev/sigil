@@ -198,7 +198,7 @@ func notFoundOr500(err error, notFoundMsg, context string) error {
 }
 
 func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWorkspacesOutput, error) {
-	// When auth is enabled, use ListForUser to avoid N+1 Get calls.
+	// When auth is enabled, use ListForUser for membership-filtered results.
 	user := UserFromContext(ctx)
 	var ws []WorkspaceSummary
 	var err error

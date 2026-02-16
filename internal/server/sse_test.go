@@ -1049,3 +1049,193 @@ func TestSSE_DrainOnContextCancellation(t *testing.T) {
 		t.Fatal("HTTP handler did not finish after context cancellation")
 	}
 }
+
+// concurrentStreamHandler simulates multiple concurrent writers to the event channel.
+// Used to test race conditions in SSE writing code under concurrent load.
+type concurrentStreamHandler struct {
+	goroutines int
+	eventsEach int
+	started    chan struct{}
+	done       chan struct{}
+}
+
+func (h *concurrentStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	defer close(ch)
+	defer close(h.done)
+	close(h.started)
+
+	// Spawn multiple goroutines that concurrently write to the channel.
+	// Use a buffered channel sized to the number of writers to avoid blocking on send.
+	writerDone := make(chan struct{}, h.goroutines)
+	for i := range h.goroutines {
+		go func(id int) {
+			defer func() {
+				writerDone <- struct{}{}
+			}()
+			for j := range h.eventsEach {
+				select {
+				case ch <- server.SSEEvent{
+					Event: "text_delta",
+					Data:  fmt.Sprintf(`{"text":"goroutine-%d-event-%d"}`, id, j),
+				}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(i)
+	}
+
+	// Wait for all writers to finish or context cancellation.
+	completedWriters := 0
+	for completedWriters < h.goroutines {
+		select {
+		case <-writerDone:
+			completedWriters++
+		case <-ctx.Done():
+			// Context cancelled — wait for remaining writers to notice and exit.
+			// They will send on writerDone when they exit via the defer.
+			// We drain the remaining completions to avoid goroutine leaks.
+			for completedWriters < h.goroutines {
+				<-writerDone
+				completedWriters++
+			}
+			return
+		}
+	}
+}
+
+func TestSSE_ConcurrentWriteAndDrain(t *testing.T) {
+	// Test concurrent writes to SSE channel + context cancellation for race conditions.
+	// This test spawns multiple goroutines that write to the same channel while
+	// simultaneously cancelling the request context. The race detector (-race flag)
+	// will catch any data races in the SSE writing or draining code.
+	//
+	// Run with: go test -race -run TestSSE_ConcurrentWriteAndDrain ./internal/server/
+
+	handler := &concurrentStreamHandler{
+		goroutines: 10,                 // 10 concurrent writers
+		eventsEach: 50,                 // 50 events each = 500 total events
+		started:    make(chan struct{}),
+		done:       make(chan struct{}),
+	}
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content":"concurrent race test","workspace_id":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Use a cancellable context to simulate client disconnect during concurrent writes.
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+
+	// countingResponseWriter tracks write count and cancels after a threshold.
+	w := &countingResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		writeTrigger:     10, // Cancel after 10 writes
+		onTrigger:        cancel,
+	}
+
+	// Start the HTTP handler in a goroutine.
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		srv.Handler().ServeHTTP(w, req)
+	}()
+
+	// Wait for handler to start and begin producing events.
+	select {
+	case <-handler.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not start within timeout")
+	}
+
+	// Wait for handler goroutine to finish (channel drained, no goroutine leaks).
+	select {
+	case <-handler.done:
+		// success — concurrent writes + cancellation handled without races
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandleStream goroutine did not exit; possible goroutine leak or race condition")
+	}
+
+	// Wait for HTTP handler to finish.
+	select {
+	case <-httpDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HTTP handler did not finish within timeout")
+	}
+
+	// Verify some events were written before cancellation.
+	assert.GreaterOrEqual(t, w.writeCount, 10, "should have written at least 10 times before cancellation")
+}
+
+func TestSSE_ConcurrentWriteAndDrain_JSON(t *testing.T) {
+	// Same as TestSSE_ConcurrentWriteAndDrain but tests the JSON response path.
+	// The JSON path accumulates events in a slice, which has different concurrency
+	// characteristics than the SSE streaming path.
+
+	handler := &concurrentStreamHandler{
+		goroutines: 8,
+		eventsEach: 30, // 240 total events
+		started:    make(chan struct{}),
+		done:       make(chan struct{}),
+	}
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content":"concurrent json race test","workspace_id":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No Accept: text/event-stream — use JSON response.
+
+	w := httptest.NewRecorder()
+
+	// Start the HTTP handler in a goroutine.
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		srv.Handler().ServeHTTP(w, req)
+	}()
+
+	// Wait for handler to start.
+	select {
+	case <-handler.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not start within timeout")
+	}
+
+	// Wait for handler to finish.
+	select {
+	case <-handler.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandleStream goroutine did not exit; possible race condition")
+	}
+
+	// Wait for HTTP handler to finish.
+	select {
+	case <-httpDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HTTP handler did not finish within timeout")
+	}
+
+	// Verify the response is valid JSON.
+	assert.Equal(t, http.StatusOK, w.Code)
+	type jsonEvent struct {
+		Event string          `json:"event"`
+		Data  json.RawMessage `json:"data"`
+	}
+	var resp struct {
+		Events []jsonEvent `json:"events"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
+
+	// Should have received all events from all concurrent writers.
+	expectedTotal := handler.goroutines * handler.eventsEach
+	assert.Equal(t, expectedTotal, len(resp.Events), "should receive all events from concurrent writers")
+}

@@ -5,6 +5,7 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -461,6 +462,25 @@ func (s *mockAuditStoreError) Append(_ context.Context, _ *store.AuditEntry) err
 }
 
 func (s *mockAuditStoreError) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
+	return nil, nil
+}
+
+// mockAuditStoreConditional is an audit store that fails for the first N calls,
+// then succeeds. Used to test consecutive failure counter behavior.
+type mockAuditStoreConditional struct {
+	callCount          atomic.Int32
+	failUntilCallCount int
+}
+
+func (s *mockAuditStoreConditional) Append(_ context.Context, _ *store.AuditEntry) error {
+	current := s.callCount.Add(1)
+	if int(current) <= s.failUntilCallCount {
+		return fmt.Errorf("simulated audit failure (call %d of %d)", current, s.failUntilCallCount)
+	}
+	return nil
+}
+
+func (s *mockAuditStoreConditional) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
 	return nil, nil
 }
 

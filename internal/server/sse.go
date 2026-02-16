@@ -80,7 +80,7 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 	ws, err := s.services.Workspaces().Get(ctx, workspaceID)
 	if err != nil {
 		if IsNotFound(err) {
-			// Return 403 (not 404) to prevent workspace ID enumeration.
+			// Returns 403 for both not-found and forbidden to prevent workspace ID enumeration.
 			return huma.Error403Forbidden("access denied")
 		}
 		slog.Error("internal error", "context", fmt.Sprintf("checking workspace %q", workspaceID), "error", err)
@@ -189,14 +189,9 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	var req ChatStreamRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Type-safe detection of MaxBytesError (Go 1.19+).
+		// Type-safe detection of MaxBytesError (Go 1.22+).
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			jsonError(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
-			return
-		}
-		// Fallback for older Go versions or wrapped errors.
-		if err.Error() == "http: request body too large" {
 			jsonError(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
 			return
 		}

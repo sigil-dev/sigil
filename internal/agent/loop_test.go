@@ -1805,3 +1805,108 @@ func TestAgentLoop_AuditFailureDoesNotFailTurn(t *testing.T) {
 	// Verify audit was attempted.
 	assert.Equal(t, int32(1), failingAuditStore.appendCount.Load(), "audit append should have been attempted")
 }
+
+func TestAgentLoop_AuditStoreConsecutiveFailures(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name                    string
+		failuresBeforeSuccess   int
+		wantFinalFailCount      int64
+		wantSuccessfulResponses int
+	}{
+		{
+			name:                    "consecutive failures increment counter",
+			failuresBeforeSuccess:   3,
+			wantFinalFailCount:      3,
+			wantSuccessfulResponses: 3,
+		},
+		{
+			name:                    "success resets counter to zero",
+			failuresBeforeSuccess:   0,
+			wantFinalFailCount:      0,
+			wantSuccessfulResponses: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create an audit store that fails for N messages, then succeeds.
+			auditStore := &mockAuditStoreConditional{
+				failUntilCallCount: tt.failuresBeforeSuccess,
+			}
+
+			loop := agent.NewLoop(agent.LoopConfig{
+				SessionManager: sm,
+				ProviderRouter: newMockProviderRouter(),
+				AuditStore:     auditStore,
+			})
+
+			// Process N failing messages (if configured).
+			for i := 0; i < tt.failuresBeforeSuccess; i++ {
+				out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+					SessionID:   session.ID,
+					WorkspaceID: "ws-1",
+					UserID:      "user-1",
+					Content:     fmt.Sprintf("message %d", i+1),
+				})
+
+				// Each message should succeed despite audit failure.
+				require.NoError(t, err, "message %d: ProcessMessage should succeed even when audit fails", i+1)
+				require.NotNil(t, out)
+				assert.Equal(t, session.ID, out.SessionID)
+
+				// Verify consecutive failure count increments.
+				expectedFailCount := int64(i + 1)
+				actualFailCount := loop.AuditFailCount()
+				assert.Equal(t, expectedFailCount, actualFailCount,
+					"after message %d: auditFailCount should be %d", i+1, expectedFailCount)
+			}
+
+			// If test includes a success case, process one more message.
+			if tt.failuresBeforeSuccess == 0 || tt.name == "success resets counter to zero" {
+				// For the reset test, we need to fail first, then succeed.
+				if tt.name == "success resets counter to zero" {
+					// First, cause 2 failures.
+					auditStore.failUntilCallCount = 2
+					for i := 0; i < 2; i++ {
+						out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+							SessionID:   session.ID,
+							WorkspaceID: "ws-1",
+							UserID:      "user-1",
+							Content:     fmt.Sprintf("fail message %d", i+1),
+						})
+						require.NoError(t, err)
+						require.NotNil(t, out)
+					}
+					assert.Equal(t, int64(2), loop.AuditFailCount(), "should have 2 consecutive failures")
+
+					// Now allow success (set failUntilCallCount to current count so next call succeeds).
+					auditStore.failUntilCallCount = int(auditStore.callCount.Load())
+				}
+
+				// Process a message that will succeed in audit.
+				out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+					SessionID:   session.ID,
+					WorkspaceID: "ws-1",
+					UserID:      "user-1",
+					Content:     "success message",
+				})
+				require.NoError(t, err)
+				require.NotNil(t, out)
+
+				// Counter should reset to 0 after successful audit.
+				assert.Equal(t, int64(0), loop.AuditFailCount(),
+					"auditFailCount should reset to 0 after successful audit append")
+			}
+
+			// Verify final state.
+			assert.Equal(t, tt.wantFinalFailCount, loop.AuditFailCount(),
+				"final auditFailCount should be %d", tt.wantFinalFailCount)
+		})
+	}
+}

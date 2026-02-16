@@ -22,6 +22,9 @@ func newTestServer(t *testing.T) *server.Server {
 		ListenAddr: "127.0.0.1:0",
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = srv.Close()
+	})
 	return srv
 }
 
@@ -30,6 +33,7 @@ func TestServer_New(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
 	assert.NotNil(t, srv)
 }
 
@@ -131,6 +135,7 @@ func TestServer_CORSOrigins_FromConfig(t *testing.T) {
 		CORSOrigins: []string{"https://app.example.com", "https://admin.example.com"},
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 	req.Header.Set("Origin", "https://app.example.com")
@@ -169,6 +174,7 @@ func TestServer_HSTSHeader_WhenEnabled(t *testing.T) {
 		EnableHSTS: true,
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
@@ -203,6 +209,7 @@ func TestServer_RateLimiterBeforeAuth(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
 
 	// Send requests WITHOUT a valid token (unauthenticated brute-force).
 	// If rate limiter is before auth: after burst, we get 429.
@@ -245,6 +252,7 @@ func TestServer_BehindProxy_WithTrustedProxies(t *testing.T) {
 		TrustedProxies: []string{"10.0.0.0/8"},
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
 	assert.NotNil(t, srv)
 }
 

@@ -333,6 +333,12 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	return session, messages, nil
 }
 
+// callLLM calls the provider route with failover support. Failover only covers
+// first-event failures (auth errors, rate limits, provider down). Mid-stream
+// failures are not retried because replaying the full conversation to a fallback
+// provider requires buffering all events and resending all messages — significant
+// complexity with partial-output ambiguity. Mid-stream errors surface to the caller
+// via processEvents. See D036 in docs/decisions/decision-log.md for design rationale.
 func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.Session, messages []provider.Message) (<-chan provider.ChatEvent, error) {
 	modelName := session.ModelOverride
 	if modelName == "" {
@@ -363,7 +369,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 				return nil, err
 			}
 			lastErr = err
-			break
+			continue
 		}
 
 		triedProviders = append(triedProviders, prov.Name())
@@ -672,4 +678,10 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 	} else {
 		l.auditFailCount.Store(0)
 	}
+}
+
+// AuditFailCount returns the current consecutive audit failure count.
+// Exposed for testing to verify best-effort audit semantics.
+func (l *Loop) AuditFailCount() int64 {
+	return l.auditFailCount.Load()
 }

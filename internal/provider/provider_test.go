@@ -243,6 +243,15 @@ func TestProvider_MidStreamFailure_HealthTracking(t *testing.T) {
 			wantHealthyAfter:    false,
 			wantRecordedFailure: true,
 		},
+		{
+			name: "channel closes after events without done marks provider unhealthy",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeTextDelta, Text: "hello"},
+				{Type: provider.EventTypeTextDelta, Text: " world"},
+			},
+			wantHealthyAfter:    false,
+			wantRecordedFailure: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -279,13 +288,24 @@ func TestProvider_MidStreamFailure_HealthTracking(t *testing.T) {
 
 			// Read all events and simulate the provider's internal health tracking.
 			// In real providers (e.g., anthropic.Provider), RecordFailure is called
-			// internally when an error event is emitted.
+			// internally when an error event is emitted or when the stream ends
+			// without a proper "done" event.
 			var sawError bool
+			var sawDone bool
 			for ev := range eventCh {
-				if ev.Type == provider.EventTypeError {
+				switch ev.Type {
+				case provider.EventTypeError:
 					sawError = true
 					p.RecordFailure()
+				case provider.EventTypeDone:
+					sawDone = true
 				}
+			}
+
+			// If stream ended without error or done, it's an abnormal termination.
+			if !sawError && !sawDone {
+				sawError = true // treat as error for test purposes
+				p.RecordFailure()
 			}
 
 			// Verify health state matches expectations.

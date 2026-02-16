@@ -408,10 +408,17 @@ func TestAuthMiddleware_MalformedTokenEdgeCases(t *testing.T) {
 	}{
 		{"truncated token", "sk-valid"},
 		{"corrupted single char change", "sk-valid-token-abc124"},
-		{"null bytes", "sk-valid\x00token"},
-		{"very long token", strings.Repeat("a", 10000)},
+		{"null bytes at start", "sk-valid\x00token"},
+		{"null bytes at end", "sk-valid-token\x00"},
+		{"null bytes in middle", "sk-va\x00lid-token"},
+		{"very long token 10KB", strings.Repeat("a", 10000)},
+		{"extremely long token 1MB", strings.Repeat("x", 1024*1024)},
 		{"unicode token", "sk-válíd-tökën-àbc123"},
+		{"multibyte unicode", "sk-token-🔐-秘密-тоken"},
 		{"whitespace padded", " sk-valid-token-abc123 "},
+		{"tab padded", "\tsk-valid-token\t"},
+		{"newline padded", "\nsk-valid-token\n"},
+		{"mixed whitespace", " \t sk-valid-token \n "},
 	}
 
 	for _, tt := range tests {
