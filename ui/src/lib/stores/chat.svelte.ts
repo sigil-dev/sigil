@@ -219,7 +219,12 @@ export class ChatStore {
       await this.readSSEStream(response.body, assistantMessage.id);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") {
-        // Clean up empty assistant message after user cancellation
+        // If we aborted due to parse error, this.error is already set - don't overwrite
+        if (this.error) {
+          // Empty message cleanup is handled in finally block
+          return;
+        }
+        // User-initiated cancellation - clean up empty message
         const msg = this.messages.find((m) => m.id === assistantMessage.id);
         if (!msg?.content) {
           this.removeMessage(assistantMessage.id);
@@ -253,6 +258,13 @@ export class ChatStore {
     } finally {
       this.loading = false;
       this.abortController = null;
+      // Clean up empty assistant message if an error occurred
+      if (this.error) {
+        const msg = this.messages.find((m) => m.id === assistantMessage.id);
+        if (!msg?.content) {
+          this.removeMessage(assistantMessage.id);
+        }
+      }
     }
   }
 

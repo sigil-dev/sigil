@@ -249,6 +249,25 @@ describe("ChatStore", () => {
       expect(store.error).toContain("parse");
     });
 
+    it("preserves parse error when stream is aborted due to malformed SSE event", async () => {
+      // Malformed JSON that will trigger parse_error in handleSSEEvent
+      const sseData = "event: text_delta\ndata: {invalid json\n\n";
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockSSEResponse(sseData)));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      // Verify parse error is preserved (not overwritten by AbortError)
+      expect(store.error).toContain("Failed to parse text_delta event");
+      expect(store.error).not.toContain("Network error");
+      expect(store.error).not.toContain("AbortError");
+      expect(store.loading).toBe(false);
+      // Empty assistant message should be removed
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0].role).toBe("user");
+    });
+
     it("handles mid-stream network interruption gracefully", async () => {
       // Create a stream that sends partial data then errors (simulating network drop)
       const encoder = new TextEncoder();
