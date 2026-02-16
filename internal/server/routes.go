@@ -27,6 +27,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/workspaces",
 		Summary:     "List workspaces",
 		Tags:        []string{"workspaces"},
+		Errors:      []int{http.StatusTooManyRequests},
 	}, s.handleListWorkspaces)
 
 	huma.Register(s.api, huma.Operation{
@@ -35,6 +36,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/workspaces/{id}",
 		Summary:     "Get workspace details",
 		Tags:        []string{"workspaces"},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleGetWorkspace)
 
 	// Session endpoints
@@ -44,6 +46,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/workspaces/{id}/sessions",
 		Summary:     "List sessions in workspace",
 		Tags:        []string{"sessions"},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleListSessions)
 
 	huma.Register(s.api, huma.Operation{
@@ -52,6 +55,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/workspaces/{id}/sessions/{sessionId}",
 		Summary:     "Get session details",
 		Tags:        []string{"sessions"},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleGetSession)
 
 	// Plugin endpoints
@@ -61,6 +65,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/plugins",
 		Summary:     "List installed plugins",
 		Tags:        []string{"plugins"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleListPlugins)
 
 	huma.Register(s.api, huma.Operation{
@@ -69,6 +74,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/plugins/{name}",
 		Summary:     "Get plugin details",
 		Tags:        []string{"plugins"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleGetPlugin)
 
 	huma.Register(s.api, huma.Operation{
@@ -77,6 +83,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/plugins/{name}/reload",
 		Summary:     "Reload a plugin",
 		Tags:        []string{"plugins"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleReloadPlugin)
 
 	// Chat endpoint (non-streaming, delegates to stream handler)
@@ -86,6 +93,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/chat",
 		Summary:     "Send a message to the agent",
 		Tags:        []string{"chat"},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleSendMessage)
 
 	// User endpoints
@@ -95,6 +103,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/users",
 		Summary:     "List users",
 		Tags:        []string{"users"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleListUsers)
 
 	// Status endpoint
@@ -104,6 +113,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/status",
 		Summary:     "Gateway status",
 		Tags:        []string{"system"},
+		Errors:      []int{http.StatusTooManyRequests},
 	}, s.handleStatus)
 }
 
@@ -468,7 +478,11 @@ func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOu
 	return out, nil
 }
 
-func (s *Server) handleStatus(_ context.Context, _ *struct{}) (*statusOutput, error) {
+func (s *Server) handleStatus(ctx context.Context, _ *struct{}) (*statusOutput, error) {
+	if err := s.requireAdmin(ctx, "admin:status", "get gateway status"); err != nil {
+		return nil, err
+	}
+
 	out := &statusOutput{}
 	out.Body.Status = "ok"
 	return out, nil
