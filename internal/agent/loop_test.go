@@ -1910,3 +1910,145 @@ func TestAgentLoop_AuditStoreConsecutiveFailures(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Provider mid-stream failure and health tracking tests
+// ---------------------------------------------------------------------------
+
+// mockProviderMidStreamFailureWithHealth is a provider that:
+// 1. Emits a successful first event (to pass failover checks)
+// 2. Emits additional text events
+// 3. Emits an error event mid-stream
+// 4. Tracks RecordFailure calls for health verification
+type mockProviderMidStreamFailureWithHealth struct {
+	mockProviderHealthBase
+}
+
+func (p *mockProviderMidStreamFailureWithHealth) Name() string {
+	return "mock-mid-stream-failure-health"
+}
+
+func (p *mockProviderMidStreamFailureWithHealth) Available(_ context.Context) bool {
+	return true
+}
+
+func (p *mockProviderMidStreamFailureWithHealth) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-mid-stream-failure-health"}, nil
+}
+
+func (p *mockProviderMidStreamFailureWithHealth) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderMidStreamFailureWithHealth) Close() error { return nil }
+
+func (p *mockProviderMidStreamFailureWithHealth) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 5)
+	// First event: successful text delta (passes failover check)
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Starting response..."}
+	// Second event: more text
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "processing..."}
+	// Third event: usage update
+	ch <- provider.ChatEvent{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 25, OutputTokens: 15}}
+	// Fourth event: mid-stream failure
+	ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: "connection dropped mid-stream"}
+	close(ch)
+	return ch, nil
+}
+
+func TestAgentLoop_MidStreamFailureCallsRecordFailure(t *testing.T) {
+	tests := []struct {
+		name                 string
+		successfulFirstEvent bool
+		wantError            bool
+		wantRecordFailure    bool
+		wantUsageAccounted   bool
+	}{
+		{
+			name:                 "mid-stream failure after successful first event",
+			successfulFirstEvent: true,
+			wantError:            true,
+			wantRecordFailure:    false, // Mid-stream failures do NOT call RecordFailure (design decision D036)
+			wantUsageAccounted:   true,  // Usage emitted before error should be accounted
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm, ss := newMockSessionManagerWithStore()
+			ctx := context.Background()
+
+			session, err := sm.Create(ctx, "ws-1", "user-1")
+			require.NoError(t, err)
+
+			// Set initial budget to track usage accounting.
+			session.TokenBudget.MaxPerSession = 100000
+			session.TokenBudget.UsedSession = 0
+			require.NoError(t, ss.UpdateSession(ctx, session))
+
+			healthProv := &mockProviderMidStreamFailureWithHealth{}
+			router := &mockProviderRouter{provider: healthProv}
+
+			loop := agent.NewLoop(agent.LoopConfig{
+				SessionManager: sm,
+				ProviderRouter: router,
+				AuditStore:     newMockAuditStore(),
+			})
+
+			out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+				SessionID:   session.ID,
+				WorkspaceID: "ws-1",
+				UserID:      "user-1",
+				Content:     "test mid-stream failure",
+			})
+
+			if tt.wantError {
+				require.Error(t, err, "ProcessMessage should return error on mid-stream failure")
+				assert.Nil(t, out)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+					"expected CodeProviderUpstreamFailure, got %s", sigilerr.CodeOf(err))
+				assert.Contains(t, err.Error(), "connection dropped mid-stream")
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, out)
+			}
+
+			// Verify RecordFailure behavior.
+			// According to design decision D036 (docs/decisions/decision-log.md),
+			// mid-stream failures do NOT call RecordFailure because failover is
+			// not attempted for mid-stream errors (complexity of buffering and replay).
+			// Only pre-stream failures (Chat() error, empty stream, first-event error)
+			// trigger RecordFailure to enable circuit breaker behavior.
+			failureCount := healthProv.getFailureCount()
+			if tt.wantRecordFailure {
+				assert.Equal(t, 1, failureCount,
+					"RecordFailure should be called for mid-stream failure")
+			} else {
+				assert.Equal(t, 0, failureCount,
+					"RecordFailure should NOT be called for mid-stream failure (per D036)")
+			}
+
+			// Verify usage accounting — tokens consumed before the error should be accounted.
+			if tt.wantUsageAccounted {
+				updated, err := ss.GetSession(ctx, session.ID)
+				require.NoError(t, err)
+				// Provider emitted Usage{InputTokens: 25, OutputTokens: 15} before the error.
+				expectedUsage := 25 + 15 // 40 tokens
+				assert.Equal(t, expectedUsage, updated.TokenBudget.UsedSession,
+					"UsedSession should be incremented by usage emitted before mid-stream failure")
+				assert.Equal(t, expectedUsage, updated.TokenBudget.UsedHour,
+					"UsedHour should be incremented by usage emitted before mid-stream failure")
+				assert.Equal(t, expectedUsage, updated.TokenBudget.UsedDay,
+					"UsedDay should be incremented by usage emitted before mid-stream failure")
+			}
+
+			// Verify no assistant message was persisted (partial text discarded on stream error).
+			history, err := ss.GetActiveWindow(ctx, session.ID, 10)
+			require.NoError(t, err)
+			for _, msg := range history {
+				assert.NotEqual(t, "assistant", msg.Role,
+					"assistant message should not be persisted after mid-stream error")
+			}
+		})
+	}
+}
