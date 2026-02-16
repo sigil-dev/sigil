@@ -273,13 +273,28 @@ func (s *Server) handleGetSession(ctx context.Context, input *getSessionInput) (
 	return &getSessionOutput{Body: *session}, nil
 }
 
-func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPluginsOutput, error) {
-	// Plugin listing requires admin:plugins permission.
+// requireAdmin checks that the caller has the given admin permission.
+// When auth is disabled (dev mode), the operation is allowed with an info log.
+// When auth is enabled but no user is present, 401 is returned (defense-in-depth).
+// When the user lacks the required permission, 403 is returned.
+func (s *Server) requireAdmin(ctx context.Context, permission, op string) error {
 	user := UserFromContext(ctx)
 	if user == nil {
-		slog.Warn("plugin list without authentication (auth disabled)")
-	} else if !user.HasPermission("admin:plugins") {
-		return nil, huma.Error403Forbidden("insufficient permissions to list plugins")
+		if s.authDisabled() {
+			slog.Info("admin operation without authentication (auth disabled)", "op", op)
+			return nil
+		}
+		return huma.Error401Unauthorized("authentication required")
+	}
+	if !user.HasPermission(permission) {
+		return huma.Error403Forbidden(fmt.Sprintf("insufficient permissions to %s", op))
+	}
+	return nil
+}
+
+func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPluginsOutput, error) {
+	if err := s.requireAdmin(ctx, "admin:plugins", "list plugins"); err != nil {
+		return nil, err
 	}
 
 	plugins, err := s.services.Plugins.List(ctx)
@@ -293,12 +308,8 @@ func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPlugi
 }
 
 func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*getPluginOutput, error) {
-	// Plugin details require admin:plugins permission.
-	user := UserFromContext(ctx)
-	if user == nil {
-		slog.Warn("plugin get without authentication (auth disabled)", "plugin", input.Name)
-	} else if !user.HasPermission("admin:plugins") {
-		return nil, huma.Error403Forbidden("insufficient permissions to get plugin details")
+	if err := s.requireAdmin(ctx, "admin:plugins", "get plugin details"); err != nil {
+		return nil, err
 	}
 
 	p, err := s.services.Plugins.Get(ctx, input.Name)
@@ -311,12 +322,8 @@ func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*
 }
 
 func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput) (*reloadPluginOutput, error) {
-	// Plugin reload requires admin permission.
-	user := UserFromContext(ctx)
-	if user == nil {
-		slog.Error("admin operation invoked without authentication", "op", "plugin-reload", "plugin", input.Name)
-	} else if !user.HasPermission("admin:plugins") {
-		return nil, huma.Error403Forbidden("insufficient permissions to reload plugins")
+	if err := s.requireAdmin(ctx, "admin:plugins", "reload plugins"); err != nil {
+		return nil, err
 	}
 
 	if err := s.services.Plugins.Reload(ctx, input.Name); err != nil {
@@ -457,12 +464,8 @@ func extractText(data string) string {
 }
 
 func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOutput, error) {
-	// User enumeration requires admin permission.
-	user := UserFromContext(ctx)
-	if user == nil {
-		slog.Error("admin operation invoked without authentication", "op", "list-users")
-	} else if !user.HasPermission("admin:users") {
-		return nil, huma.Error403Forbidden("insufficient permissions to list users")
+	if err := s.requireAdmin(ctx, "admin:users", "list users"); err != nil {
+		return nil, err
 	}
 
 	users, err := s.services.Users.List(ctx)

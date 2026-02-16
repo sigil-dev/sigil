@@ -632,3 +632,33 @@ func TestBudget_Validate(t *testing.T) {
 		})
 	}
 }
+
+// TestRegistry_BudgetMidSessionExhaustion tests R18#6: budget mid-session exhaustion.
+// When a session at 900/1000 tokens consumes 200 more tokens mid-turn,
+// the budget check at callLLM entry only checks 900 < 1000 (passes),
+// but final count can exceed limit (1100 > 1000). This test documents
+// the current behavior: routing allows the call but final usage can overrun.
+func TestRegistry_BudgetMidSessionExhaustion(t *testing.T) {
+	reg := provider.NewRegistry()
+	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
+	reg.Register("anthropic", anthropic)
+	reg.SetDefault("anthropic/claude-sonnet-4-5")
+
+	ctx := context.Background()
+
+	// Session already at 900/1000 tokens.
+	budget, err := provider.NewBudget(1000, 900, 0, 0, 0, 0)
+	require.NoError(t, err)
+
+	// Routing should succeed since 900 < 1000 at entry.
+	p, model, err := reg.RouteWithBudget(ctx, "", "", budget, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "anthropic", p.Name())
+	assert.Equal(t, "claude-sonnet-4-5", model)
+
+	// Document behavior: the LLM call happens and can return 200 tokens,
+	// pushing total to 1100 > 1000. Budget overrun is detected by caller
+	// after the fact, not prevented at routing time.
+	// This test documents the current design: routing checks budget at entry,
+	// caller tracks actual usage and may exceed budget mid-turn.
+}

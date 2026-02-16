@@ -736,3 +736,55 @@ func (w *countingResponseWriter) Write(p []byte) (int, error) {
 func (w *countingResponseWriter) Flush() {
 	w.ResponseRecorder.Flush()
 }
+
+// TestSSE_DrainOnContextCancellation tests R18#31: SSE drain on context cancellation.
+// Only write-error drain is tested elsewhere; this tests the context.Done path.
+func TestSSE_DrainOnContextCancellation(t *testing.T) {
+	// Handler that sends many events and respects context cancellation.
+	handler := &leakyStreamHandler{
+		eventCount: 100,
+		done:       make(chan struct{}),
+	}
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content":"test context cancellation","workspace_id":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Create a cancellable context.
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+
+	// Start handling in a goroutine.
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+	}()
+
+	// Give the handler time to start and begin sending events.
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the context mid-stream.
+	cancel()
+
+	// HandleStream must drain and finish cleanly within timeout.
+	select {
+	case <-handler.done:
+		// success — channel drained, no goroutine leak
+	case <-time.After(3 * time.Second):
+		t.Fatal("HandleStream did not exit after context cancellation; channel not drained")
+	}
+
+	// HTTP handler should also finish.
+	select {
+	case <-handlerDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("HTTP handler did not finish after context cancellation")
+	}
+}

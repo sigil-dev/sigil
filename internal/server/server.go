@@ -29,6 +29,7 @@ type Config struct {
 	EnableHSTS     bool
 	RateLimit      RateLimitConfig // per-IP rate limiting
 	BehindProxy    bool            // true if behind a reverse proxy (enables RealIP middleware)
+	TrustedProxies []string        // CIDR ranges of trusted proxies (required when BehindProxy=true)
 }
 
 // Server wraps a chi router with huma API and HTTP server.
@@ -58,20 +59,34 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
+	// Parse and validate trusted proxy CIDRs when behind a proxy
+	var trustedNets []*net.IPNet
+	if cfg.BehindProxy {
+		if len(cfg.TrustedProxies) == 0 {
+			return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid,
+				"trusted_proxies must be configured when behind_proxy is true")
+		}
+		var err error
+		trustedNets, err = parseTrustedProxies(cfg.TrustedProxies)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	rateLimitDone := make(chan struct{})
 
 	r := chi.NewRouter()
 
 	// Middleware
 	r.Use(middleware.Recoverer)
-	// Only trust proxy headers when actually behind a proxy (tailscale or production)
+	// Only trust proxy headers when connecting IP is from a trusted proxy
 	if cfg.BehindProxy {
-		r.Use(middleware.RealIP)
+		r.Use(trustedProxyRealIP(trustedNets))
 	}
 	r.Use(securityHeadersMiddleware(cfg.EnableHSTS))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
-	r.Use(authMiddleware(cfg.TokenValidator))
 	r.Use(rateLimitMiddleware(cfg.RateLimit, rateLimitDone))
+	r.Use(authMiddleware(cfg.TokenValidator))
 
 	// Huma API with OpenAPI spec
 	humaConfig := huma.DefaultConfig("Sigil Gateway", "0.1.0")
@@ -100,6 +115,11 @@ func New(cfg Config) (*Server, error) {
 	srv.registerSSERoute()
 
 	return srv, nil
+}
+
+// authDisabled reports whether token-based authentication is disabled (dev mode).
+func (s *Server) authDisabled() bool {
+	return s.cfg.TokenValidator == nil
 }
 
 // Handler returns the underlying http.Handler for testing.

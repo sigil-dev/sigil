@@ -300,51 +300,76 @@ func TestAuthenticatedUser_HasPermission(t *testing.T) {
 	}{
 		{
 			name:        "exact match",
-			permissions: []string{"admin:reload"},
-			required:    "admin:reload",
+			permissions: []string{"admin.reload"},
+			required:    "admin.reload",
 			want:        true,
 		},
 		{
 			name:        "wildcard match",
-			permissions: []string{"admin:*"},
-			required:    "admin:reload",
+			permissions: []string{"admin.*"},
+			required:    "admin.reload",
 			want:        true,
 		},
 		{
 			name:        "global wildcard",
 			permissions: []string{"*"},
-			required:    "admin:reload",
+			required:    "admin.reload",
 			want:        true,
 		},
 		{
 			name:        "no match",
-			permissions: []string{"workspace:read"},
-			required:    "admin:reload",
+			permissions: []string{"workspace.read"},
+			required:    "admin.reload",
 			want:        false,
 		},
 		{
 			name:        "prefix mismatch",
-			permissions: []string{"admin:*"},
-			required:    "workspace:reload",
+			permissions: []string{"admin.*"},
+			required:    "workspace.reload",
 			want:        false,
 		},
 		{
 			name:        "empty permissions",
 			permissions: []string{},
-			required:    "admin:reload",
+			required:    "admin.reload",
 			want:        false,
 		},
 		{
 			name:        "multiple permissions with match",
-			permissions: []string{"workspace:read", "admin:reload", "channel:send"},
-			required:    "admin:reload",
+			permissions: []string{"workspace.read", "admin.reload", "channel.send"},
+			required:    "admin.reload",
 			want:        true,
 		},
 		{
 			name:        "multiple permissions with wildcard",
-			permissions: []string{"workspace:read", "admin:*", "channel:send"},
-			required:    "admin:reload",
+			permissions: []string{"workspace.read", "admin.*", "channel.send"},
+			required:    "admin.reload",
 			want:        true,
+		},
+		// Additional tests to verify security.MatchCapability alignment
+		{
+			name:        "multi-segment wildcard",
+			permissions: []string{"filesystem.read.*"},
+			required:    "filesystem.read.data.config",
+			want:        true,
+		},
+		{
+			name:        "in-segment wildcard",
+			permissions: []string{"messages.send.foo*"},
+			required:    "messages.send.foobar",
+			want:        true,
+		},
+		{
+			name:        "in-segment wildcard no match",
+			permissions: []string{"messages.send.foo*bar"},
+			required:    "messages.send.foo123baz",
+			want:        false,
+		},
+		{
+			name:        "invalid pattern logs warning but returns false",
+			permissions: []string{".invalid.pattern"},
+			required:    "any.capability",
+			want:        false,
 		},
 	}
 
@@ -501,6 +526,77 @@ func TestAuthMiddleware_EmptyAuthorizationHeaderValue(t *testing.T) {
 
 			assert.Equal(t, http.StatusUnauthorized, w.Code,
 				"empty or whitespace-only auth header should be rejected")
+		})
+	}
+}
+
+// TestNewAuthenticatedUser_Validation tests R18#30: NewAuthenticatedUser validation.
+// Tests that empty userID or nil permissions are handled correctly.
+func TestNewAuthenticatedUser_Validation(t *testing.T) {
+	tests := []struct {
+		name        string
+		userID      string
+		userName    string
+		permissions []string
+		wantErr     bool
+		checkFunc   func(t *testing.T, user *server.AuthenticatedUser)
+	}{
+		{
+			name:        "empty userID returns error",
+			userID:      "",
+			userName:    "Test User",
+			permissions: []string{"admin:*"},
+			wantErr:     true,
+		},
+		{
+			name:        "valid userID with nil permissions succeeds",
+			userID:      "user-1",
+			userName:    "Test User",
+			permissions: nil,
+			wantErr:     false,
+			checkFunc: func(t *testing.T, user *server.AuthenticatedUser) {
+				perms := user.Permissions()
+				assert.NotNil(t, perms, "permissions should not be nil")
+				assert.Len(t, perms, 0, "permissions should be empty slice, not nil")
+			},
+		},
+		{
+			name:        "valid userID with permissions succeeds and copies defensively",
+			userID:      "user-2",
+			userName:    "Test User 2",
+			permissions: []string{"workspace:read", "admin:*"},
+			wantErr:     false,
+			checkFunc: func(t *testing.T, user *server.AuthenticatedUser) {
+				perms := user.Permissions()
+				assert.Equal(t, []string{"workspace:read", "admin:*"}, perms)
+
+				// Verify defensive copy: mutating returned slice doesn't affect internal state.
+				perms[0] = "hacked"
+				freshPerms := user.Permissions()
+				assert.Equal(t, []string{"workspace:read", "admin:*"}, freshPerms,
+					"internal permissions should not be affected by mutation of returned slice")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			user, err := server.NewAuthenticatedUser(tt.userID, tt.userName, tt.permissions)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerAuthUnauthorized))
+				assert.Contains(t, err.Error(), "authenticated user ID must not be empty")
+				assert.Nil(t, user)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, user)
+				assert.Equal(t, tt.userID, user.ID())
+				assert.Equal(t, tt.userName, user.Name())
+				if tt.checkFunc != nil {
+					tt.checkFunc(t, user)
+				}
+			}
 		})
 	}
 }

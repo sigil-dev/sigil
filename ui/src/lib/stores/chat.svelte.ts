@@ -140,7 +140,7 @@ export class ChatStore {
    */
   async sendMessage(content: string): Promise<void> {
     if (!content.trim() || this.loading) return;
-    if (!this.workspaceId) {
+    if (!this.workspaceId || this.workspaceId.trim() === "") {
       this.error = "No workspace selected";
       return;
     }
@@ -299,6 +299,13 @@ export class ChatStore {
         reader.releaseLock();
       } catch (err) {
         logger.error("Failed to release SSE reader lock", { error: err });
+        // If releaseLock fails, stream is still locked. Try to cancel and retry.
+        try {
+          await reader.cancel();
+          reader.releaseLock();
+        } catch (retryErr) {
+          logger.error("Failed to cancel and retry reader lock release", { error: retryErr });
+        }
       }
     }
   }

@@ -98,3 +98,59 @@ func TestHealthTracker_MidStreamFailure(t *testing.T) {
 	h.RecordFailure()
 	assert.False(t, h.IsHealthy(), "should be unhealthy after mid-stream failure despite prior success")
 }
+
+// TestHealthTracker_ConcurrentRecordCalls tests R18#7: provider health tracking race condition.
+// RecordFailure() can be called from both agent loop (pre-stream) AND provider
+// internals (mid-stream) concurrently. This test verifies concurrent calls
+// don't corrupt state. Run with `go test -race` to detect data races.
+func TestHealthTracker_ConcurrentRecordCalls(t *testing.T) {
+	h := provider.NewHealthTracker(30 * time.Second)
+
+	const goroutines = 10
+	const iterations = 100
+
+	done := make(chan struct{})
+	defer close(done)
+
+	// Launch multiple goroutines calling RecordFailure and RecordSuccess concurrently.
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			for j := 0; j < iterations; j++ {
+				select {
+				case <-done:
+					return
+				default:
+					h.RecordFailure()
+				}
+			}
+		}()
+		go func() {
+			for j := 0; j < iterations; j++ {
+				select {
+				case <-done:
+					return
+				default:
+					h.RecordSuccess()
+				}
+			}
+		}()
+		go func() {
+			for j := 0; j < iterations; j++ {
+				select {
+				case <-done:
+					return
+				default:
+					_ = h.IsHealthy()
+				}
+			}
+		}()
+	}
+
+	// Wait a bit for goroutines to finish their work.
+	time.Sleep(100 * time.Millisecond)
+
+	// Test passes if no data race is detected by `-race` flag.
+	// Final state is non-deterministic due to concurrency but should be valid.
+	// Either healthy or unhealthy with a valid failedAt timestamp.
+	_ = h.IsHealthy()
+}

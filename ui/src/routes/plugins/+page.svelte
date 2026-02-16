@@ -30,6 +30,7 @@
 				plugins = data?.plugins || [];
 			}
 		} catch (e) {
+			console.error('Failed to load plugins:', e);
 			const classified = classifyError(e);
 			error = classified.message;
 		} finally {
@@ -48,6 +49,7 @@
 				selectedPlugin = data;
 			}
 		} catch (e) {
+			console.error('Failed to load plugin details:', e);
 			const classified = classifyError(e);
 			error = classified.message;
 		}
@@ -68,6 +70,7 @@
 				}
 			}
 		} catch (e) {
+			console.error('Failed to reload plugin:', e);
 			const classified = classifyError(e);
 			error = classified.message;
 		} finally {

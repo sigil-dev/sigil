@@ -177,3 +177,73 @@ func TestServer_HSTSHeader_DisabledByDefault(t *testing.T) {
 
 	assert.Empty(t, w.Header().Get("Strict-Transport-Security"))
 }
+
+func TestServer_RateLimiterBeforeAuth(t *testing.T) {
+	// Create a server with auth enabled and rate limiting enabled.
+	// The rate limiter should block requests BEFORE auth checks them,
+	// preventing unauthenticated brute-force attacks.
+	validator := newValidatorWithToken("valid-token", "user1", "Test User", nil)
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		RateLimit: server.RateLimitConfig{
+			RequestsPerSecond: 100,
+			Burst:             2, // allow only 2 requests in burst
+		},
+	})
+	require.NoError(t, err)
+
+	// Send requests WITHOUT a valid token (unauthenticated brute-force).
+	// If rate limiter is before auth: after burst, we get 429.
+	// If rate limiter is after auth: auth rejects first and we never get rate limited.
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+		req.RemoteAddr = "192.168.1.100:12345"
+		// No Authorization header — unauthenticated request
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		// These should get 401 (auth failure) since they pass rate limiter
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "request %d should get 401 (auth rejected)", i)
+	}
+
+	// Third request: burst exhausted. Rate limiter should reject BEFORE auth.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, w.Code,
+		"unauthenticated request should be rate-limited (429), not auth-rejected (401) — "+
+			"rate limiter must run before auth middleware")
+}
+
+func TestServer_BehindProxy_RequiresTrustedProxies(t *testing.T) {
+	_, err := server.New(server.Config{
+		ListenAddr:  "127.0.0.1:0",
+		BehindProxy: true,
+		// No TrustedProxies configured
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trusted_proxies must be configured")
+}
+
+func TestServer_BehindProxy_WithTrustedProxies(t *testing.T) {
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		BehindProxy:    true,
+		TrustedProxies: []string{"10.0.0.0/8"},
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, srv)
+}
+
+func TestServer_BehindProxy_InvalidCIDR(t *testing.T) {
+	_, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		BehindProxy:    true,
+		TrustedProxies: []string{"not-a-cidr"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid trusted proxy CIDR")
+}

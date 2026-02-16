@@ -4,8 +4,11 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -14,6 +17,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// logBuffer is a thread-safe bytes.Buffer for capturing log output.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // stubWorkspaceService is a configurable mock for WorkspaceService.
 type stubWorkspaceService struct {
@@ -167,4 +188,46 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantMsg)
 		})
 	}
+}
+
+// TestCheckWorkspaceMembership_ErrorObservability tests R18#33: workspace membership error observability.
+// When workspace membership check fails with an internal error (not NotFound),
+// the error should be logged via slog so operators can diagnose issues.
+func TestCheckWorkspaceMembership_ErrorObservability(t *testing.T) {
+	// Capture slog output for verification.
+	var logBuf logBuffer
+	oldLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+
+	handler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+
+	srv.RegisterServices(&server.Services{
+		Workspaces: &stubWorkspaceService{
+			getFunc: func(_ context.Context, _ string) (*server.WorkspaceDetail, error) {
+				return nil, fmt.Errorf("database connection lost")
+			},
+		},
+	})
+
+	user := mustNewAuthenticatedUser("user-1", "Sean", nil)
+	ctx := server.ContextWithUser(context.Background(), user)
+
+	err = srv.CheckWorkspaceMembership(ctx, "ws-broken")
+	require.Error(t, err)
+
+	// Verify HTTP 500 status.
+	se, ok := err.(huma.StatusError)
+	require.True(t, ok)
+	assert.Equal(t, 500, se.GetStatus())
+
+	// Verify error was logged via slog.
+	logs := logBuf.String()
+	assert.Contains(t, logs, "internal error", "error log should contain context")
+	assert.Contains(t, logs, "ws-broken", "error log should reference the workspace ID")
+	assert.Contains(t, logs, "database connection lost", "error log should contain the underlying error message")
 }

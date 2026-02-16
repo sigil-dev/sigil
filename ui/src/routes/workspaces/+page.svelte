@@ -21,6 +21,7 @@
 				workspaces = data?.workspaces || [];
 			}
 		} catch (e) {
+			console.error('Failed to load workspaces:', e);
 			error = classifyError(e).message;
 		} finally {
 			loading = false;

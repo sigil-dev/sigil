@@ -336,6 +336,8 @@ func (p *Provider) streamChat(ctx context.Context, params anthropicsdk.MessageNe
 	}
 
 	// If we exit the loop without a message_stop, this is an abnormal termination.
+	// Mark the provider unhealthy via RecordFailure and send error event to trigger
+	// failover to the next available provider.
 	slog.Warn("anthropic: stream ended without message_stop event")
 	p.health.RecordFailure()
 	err := sigilerr.New(sigilerr.CodeProviderUpstreamFailure, "stream ended without message_stop event")

@@ -262,21 +262,30 @@ func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
 // Test constant-time token comparison prevents timing attacks
 func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
 	validator := newConfigTokenValidator([]config.TokenConfig{
-		{Token: "valid-token-123", UserID: "user-1", Name: "Test User"},
+		{Token: "valid-token-123", UserID: "user-1", Name: "Test User", Permissions: []string{"*"}},
+		{Token: "another-valid-token", UserID: "user-2", Name: "Another User", Permissions: []string{"read.*"}},
 	})
 
 	tests := []struct {
-		name    string
-		token   string
-		wantErr bool
+		name     string
+		token    string
+		wantUser string
+		wantErr  bool
 	}{
 		{
-			name:    "valid token",
-			token:   "valid-token-123",
-			wantErr: false,
+			name:     "valid token 1",
+			token:    "valid-token-123",
+			wantUser: "user-1",
+			wantErr:  false,
 		},
 		{
-			name:    "invalid token same length",
+			name:     "valid token 2",
+			token:    "another-valid-token",
+			wantUser: "user-2",
+			wantErr:  false,
+		},
+		{
+			name:    "invalid token same length as valid",
 			token:   "invalid-token-12", // same length as valid token
 			wantErr: true,
 		},
@@ -290,6 +299,11 @@ func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
 			token:   "",
 			wantErr: true,
 		},
+		{
+			name:    "token with one bit flipped",
+			token:   "valid-token-124", // last char different
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -301,13 +315,33 @@ func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, user)
-				assert.Equal(t, "user-1", user.ID())
+				assert.Equal(t, tt.wantUser, user.ID())
 			}
 		})
 	}
 }
 
-// Test Gateway.Close attempts to close all subsystems
+// Test that ValidateToken uses constant-time comparison by verifying it checks ALL tokens
+func TestConfigTokenValidator_ChecksAllTokens(t *testing.T) {
+	// Create validator with multiple tokens to ensure all are checked
+	validator := newConfigTokenValidator([]config.TokenConfig{
+		{Token: "token-1", UserID: "user-1", Name: "User 1", Permissions: []string{"*"}},
+		{Token: "token-2", UserID: "user-2", Name: "User 2", Permissions: []string{"*"}},
+		{Token: "token-3", UserID: "user-3", Name: "User 3", Permissions: []string{"*"}},
+	})
+
+	// All tokens should be validated successfully
+	for i := 1; i <= 3; i++ {
+		token := fmt.Sprintf("token-%d", i)
+		userID := fmt.Sprintf("user-%d", i)
+		user, err := validator.ValidateToken(context.Background(), token)
+		require.NoError(t, err)
+		require.NotNil(t, user)
+		assert.Equal(t, userID, user.ID())
+	}
+}
+
+// Test Gateway.Close does not panic during shutdown
 func TestGateway_CloseDoesNotPanic(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()

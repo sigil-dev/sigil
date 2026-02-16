@@ -46,6 +46,7 @@ type NetworkingConfig struct {
 	EnableHSTS     bool     `mapstructure:"enable_hsts"`
 	RateLimitRPS   float64  `mapstructure:"rate_limit_rps"`
 	RateLimitBurst int      `mapstructure:"rate_limit_burst"`
+	TrustedProxies []string `mapstructure:"trusted_proxies"` // CIDR ranges of trusted reverse proxies
 }
 
 // ProviderConfig holds credentials and endpoint for an LLM provider.
@@ -227,6 +228,16 @@ func (c *Config) validateNetworking() []error {
 			"config: networking.rate_limit_burst must be positive when rate_limit_rps is set, got burst=%d, rps=%g",
 			c.Networking.RateLimitBurst, c.Networking.RateLimitRPS,
 		))
+	}
+
+	// Validate trusted proxy CIDRs if provided
+	for i, cidr := range c.Networking.TrustedProxies {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: networking.trusted_proxies[%d] is not a valid CIDR range, got %q: %v",
+				i, cidr, err,
+			))
+		}
 	}
 
 	return errs

@@ -15,3 +15,8 @@ func ContextWithUser(ctx context.Context, user *AuthenticatedUser) context.Conte
 func (s *Server) CheckWorkspaceMembership(ctx context.Context, workspaceID string) error {
 	return s.checkWorkspaceMembership(ctx, workspaceID)
 }
+
+// RequireAdmin exposes requireAdmin for direct unit testing.
+func (s *Server) RequireAdmin(ctx context.Context, permission, op string) error {
+	return s.requireAdmin(ctx, permission, op)
+}

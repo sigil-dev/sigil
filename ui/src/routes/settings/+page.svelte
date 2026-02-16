@@ -26,6 +26,7 @@
 				users = data?.users || [];
 			}
 		} catch (e) {
+			console.error('Failed to load settings:', e);
 			error = classifyError(e).message;
 		} finally {
 			loading = false;

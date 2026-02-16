@@ -26,6 +26,9 @@ networking:
   enable_hsts: false                # Enable HTTP Strict Transport Security
   rate_limit_rps: 0                 # Requests per second per IP (0 = disabled)
   rate_limit_burst: 0               # Burst size for rate limiting
+  # trusted_proxies:                # CIDR ranges of trusted reverse proxies
+  #   - "10.0.0.0/8"               # Required when mode=tailscale (behind proxy)
+  #   - "172.16.0.0/12"            # Only X-Forwarded-For from these IPs is trusted
   # tailscale:
   #   hostname: "my-agent"
   #   auth_key: "${TS_AUTHKEY}"

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"os"
@@ -102,6 +103,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		CORSOrigins:    cfg.Networking.CORSOrigins,
 		TokenValidator: tokenValidator,
 		BehindProxy:    cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
+		TrustedProxies: cfg.Networking.TrustedProxies,
 		EnableHSTS:     cfg.Networking.EnableHSTS,
 		RateLimit: server.RateLimitConfig{
 			RequestsPerSecond: cfg.Networking.RateLimitRPS,
@@ -371,9 +373,17 @@ func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator 
 }
 
 func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {
-	tokenHash := sha256.Sum256([]byte(token))
-	if user, ok := v.tokens[tokenHash]; ok {
-		return user, nil
+	candidateHash := sha256.Sum256([]byte(token))
+	// Use constant-time comparison to avoid timing attacks that could leak valid token hashes.
+	// We iterate over all tokens and use subtle.ConstantTimeCompare to compare hashes.
+	var matched *server.AuthenticatedUser
+	for hash, user := range v.tokens {
+		if subtle.ConstantTimeCompare(hash[:], candidateHash[:]) == 1 {
+			matched = user
+		}
+	}
+	if matched != nil {
+		return matched, nil
 	}
 	slog.Debug("token validation failed: no configured token matched")
 	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")

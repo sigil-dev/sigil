@@ -42,6 +42,7 @@
 				sessions = sessResp.data?.sessions || [];
 			}
 		} catch (e) {
+			console.error('Failed to load workspace details:', e);
 			error = classifyError(e).message;
 		} finally {
 			loading = false;

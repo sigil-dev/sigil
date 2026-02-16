@@ -109,9 +109,8 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
                         "Sigil gateway health check passed (attempt {})",
                         attempt + 1
                     );
-                    if let Err(e) = app_handle.emit("sidecar-ready", ()) {
-                        error!("Failed to emit sidecar-ready: {}", e);
-                    }
+                    // R18#4: Retry critical sidecar-ready event emission with fallback logging
+                    emit_critical_event(&app_handle, "sidecar-ready", ());
                     return;
                 }
                 Ok(false) => {
@@ -153,12 +152,66 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
             delays.len()
         );
         error!("{}", msg);
-        if let Err(e) = app_handle.emit("sidecar-error", &msg) {
-            error!("Failed to emit sidecar-error: {}", e);
-        }
+        // R18#4: Retry critical sidecar-error event emission with fallback logging
+        emit_critical_event(&app_handle, "sidecar-error", &msg);
     });
 
     Ok(())
+}
+
+/// Emit a critical event with retry logic to prevent UI indefinite loading.
+///
+/// Critical events (sidecar-ready, sidecar-error) MUST reach the UI to unblock
+/// loading states. This function retries emission twice with a short delay,
+/// falling back to stderr logging if all attempts fail.
+fn emit_critical_event<S: serde::Serialize + Clone>(
+    app: &AppHandle,
+    event: &str,
+    payload: S,
+) {
+    const MAX_RETRIES: usize = 2;
+    const RETRY_DELAY_MS: u64 = 50;
+
+    for attempt in 0..=MAX_RETRIES {
+        match app.emit(event, payload.clone()) {
+            Ok(()) => {
+                if attempt > 0 {
+                    warn!(
+                        "Critical event '{}' succeeded on retry attempt {}",
+                        event, attempt
+                    );
+                }
+                return;
+            }
+            Err(e) => {
+                if attempt < MAX_RETRIES {
+                    warn!(
+                        "Critical event '{}' emission failed (attempt {}/{}): {}, retrying...",
+                        event,
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                        e
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                } else {
+                    // All retries exhausted — log to stderr with actionable guidance
+                    eprintln!(
+                        "CRITICAL: Event '{}' failed after {} attempts: {}. \
+                         UI may be stuck in loading state. Check Tauri event listeners and IPC configuration.",
+                        event,
+                        MAX_RETRIES + 1,
+                        e
+                    );
+                    error!(
+                        "Critical event '{}' emission permanently failed after {} attempts: {}",
+                        event,
+                        MAX_RETRIES + 1,
+                        e
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Perform health check on the sidecar gateway
@@ -167,7 +220,7 @@ fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
     let health_url = format!("http://localhost:{}/health", DEFAULT_GATEWAY_PORT);
 
     // Use ureq for a simple HTTP request
-    match ureq::get(health_url)
+    match ureq::get(&health_url)
         .timeout(std::time::Duration::from_secs(3))
         .call()
     {
@@ -177,8 +230,15 @@ fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
             warn!("Health check returned non-OK status: {}", code);
             Ok(false)
         }
-        Err(ureq::Error::Transport(_)) => {
+        Err(ureq::Error::Transport(transport_err)) => {
             // Connection failed - gateway not running
+            // R18#5: Log full transport error context before returning Ok(false)
+            eprintln!(
+                "Health check transport error at {}: {} ({})",
+                health_url,
+                transport_err,
+                transport_err.kind()
+            );
             Ok(false)
         }
     }

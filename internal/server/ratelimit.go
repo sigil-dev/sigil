@@ -19,6 +19,10 @@ type RateLimitConfig struct {
 	RequestsPerSecond float64
 	// Burst is the maximum burst size per IP.
 	Burst int
+	// MaxVisitors is the maximum number of unique IPs tracked concurrently.
+	// When the visitor map exceeds this size, the oldest entries are evicted during cleanup.
+	// Zero means unlimited (not recommended for production). Default: 10000.
+	MaxVisitors int
 }
 
 // Validate checks that the RateLimitConfig is valid.
@@ -32,6 +36,11 @@ func (c RateLimitConfig) Validate() error {
 		return sigilerr.Errorf(sigilerr.CodeServerConfigInvalid,
 			"rate limit requests per second must not be negative (got %g)",
 			c.RequestsPerSecond)
+	}
+	if c.MaxVisitors < 0 {
+		return sigilerr.Errorf(sigilerr.CodeServerConfigInvalid,
+			"rate limit max visitors must not be negative (got %d)",
+			c.MaxVisitors)
 	}
 	return nil
 }
@@ -58,10 +67,38 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 			case <-ticker.C:
 				mu.Lock()
 				now := time.Now()
+				// First pass: remove stale entries (idle > 10 minutes)
 				for ip, v := range visitors {
 					if now.Sub(v.lastSeen) > 10*time.Minute {
 						delete(visitors, ip)
 					}
+				}
+				// Second pass: enforce MaxVisitors cap by evicting oldest entries
+				if cfg.MaxVisitors > 0 && len(visitors) > cfg.MaxVisitors {
+					// Collect all entries with their lastSeen times
+					type entry struct {
+						ip       string
+						lastSeen time.Time
+					}
+					entries := make([]entry, 0, len(visitors))
+					for ip, v := range visitors {
+						entries = append(entries, entry{ip: ip, lastSeen: v.lastSeen})
+					}
+					// Sort by lastSeen ascending (oldest first)
+					for i := 0; i < len(entries)-1; i++ {
+						for j := i + 1; j < len(entries); j++ {
+							if entries[i].lastSeen.After(entries[j].lastSeen) {
+								entries[i], entries[j] = entries[j], entries[i]
+							}
+						}
+					}
+					// Evict oldest entries until we're under the cap
+					toEvict := len(visitors) - cfg.MaxVisitors
+					for i := 0; i < toEvict && i < len(entries); i++ {
+						delete(visitors, entries[i].ip)
+					}
+					slog.Warn("rate limiter visitor map cap enforced",
+						"evicted", toEvict, "max_visitors", cfg.MaxVisitors, "remaining", len(visitors))
 				}
 				mu.Unlock()
 			case <-done:
@@ -72,7 +109,9 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Strip port from RemoteAddr to prevent trivial bypass
+			// Strip port from RemoteAddr to rate-limit by IP, not by connection.
+			// Without this, clients opening multiple connections from ephemeral ports
+			// would each get separate rate limit buckets, bypassing the limit.
 			host, _, err := net.SplitHostPort(r.RemoteAddr)
 			if err != nil {
 				// RemoteAddr might not have a port (e.g., in tests)
@@ -109,7 +148,7 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
 				if _, err := w.Write([]byte(`{"error":"rate limit exceeded"}`)); err != nil {
-					slog.Debug("failed to write rate limit response", "error", err)
+					slog.Warn("failed to write rate limit response", "error", err)
 				}
 				return
 			}

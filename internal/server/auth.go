@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/sigil-dev/sigil/internal/security"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
@@ -34,7 +35,7 @@ func NewAuthenticatedUser(id, name string, permissions []string) (*Authenticated
 	return &AuthenticatedUser{
 		id:          id,
 		name:        name,
-		permissions: append([]string(nil), permissions...),
+		permissions: append(make([]string, 0, len(permissions)), permissions...),
 	}, nil
 }
 
@@ -59,7 +60,9 @@ func (u *AuthenticatedUser) Permissions() []string {
 	if u == nil {
 		return nil
 	}
-	return append([]string(nil), u.permissions...)
+	result := make([]string, len(u.permissions))
+	copy(result, u.permissions)
+	return result
 }
 
 // contextKey is an unexported type for context keys in this package.
@@ -75,22 +78,24 @@ func UserFromContext(ctx context.Context) *AuthenticatedUser {
 }
 
 // HasPermission checks whether the user has a permission matching the given pattern.
-// Uses the same glob matching as capability enforcement: "admin:*" matches "admin:reload".
+// Uses the same glob matching as capability enforcement via security.MatchCapability.
 // Returns false if user is nil (unauthenticated / auth disabled).
 func (u *AuthenticatedUser) HasPermission(required string) bool {
 	if u == nil {
 		return false
 	}
 	for _, p := range u.permissions {
-		if p == "*" || p == required {
-			return true
+		// Use the same MatchCapability logic as the security enforcer to ensure consistency.
+		// MatchCapability treats the pattern as the first arg, so we check if the user's
+		// permission (p) matches the required capability.
+		matched, err := security.MatchCapability(p, required)
+		if err != nil {
+			// Invalid capability patterns should not grant access.
+			slog.Warn("invalid permission pattern in user permissions", "pattern", p, "error", err)
+			continue
 		}
-		// Simple prefix glob: "admin:*" matches any "admin:..." permission.
-		if len(p) > 1 && p[len(p)-1] == '*' {
-			prefix := p[:len(p)-1]
-			if len(required) >= len(prefix) && required[:len(prefix)] == prefix {
-				return true
-			}
+		if matched {
+			return true
 		}
 	}
 	return false

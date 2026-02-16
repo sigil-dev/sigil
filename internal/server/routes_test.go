@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/sigil-dev/sigil/internal/server"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -964,4 +965,115 @@ func TestRoutes_SendMessage_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *tes
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 	assert.Contains(t, w.Body.String(), "workspace_id is required")
+}
+
+func TestRoutes_RequireAdmin_AuthEnabled_NilUser_Returns401(t *testing.T) {
+	// Defense-in-depth: when auth is enabled but user is nil in context,
+	// requireAdmin must return 401 rather than falling through.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+
+	// Call requireAdmin with a bare context (no user).
+	gotErr := srv.RequireAdmin(context.Background(), "admin:plugins", "test-op")
+	require.Error(t, gotErr)
+	se, ok := gotErr.(huma.StatusError)
+	require.True(t, ok, "error should implement huma.StatusError")
+	assert.Equal(t, 401, se.GetStatus())
+}
+
+func TestRoutes_RequireAdmin_AuthDisabled_NilUser_Allows(t *testing.T) {
+	// When auth is disabled (no validator), admin operations are allowed.
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0",
+	})
+	require.NoError(t, err)
+
+	gotErr := srv.RequireAdmin(context.Background(), "admin:plugins", "test-op")
+	assert.NoError(t, gotErr)
+}
+
+func TestRoutes_RequireAdmin_UserWithPermission_Allows(t *testing.T) {
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+
+	user := mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:plugins"})
+	ctx := server.ContextWithUser(context.Background(), user)
+
+	gotErr := srv.RequireAdmin(ctx, "admin:plugins", "test-op")
+	assert.NoError(t, gotErr)
+}
+
+func TestRoutes_RequireAdmin_UserWithoutPermission_Returns403(t *testing.T) {
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+
+	user := mustNewAuthenticatedUser("user-1", "Regular", []string{"workspace:read"})
+	ctx := server.ContextWithUser(context.Background(), user)
+
+	gotErr := srv.RequireAdmin(ctx, "admin:plugins", "test-op")
+	require.Error(t, gotErr)
+	se, ok := gotErr.(huma.StatusError)
+	require.True(t, ok, "error should implement huma.StatusError")
+	assert.Equal(t, 403, se.GetStatus())
+	assert.Contains(t, gotErr.Error(), "insufficient permissions")
+}
+
+func TestRoutes_AdminEndpoints_AuthEnabled_NoToken_Returns401(t *testing.T) {
+	// When auth is enabled and no token is provided, middleware returns 401
+	// before the handler is reached.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:*"}),
+		},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+	})
+	require.NoError(t, err)
+	srv.RegisterServices(&server.Services{
+		Workspaces: &mockWorkspaceService{},
+		Plugins:    &mockPluginService{},
+		Sessions:   &mockSessionService{},
+		Users:      &mockUserService{},
+	})
+
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/plugins"},
+		{http.MethodGet, "/api/v1/plugins/anthropic"},
+		{http.MethodPost, "/api/v1/plugins/anthropic/reload"},
+		{http.MethodGet, "/api/v1/users"},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			req := httptest.NewRequest(ep.method, ep.path, nil)
+			// No Authorization header — auth middleware should reject.
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+	}
 }
