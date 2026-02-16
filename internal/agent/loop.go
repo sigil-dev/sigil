@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -93,7 +94,7 @@ type Loop struct {
 	toolRegistry        ToolRegistry
 	maxToolCallsPerTurn int
 	hooks               *LoopHooks
-	auditFailCount      int
+	auditFailCount      atomic.Int64
 }
 
 // NewLoop creates a Loop with the given dependencies.
@@ -661,14 +662,14 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 
 	// Best-effort audit; do not fail the response on audit errors.
 	if err := l.auditStore.Append(ctx, entry); err != nil {
-		l.auditFailCount++
+		l.auditFailCount.Add(1)
 		slog.Warn("audit store append failed",
 			"error", err,
 			"workspace_id", msg.WorkspaceID,
 			"session_id", msg.SessionID,
-			"consecutive_failures", l.auditFailCount,
+			"consecutive_failures", l.auditFailCount.Load(),
 		)
 	} else {
-		l.auditFailCount = 0
+		l.auditFailCount.Store(0)
 	}
 }
