@@ -54,7 +54,6 @@ func TestSSE_StreamsEvents(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "homelab", "session_id": "sess-1"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -85,7 +84,6 @@ func TestSSE_EventFormat(t *testing.T) {
 	body := `{"content": "Hi", "workspace_id": "test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -103,7 +101,6 @@ func TestSSE_MissingContent(t *testing.T) {
 	body := `{"workspace_id": "homelab"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -118,7 +115,6 @@ func TestSSE_NoStreamHandler(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -146,33 +142,8 @@ func TestSSE_CompoundAcceptHeader(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
 }
 
-func TestSSE_MultiLineData(t *testing.T) {
-	events := []server.SSEEvent{
-		{Event: "text_delta", Data: "line1\nline2\nline3"},
-		{Event: "done", Data: `{}`},
-	}
-	srv := newTestSSEServer(t, events)
-
-	body := `{"content": "Hi", "workspace_id": "test"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Each line of multi-line data must be prefixed with "data: " per SSE spec.
-	output := w.Body.String()
-	assert.Contains(t, output, "data: line1\n")
-	assert.Contains(t, output, "data: line2\n")
-	assert.Contains(t, output, "data: line3\n")
-	// Must NOT contain the raw un-prefixed multi-line block.
-	assert.NotContains(t, output, "data: line1\nline2")
-}
-
-func TestSSE_JSONResponse_InvalidEventData(t *testing.T) {
+func TestSSE_NonJSONDataIsWrapped(t *testing.T) {
+	// Non-JSON data should be wrapped as a JSON string via ensureValidJSON.
 	events := []server.SSEEvent{
 		{Event: "text_delta", Data: "plain text not json"},
 		{Event: "done", Data: `{}`},
@@ -182,66 +153,39 @@ func TestSSE_JSONResponse_InvalidEventData(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	// No Accept: text/event-stream — should get JSON.
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// The response must be valid JSON even when event data is plain text.
-	type jsonEvent struct {
-		Event string          `json:"event"`
-		Data  json.RawMessage `json:"data"`
-	}
-	var resp struct {
-		Events []jsonEvent `json:"events"`
-	}
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
-	assert.Len(t, resp.Events, 2)
-
-	// Events should include their type.
-	assert.Equal(t, "text_delta", resp.Events[0].Event)
-	assert.Equal(t, "done", resp.Events[1].Event)
-
-	// The plain text event should be wrapped as a JSON string.
-	assert.Equal(t, `"plain text not json"`, string(resp.Events[0].Data))
-	// The valid JSON event should pass through unchanged.
-	assert.Equal(t, `{}`, string(resp.Events[1].Data))
+	// The plain text should be wrapped as a JSON string in the SSE data field.
+	output := w.Body.String()
+	assert.Contains(t, output, `"plain text not json"`)
 }
 
-func TestSSE_JSONResponse(t *testing.T) {
+func TestSSE_MultiLineDataIsWrapped(t *testing.T) {
+	// Multi-line non-JSON data should be wrapped as a JSON string (with escaped newlines).
 	events := []server.SSEEvent{
-		{Event: "text_delta", Data: `{"text":"response"}`},
+		{Event: "text_delta", Data: "line1\nline2\nline3"},
 		{Event: "done", Data: `{}`},
 	}
 	srv := newTestSSEServer(t, events)
 
-	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	body := `{"content": "Hi", "workspace_id": "test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	// No Accept: text/event-stream — should get JSON.
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	type jsonEvent struct {
-		Event string          `json:"event"`
-		Data  json.RawMessage `json:"data"`
-	}
-	var resp struct {
-		Events []jsonEvent `json:"events"`
-	}
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.Len(t, resp.Events, 2)
-
-	// Events must include their type alongside data.
-	assert.Equal(t, "text_delta", resp.Events[0].Event)
-	assert.Equal(t, "done", resp.Events[1].Event)
+	// Multi-line raw text is wrapped as a JSON string with escaped newlines.
+	output := w.Body.String()
+	assert.Contains(t, output, `"line1\nline2\nline3"`)
+	assert.Contains(t, output, "event: text_delta")
+	assert.Contains(t, output, "event: done")
 }
 
 // leakyStreamHandler sends many events (more than channel buffer) and signals
@@ -303,17 +247,16 @@ func TestSSE_DrainOnWriteError(t *testing.T) {
 	body := `{"content":"hello","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
 	// Allow only 2 writes before failing, triggering the drain path.
 	w := newErrResponseWriter(2)
 	srv.Handler().ServeHTTP(w, req)
 
 	// HandleStream must finish (channel drained) within a reasonable timeout.
-	// If the drain logic is missing, HandleStream blocks forever → test times out.
+	// If the drain logic is missing, HandleStream blocks forever -> test times out.
 	select {
 	case <-handler.done:
-		// success — goroutine exited
+		// success - goroutine exited
 	case <-time.After(3 * time.Second):
 		t.Fatal("HandleStream goroutine did not exit; channel was not drained (goroutine leak)")
 	}
@@ -348,181 +291,11 @@ func TestSSE_MalformedJSONBody(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Accept", "text/event-stream")
 
 			w := httptest.NewRecorder()
 			srv.Handler().ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
-			assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
-
-			var errResp map[string]string
-			err := json.Unmarshal(w.Body.Bytes(), &errResp)
-			require.NoError(t, err)
-			assert.Contains(t, errResp["error"], "invalid request body")
-		})
-	}
-}
-
-func TestSSE_JSONResponse_EmptyStream(t *testing.T) {
-	// Handler that closes channel immediately without sending any events.
-	emptyHandler := &mockStreamHandler{events: []server.SSEEvent{}}
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-	require.NoError(t, err)
-	srv.RegisterStreamHandler(emptyHandler)
-
-	body := `{"content": "Hello", "workspace_id": "homelab"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	// No Accept: text/event-stream — should get JSON.
-
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
-
-	var resp struct {
-		Events []server.SSEEvent `json:"events"`
-	}
-	err = json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
-
-	// Verify the events array is empty, not null.
-	assert.NotNil(t, resp.Events, "events array should not be nil")
-	assert.Len(t, resp.Events, 0, "events array should be empty")
-
-	// Verify the exact JSON structure matches {"events":[]}.
-	assert.JSONEq(t, `{"events":[]}`, w.Body.String())
-}
-
-func TestSSE_JSONResponse_MarshalFailureEmitsErrorEvent(t *testing.T) {
-	// Test that error events are properly JSON-marshaled with special characters escaped.
-	// This test uses a mock error with quotes and special characters that would break
-	// JSON if interpolated directly with fmt.Sprintf instead of being marshaled.
-
-	// CustomMarshaller emits a non-JSON string to trigger the error path.
-	events := []server.SSEEvent{
-		{Event: "text_delta", Data: `{"valid":"json"}`},
-		// This event will fail json.Valid and trigger json.Marshal in the error handler.
-		{Event: "text_delta", Data: "not-json"},
-		{Event: "done", Data: `{}`},
-	}
-	srv := newTestSSEServer(t, events)
-
-	body := `{"content": "Hello", "workspace_id": "homelab"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	// No Accept: text/event-stream — should get JSON.
-
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	type jsonEvent struct {
-		Event string          `json:"event"`
-		Data  json.RawMessage `json:"data"`
-	}
-	var resp struct {
-		Events []jsonEvent `json:"events"`
-	}
-
-	// The response must be valid JSON, even if event data contains special characters.
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
-
-	// Verify events were processed (first valid, second wrapped as string, third done).
-	assert.Len(t, resp.Events, 3)
-	assert.Equal(t, "text_delta", resp.Events[0].Event)
-	assert.Equal(t, `{"valid":"json"}`, string(resp.Events[0].Data))
-	assert.Equal(t, "text_delta", resp.Events[1].Event)
-	assert.Equal(t, `"not-json"`, string(resp.Events[1].Data))
-	assert.Equal(t, "done", resp.Events[2].Event)
-}
-
-func TestSSE_JSONResponse_ErrorPayloadWithSpecialCharacters(t *testing.T) {
-	// This test verifies that error payloads properly escape special JSON characters.
-	// If error messages containing quotes, backslashes, or other special characters
-	// are not properly escaped, they could break the JSON structure or enable injection.
-
-	testCases := []struct {
-		name          string
-		errorMessage  string
-		shouldContain string
-	}{
-		{
-			name:          "error with quotes",
-			errorMessage:  `error with "quotes"`,
-			shouldContain: `\"quotes\"`,
-		},
-		{
-			name:          "error with backslashes",
-			errorMessage:  `error with \backslashes\`,
-			shouldContain: `\\backslashes\\`,
-		},
-		{
-			name:          "error with newlines",
-			errorMessage:  "error with\nnewlines",
-			shouldContain: `\n`,
-		},
-		{
-			name:          "complex injection attempt",
-			errorMessage:  `error", "injected": "payload}`,
-			shouldContain: `\`, // Should escape the quotes and special chars
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Create error payload the same way writeJSON does.
-			errPayload, err := json.Marshal(map[string]string{
-				"error":   "marshal_failure",
-				"message": fmt.Sprintf("failed to marshal event data: %s", tc.errorMessage),
-			})
-			require.NoError(t, err)
-
-			// Verify the payload is valid JSON.
-			var result map[string]string
-			err = json.Unmarshal(errPayload, &result)
-			require.NoError(t, err, "error payload must be valid JSON: %s", string(errPayload))
-
-			// Verify the message field contains the error message (safely escaped).
-			assert.Contains(t, result["message"], tc.errorMessage)
-		})
-	}
-}
-
-func TestSSE_DrainRaceCondition(t *testing.T) {
-	// Test concurrent write errors + channel drain don't race.
-	// This test relies on `go test -race` to detect data races.
-	const goroutines = 10
-
-	for i := range goroutines {
-		t.Run(fmt.Sprintf("concurrent-%d", i), func(t *testing.T) {
-			t.Parallel()
-			handler := &leakyStreamHandler{
-				eventCount: 100,
-				done:       make(chan struct{}),
-			}
-			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-			require.NoError(t, err)
-			srv.RegisterStreamHandler(handler)
-
-			body := `{"content":"race","workspace_id":"test"}`
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Accept", "text/event-stream")
-
-			// Fail after 1 write to trigger drain path quickly.
-			w := newErrResponseWriter(1)
-			srv.Handler().ServeHTTP(w, req)
-
-			select {
-			case <-handler.done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("goroutine leak: HandleStream did not exit")
-			}
 		})
 	}
 }
@@ -540,7 +313,6 @@ func TestSSE_SkipsEventTypeWithNewline(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -548,11 +320,11 @@ func TestSSE_SkipsEventTypeWithNewline(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
 
-	// Parse SSE events — the malicious event should be missing.
+	// Parse SSE events - the malicious event should be missing.
 	output := w.Body.String()
 	// Should contain the two valid text_delta events.
 	assert.Contains(t, output, "event: text_delta\n")
-	// Count occurrences of "event: text_delta" — should be 2, not 3.
+	// Count occurrences of "event: text_delta" - should be 2, not 3.
 	eventCount := strings.Count(output, "event: text_delta")
 	assert.Equal(t, 2, eventCount, "should have exactly 2 valid events, malicious one skipped")
 	// The malicious data should not appear in output.
@@ -572,7 +344,6 @@ func TestSSE_SkipsEventTypeWithCarriageReturn(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -585,50 +356,6 @@ func TestSSE_SkipsEventTypeWithCarriageReturn(t *testing.T) {
 	assert.Contains(t, output, "event: done\n")
 	assert.NotContains(t, output, "malicious")
 	assert.NotContains(t, output, "injected:")
-}
-
-func TestSSE_JSONResponse_SkipsEventTypeWithNewline(t *testing.T) {
-	// Security test (JSON variant): events with newlines in event type should be skipped.
-	events := []server.SSEEvent{
-		{Event: "text_delta", Data: `{"text":"valid1"}`},
-		{Event: "text_delta\ninjected: malicious", Data: `{"text":"should be skipped"}`},
-		{Event: "text_delta", Data: `{"text":"valid2"}`},
-		{Event: "done", Data: `{}`},
-	}
-	srv := newTestSSEServer(t, events)
-
-	body := `{"content": "Hello", "workspace_id": "test"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	// No Accept: text/event-stream — should get JSON.
-
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	type jsonEvent struct {
-		Event string          `json:"event"`
-		Data  json.RawMessage `json:"data"`
-	}
-	var resp struct {
-		Events []jsonEvent `json:"events"`
-	}
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
-
-	// Should have 3 events: 2 text_delta + 1 done (malicious one skipped).
-	assert.Len(t, resp.Events, 3)
-
-	// Verify the events are the valid ones.
-	assert.Equal(t, "text_delta", resp.Events[0].Event)
-	assert.Equal(t, "text_delta", resp.Events[1].Event)
-	assert.Equal(t, "done", resp.Events[2].Event)
-
-	// None should contain the malicious payload.
-	for _, evt := range resp.Events {
-		assert.NotContains(t, string(evt.Data), "malicious")
-	}
 }
 
 func TestSSE_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(t *testing.T) {
@@ -650,7 +377,6 @@ func TestSSE_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "any-workspace-id"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -687,7 +413,6 @@ func TestSSE_WorkspaceMembership_ValidMember_Succeeds(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer user-token")
 
 	w := httptest.NewRecorder()
@@ -721,14 +446,12 @@ func TestSSE_WorkspaceMembership_NonMember_Returns403(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer user-token")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), "access denied")
 }
 
 func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns403(t *testing.T) {
@@ -755,38 +478,15 @@ func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns403(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": "nonexistent"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer user-token")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), "access denied")
 }
 
-func TestSSE_RequestBodyTooLarge(t *testing.T) {
-	srv := newTestSSEServer(t, nil)
-
-	// Build a body larger than 1MB.
-	huge := `{"content":"` + strings.Repeat("x", 1<<20+1) + `"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(huge))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
-	assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
-
-	var errResp map[string]string
-	err := json.Unmarshal(w.Body.Bytes(), &errResp)
-	require.NoError(t, err)
-	assert.Contains(t, errResp["error"], "request body too large")
-}
-
-func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {
+func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Returns422(t *testing.T) {
 	// When auth is enabled, empty workspace_id returns 422.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
@@ -810,14 +510,45 @@ func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {
 	body := `{"content": "Hello", "workspace_id": ""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer user-token")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
-	assert.Contains(t, w.Body.String(), "workspace_id is required")
+}
+
+func TestSSE_DrainRaceCondition(t *testing.T) {
+	// Test concurrent write errors + channel drain don't race.
+	// This test relies on `go test -race` to detect data races.
+	const goroutines = 10
+
+	for i := range goroutines {
+		t.Run(fmt.Sprintf("concurrent-%d", i), func(t *testing.T) {
+			t.Parallel()
+			handler := &leakyStreamHandler{
+				eventCount: 100,
+				done:       make(chan struct{}),
+			}
+			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+			require.NoError(t, err)
+			srv.RegisterStreamHandler(handler)
+
+			body := `{"content":"race","workspace_id":"test"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+
+			// Fail after 1 write to trigger drain path quickly.
+			w := newErrResponseWriter(1)
+			srv.Handler().ServeHTTP(w, req)
+
+			select {
+			case <-handler.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("goroutine leak: HandleStream did not exit")
+			}
+		})
+	}
 }
 
 // rapidStreamHandler sends events as fast as possible without pausing,
@@ -846,13 +577,8 @@ func (h *rapidStreamHandler) HandleStream(ctx context.Context, _ server.ChatStre
 }
 
 func TestSSE_DrainRaceCondition_CancelDuringRapidWrites(t *testing.T) {
-	// Test for race condition between rapid event writes and channel drain.
-	// Scenario: Producer sending many events rapidly, consumer cancels after
-	// receiving only a few, drain goroutine must consume the rest without racing.
-	// Run with `go test -race` to detect data races.
-
 	handler := &rapidStreamHandler{
-		eventCount: 200, // well above channel buffer size (16)
+		eventCount: 200,
 		started:    make(chan struct{}),
 		done:       make(chan struct{}),
 	}
@@ -864,49 +590,40 @@ func TestSSE_DrainRaceCondition_CancelDuringRapidWrites(t *testing.T) {
 	body := `{"content":"test rapid cancellation","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
-	// Use a cancellable context to simulate early client disconnect.
 	ctx, cancel := context.WithCancel(context.Background())
 	req = req.WithContext(ctx)
 
-	// countingResponseWriter tracks writes and triggers cancellation after N writes.
 	w := &countingResponseWriter{
 		ResponseRecorder: httptest.NewRecorder(),
 		writeTrigger:     3,
 		onTrigger:        cancel,
 	}
 
-	// Start the request handler in a goroutine.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		srv.Handler().ServeHTTP(w, req)
 	}()
 
-	// Wait for handler to start producing events.
 	select {
 	case <-handler.started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("handler did not start within timeout")
 	}
 
-	// Wait for handler goroutine to finish (channel fully drained).
 	select {
 	case <-handler.done:
-		// success — no goroutine leak, drain worked
 	case <-time.After(5 * time.Second):
 		t.Fatal("HandleStream goroutine did not exit; possible goroutine leak or race in drain logic")
 	}
 
-	// Wait for HTTP handler to finish.
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("HTTP handler did not finish")
 	}
 
-	// Verify we got at least some events before cancellation.
 	assert.GreaterOrEqual(t, w.writeCount, 3, "should have written at least 3 times before cancellation")
 }
 
@@ -931,127 +648,7 @@ func (w *countingResponseWriter) Flush() {
 	w.ResponseRecorder.Flush()
 }
 
-// burstyStreamHandler sends many events in a burst, used to test event limit enforcement.
-type burstyStreamHandler struct {
-	eventCount int
-}
-
-func (h *burstyStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
-	defer close(ch)
-	for i := range h.eventCount {
-		select {
-		case ch <- server.SSEEvent{
-			Event: "text_delta",
-			Data:  fmt.Sprintf(`{"text":"event-%d"}`, i),
-		}:
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// TestSSE_JSONResponse_EventOverflow tests that writeJSON stops accumulating events
-// after maxSSEEvents and emits an overflow error event.
-func TestSSE_JSONResponse_EventOverflow(t *testing.T) {
-	// Create a handler that emits way more events than maxSSEEvents.
-	// Since maxSSEEvents = 10000, we emit 15000 to ensure we exceed the limit.
-	handler := &burstyStreamHandler{eventCount: 15000}
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-	require.NoError(t, err)
-	srv.RegisterStreamHandler(handler)
-
-	body := `{"content": "Hello", "workspace_id": "homelab"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	// No Accept: text/event-stream — should get JSON.
-
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	type jsonEvent struct {
-		Event string          `json:"event"`
-		Data  json.RawMessage `json:"data"`
-	}
-	type errPayload struct {
-		Error   string `json:"error"`
-		Message string `json:"message"`
-	}
-	var resp struct {
-		Events []jsonEvent `json:"events"`
-	}
-	err = json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
-
-	// The events array should be capped at maxSSEEvents + 1 (the overflow error).
-	assert.LessOrEqual(t, len(resp.Events), 10001, "events should not exceed maxSSEEvents + 1")
-
-	// The last event should be an overflow error.
-	lastEvent := resp.Events[len(resp.Events)-1]
-	assert.Equal(t, "error", lastEvent.Event)
-
-	var overflow errPayload
-	err = json.Unmarshal(lastEvent.Data, &overflow)
-	require.NoError(t, err)
-	assert.Equal(t, "stream_overflow", overflow.Error)
-	assert.Contains(t, overflow.Message, "exceeded maximum limit")
-}
-
-// TestSSE_DrainOnContextCancellation tests R18#31: SSE drain on context cancellation.
-// Only write-error drain is tested elsewhere; this tests the context.Done path.
-func TestSSE_DrainOnContextCancellation(t *testing.T) {
-	// Handler that sends many events and respects context cancellation.
-	handler := &leakyStreamHandler{
-		eventCount: 100,
-		done:       make(chan struct{}),
-	}
-
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-	require.NoError(t, err)
-	srv.RegisterStreamHandler(handler)
-
-	body := `{"content":"test context cancellation","workspace_id":"test"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-
-	// Create a cancellable context.
-	ctx, cancel := context.WithCancel(context.Background())
-	req = req.WithContext(ctx)
-
-	// Start handling in a goroutine.
-	handlerDone := make(chan struct{})
-	go func() {
-		defer close(handlerDone)
-		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, req)
-	}()
-
-	// Give the handler time to start and begin sending events.
-	time.Sleep(50 * time.Millisecond)
-
-	// Cancel the context mid-stream.
-	cancel()
-
-	// HandleStream must drain and finish cleanly within timeout.
-	select {
-	case <-handler.done:
-		// success — channel drained, no goroutine leak
-	case <-time.After(3 * time.Second):
-		t.Fatal("HandleStream did not exit after context cancellation; channel not drained")
-	}
-
-	// HTTP handler should also finish.
-	select {
-	case <-handlerDone:
-	case <-time.After(1 * time.Second):
-		t.Fatal("HTTP handler did not finish after context cancellation")
-	}
-}
-
 // concurrentStreamHandler simulates multiple concurrent writers to the event channel.
-// Used to test race conditions in SSE writing code under concurrent load.
 type concurrentStreamHandler struct {
 	goroutines int
 	eventsEach int
@@ -1064,8 +661,6 @@ func (h *concurrentStreamHandler) HandleStream(ctx context.Context, _ server.Cha
 	defer close(h.done)
 	close(h.started)
 
-	// Spawn multiple goroutines that concurrently write to the channel.
-	// Use a buffered channel sized to the number of writers to avoid blocking on send.
 	writerDone := make(chan struct{}, h.goroutines)
 	for i := range h.goroutines {
 		go func(id int) {
@@ -1085,16 +680,12 @@ func (h *concurrentStreamHandler) HandleStream(ctx context.Context, _ server.Cha
 		}(i)
 	}
 
-	// Wait for all writers to finish or context cancellation.
 	completedWriters := 0
 	for completedWriters < h.goroutines {
 		select {
 		case <-writerDone:
 			completedWriters++
 		case <-ctx.Done():
-			// Context cancelled — wait for remaining writers to notice and exit.
-			// They will send on writerDone when they exit via the defer.
-			// We drain the remaining completions to avoid goroutine leaks.
 			for completedWriters < h.goroutines {
 				<-writerDone
 				completedWriters++
@@ -1105,16 +696,9 @@ func (h *concurrentStreamHandler) HandleStream(ctx context.Context, _ server.Cha
 }
 
 func TestSSE_ConcurrentWriteAndDrain(t *testing.T) {
-	// Test concurrent writes to SSE channel + context cancellation for race conditions.
-	// This test spawns multiple goroutines that write to the same channel while
-	// simultaneously cancelling the request context. The race detector (-race flag)
-	// will catch any data races in the SSE writing or draining code.
-	//
-	// Run with: go test -race -run TestSSE_ConcurrentWriteAndDrain ./internal/server/
-
 	handler := &concurrentStreamHandler{
-		goroutines: 10, // 10 concurrent writers
-		eventsEach: 50, // 50 events each = 500 total events
+		goroutines: 10,
+		eventsEach: 50,
 		started:    make(chan struct{}),
 		done:       make(chan struct{}),
 	}
@@ -1126,123 +710,44 @@ func TestSSE_ConcurrentWriteAndDrain(t *testing.T) {
 	body := `{"content":"concurrent race test","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
-	// Use a cancellable context to simulate client disconnect during concurrent writes.
 	ctx, cancel := context.WithCancel(context.Background())
 	req = req.WithContext(ctx)
 
-	// countingResponseWriter tracks write count and cancels after a threshold.
 	w := &countingResponseWriter{
 		ResponseRecorder: httptest.NewRecorder(),
-		writeTrigger:     10, // Cancel after 10 writes
+		writeTrigger:     10,
 		onTrigger:        cancel,
 	}
 
-	// Start the HTTP handler in a goroutine.
 	httpDone := make(chan struct{})
 	go func() {
 		defer close(httpDone)
 		srv.Handler().ServeHTTP(w, req)
 	}()
 
-	// Wait for handler to start and begin producing events.
 	select {
 	case <-handler.started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("handler did not start within timeout")
 	}
 
-	// Wait for handler goroutine to finish (channel drained, no goroutine leaks).
 	select {
 	case <-handler.done:
-		// success — concurrent writes + cancellation handled without races
 	case <-time.After(5 * time.Second):
 		t.Fatal("HandleStream goroutine did not exit; possible goroutine leak or race condition")
 	}
 
-	// Wait for HTTP handler to finish.
 	select {
 	case <-httpDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("HTTP handler did not finish within timeout")
 	}
 
-	// Verify some events were written before cancellation.
 	assert.GreaterOrEqual(t, w.writeCount, 10, "should have written at least 10 times before cancellation")
 }
 
-func TestSSE_ConcurrentWriteAndDrain_JSON(t *testing.T) {
-	// Same as TestSSE_ConcurrentWriteAndDrain but tests the JSON response path.
-	// The JSON path accumulates events in a slice, which has different concurrency
-	// characteristics than the SSE streaming path.
-
-	handler := &concurrentStreamHandler{
-		goroutines: 8,
-		eventsEach: 30, // 240 total events
-		started:    make(chan struct{}),
-		done:       make(chan struct{}),
-	}
-
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-	require.NoError(t, err)
-	srv.RegisterStreamHandler(handler)
-
-	body := `{"content":"concurrent json race test","workspace_id":"test"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	// No Accept: text/event-stream — use JSON response.
-
-	w := httptest.NewRecorder()
-
-	// Start the HTTP handler in a goroutine.
-	httpDone := make(chan struct{})
-	go func() {
-		defer close(httpDone)
-		srv.Handler().ServeHTTP(w, req)
-	}()
-
-	// Wait for handler to start.
-	select {
-	case <-handler.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("handler did not start within timeout")
-	}
-
-	// Wait for handler to finish.
-	select {
-	case <-handler.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("HandleStream goroutine did not exit; possible race condition")
-	}
-
-	// Wait for HTTP handler to finish.
-	select {
-	case <-httpDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("HTTP handler did not finish within timeout")
-	}
-
-	// Verify the response is valid JSON.
-	assert.Equal(t, http.StatusOK, w.Code)
-	type jsonEvent struct {
-		Event string          `json:"event"`
-		Data  json.RawMessage `json:"data"`
-	}
-	var resp struct {
-		Events []jsonEvent `json:"events"`
-	}
-	err = json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err, "response must be valid JSON; got: %s", w.Body.String())
-
-	// Should have received all events from all concurrent writers.
-	expectedTotal := handler.goroutines * handler.eventsEach
-	assert.Equal(t, expectedTotal, len(resp.Events), "should receive all events from concurrent writers")
-}
-
 // aggressiveStreamHandler produces events very rapidly to stress-test race conditions.
-// It sends events continuously with minimal select overhead, maximizing contention
-// on the channel during concurrent drain operations.
 type aggressiveStreamHandler struct {
 	eventCount int
 	done       chan struct{}
@@ -1252,8 +757,6 @@ func (h *aggressiveStreamHandler) HandleStream(ctx context.Context, _ server.Cha
 	defer close(ch)
 	defer close(h.done)
 
-	// Send events in a tight loop without buffering or throttling.
-	// This maximizes the chance of concurrent writes + drain contention.
 	for i := range h.eventCount {
 		select {
 		case ch <- server.SSEEvent{
@@ -1266,18 +769,7 @@ func (h *aggressiveStreamHandler) HandleStream(ctx context.Context, _ server.Cha
 	}
 }
 
-// TestSSE_DrainRaceCondition_ComprehensiveStressTest is the most comprehensive race test.
-// It specifically targets the scenario where:
-// 1. Producer (HandleStream) is rapidly sending events to the channel
-// 2. Consumer (writeSSE) starts reading from the channel
-// 3. Consumer hits a write error mid-stream and calls drainSSEChannel
-// 4. Drain goroutine starts consuming from the same channel concurrently
-// 5. Producer is still sending events during the drain
-//
-// This test MUST be run with `go test -race` to detect data races.
-// Run with: go test -race -run TestSSE_DrainRaceCondition_ComprehensiveStressTest ./internal/server/
 func TestSSE_DrainRaceCondition_ComprehensiveStressTest(t *testing.T) {
-	// Run multiple iterations to increase the chance of catching race conditions.
 	const iterations = 20
 
 	for i := range iterations {
@@ -1285,7 +777,7 @@ func TestSSE_DrainRaceCondition_ComprehensiveStressTest(t *testing.T) {
 			t.Parallel()
 
 			handler := &aggressiveStreamHandler{
-				eventCount: 500, // Large enough to exceed channel buffer many times
+				eventCount: 500,
 				done:       make(chan struct{}),
 			}
 
@@ -1296,38 +788,23 @@ func TestSSE_DrainRaceCondition_ComprehensiveStressTest(t *testing.T) {
 			body := `{"content":"race stress test","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Accept", "text/event-stream")
 
-			// Use errResponseWriter that fails after a random small number of writes.
-			// This ensures the drain path is triggered while the producer is still active.
-			// Using 1-3 writes ensures we hit drain very early in the stream.
 			maxWrites := (i % 3) + 1
 			w := newErrResponseWriter(maxWrites)
-
-			// Run the handler.
 			srv.Handler().ServeHTTP(w, req)
 
-			// Verify the producer goroutine finished (channel fully drained).
 			select {
 			case <-handler.done:
-				// success — no goroutine leak, drain worked without races
 			case <-time.After(5 * time.Second):
 				t.Fatal("HandleStream goroutine did not exit; channel not drained (possible race or deadlock)")
 			}
 
-			// At least one write should have succeeded before the error.
 			assert.GreaterOrEqual(t, w.writes, 1, "should have written at least once before error")
 		})
 	}
 }
 
-// TestSSE_DrainRaceCondition_MultipleConsumers tests the edge case where
-// multiple writeSSE calls might race on the same underlying resources.
-// This is a more pathological scenario than normal, but worth testing for robustness.
 func TestSSE_DrainRaceCondition_MultipleConsumers(t *testing.T) {
-	// This test simulates multiple concurrent SSE consumers reading from
-	// different channels but all hitting write errors and draining simultaneously.
-
 	const consumers = 5
 
 	for i := range consumers {
@@ -1346,13 +823,10 @@ func TestSSE_DrainRaceCondition_MultipleConsumers(t *testing.T) {
 			body := `{"content":"multi-consumer race","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Accept", "text/event-stream")
 
-			// Fail writes quickly to trigger drain path.
 			w := newErrResponseWriter(2)
 			srv.Handler().ServeHTTP(w, req)
 
-			// Verify clean shutdown.
 			select {
 			case <-handler.done:
 			case <-time.After(5 * time.Second):
@@ -1362,8 +836,7 @@ func TestSSE_DrainRaceCondition_MultipleConsumers(t *testing.T) {
 	}
 }
 
-// oscillatingStreamHandler alternates between sending bursts and pausing,
-// creating timing variations that can expose race conditions.
+// oscillatingStreamHandler alternates between sending bursts and pausing.
 type oscillatingStreamHandler struct {
 	burstSize int
 	pauses    int
@@ -1375,7 +848,6 @@ func (h *oscillatingStreamHandler) HandleStream(ctx context.Context, _ server.Ch
 	defer close(h.done)
 
 	for pause := range h.pauses {
-		// Send a burst of events.
 		for i := range h.burstSize {
 			select {
 			case ch <- server.SSEEvent{
@@ -1386,7 +858,6 @@ func (h *oscillatingStreamHandler) HandleStream(ctx context.Context, _ server.Ch
 				return
 			}
 		}
-		// Brief pause between bursts (simulates real-world chunked responses).
 		select {
 		case <-time.After(1 * time.Millisecond):
 		case <-ctx.Done():
@@ -1395,9 +866,6 @@ func (h *oscillatingStreamHandler) HandleStream(ctx context.Context, _ server.Ch
 	}
 }
 
-// TestSSE_DrainRaceCondition_BurstyPattern tests race conditions with bursty traffic.
-// Bursty patterns can create timing windows where the channel transitions between
-// full and empty states, potentially exposing race conditions in the drain logic.
 func TestSSE_DrainRaceCondition_BurstyPattern(t *testing.T) {
 	handler := &oscillatingStreamHandler{
 		burstSize: 30,
@@ -1412,13 +880,10 @@ func TestSSE_DrainRaceCondition_BurstyPattern(t *testing.T) {
 	body := `{"content":"bursty pattern race test","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 
-	// Fail after processing a few bursts.
 	w := newErrResponseWriter(50)
 	srv.Handler().ServeHTTP(w, req)
 
-	// Verify clean drain.
 	select {
 	case <-handler.done:
 	case <-time.After(5 * time.Second):
@@ -1426,79 +891,113 @@ func TestSSE_DrainRaceCondition_BurstyPattern(t *testing.T) {
 	}
 }
 
-// TestSSEStream_EventAccumulationOverflow verifies that the maxSSEEvents limit
-// prevents unbounded memory growth from malicious or buggy StreamHandlers (sigil-kqd.124).
-// This is a critical DoS protection: a malicious plugin could send millions of events
-// to exhaust server memory.
-func TestSSEStream_EventAccumulationOverflow(t *testing.T) {
-	// Create a handler that sends exactly maxSSEEvents + 1 events.
-	// This should trigger the overflow protection.
-	const maxSSEEvents = 10000
-	excessEvents := maxSSEEvents + 1
-
-	events := make([]server.SSEEvent, excessEvents)
-	for i := range events {
-		events[i] = server.SSEEvent{
-			Event: "text_delta",
-			Data:  fmt.Sprintf(`{"text":"event %d"}`, i),
-		}
+func TestSSE_DrainOnContextCancellation(t *testing.T) {
+	handler := &leakyStreamHandler{
+		eventCount: 100,
+		done:       make(chan struct{}),
 	}
 
-	handler := &mockStreamHandler{events: events}
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
 	require.NoError(t, err)
 	srv.RegisterStreamHandler(handler)
 
-	body := `{"content": "overflow test", "workspace_id": "test", "session_id": "sess-overflow"}`
+	body := `{"content":"test context cancellation","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	// No Accept: text/event-stream — use JSON response with overflow protection.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-handler.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("HandleStream did not exit after context cancellation; channel not drained")
+	}
+
+	select {
+	case <-handlerDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("HTTP handler did not finish after context cancellation")
+	}
+}
+
+func TestSSE_OpenAPISpecIncludesSSEEventTypes(t *testing.T) {
+	// Verify the OpenAPI spec includes SSE event type documentation.
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	body := w.Body.String()
+	// Should include the SSE event types in the spec.
+	assert.Contains(t, body, "text/event-stream", "OpenAPI spec must include SSE content type")
+	assert.Contains(t, body, "text_delta", "OpenAPI spec must include text_delta event type")
+	assert.Contains(t, body, "tool_call", "OpenAPI spec must include tool_call event type")
+	assert.Contains(t, body, "done", "OpenAPI spec must include done event type")
+	assert.Contains(t, body, "session_id", "OpenAPI spec must include session_id event type")
+}
+
+func TestSSE_HumaInputValidation_EmptyContent(t *testing.T) {
+	// Verify huma validates the content field as non-empty via minLength:"1".
+	srv := newTestSSEServer(t, nil)
+
+	body := `{"content": "", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
 
-	// Parse the JSON response.
-	type jsonEvent struct {
-		Event string          `json:"event"`
-		Data  json.RawMessage `json:"data"`
-	}
-	var resp struct {
-		Events []jsonEvent `json:"events"`
-	}
-	err = json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err, "response must be valid JSON")
+func TestSSE_HumaInputValidation_MissingContentField(t *testing.T) {
+	// Verify huma validates the content field as required.
+	srv := newTestSSEServer(t, nil)
 
-	// Count data events vs error events.
-	var dataEventCount int
-	var errorEventCount int
+	body := `{"workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 
-	for _, event := range resp.Events {
-		if event.Event == "error" {
-			errorEventCount++
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
 
-			// Verify the error event contains the correct error message.
-			var errPayload struct {
-				Error   string `json:"error"`
-				Message string `json:"message"`
-			}
-			unmarshalErr := json.Unmarshal(event.Data, &errPayload)
-			require.NoError(t, unmarshalErr, "error event payload should be valid JSON")
+	// Huma should reject this since content is required (minLength:1 implies required).
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
 
-			assert.Equal(t, "stream_overflow", errPayload.Error, "error type should be stream_overflow")
-			assert.Contains(t, errPayload.Message, "maximum limit", "error message should mention maximum limit")
-		} else {
-			dataEventCount++
-		}
-	}
+func TestSSE_HumaErrorFormat(t *testing.T) {
+	// Verify error responses use huma's problem+json format.
+	srv := newTestServer(t) // no stream handler
 
-	// Verify exactly maxSSEEvents data events were sent (the limit).
-	assert.Equal(t, maxSSEEvents, dataEventCount, "should cap at maxSSEEvents data events")
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 
-	// Verify exactly 1 error event was emitted.
-	assert.Equal(t, 1, errorEventCount, "should emit exactly one overflow error event")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
 
-	// Total events should be maxSSEEvents (data) + 1 (error) = 10,001.
-	assert.Equal(t, maxSSEEvents+1, len(resp.Events), "total events should be maxSSEEvents + 1 error event")
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	// Huma returns problem+json for errors.
+	assert.Contains(t, w.Header().Get("Content-Type"), "application/problem+json")
+
+	// Verify the error body is valid JSON.
+	var errResp map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	// Huma error format includes "detail" field.
+	assert.Contains(t, errResp, "detail")
 }

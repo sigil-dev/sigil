@@ -4,17 +4,14 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
-	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // SSEEventType defines the allowed event types for server-sent events.
@@ -29,11 +26,6 @@ const (
 	SSEEventDone      SSEEventType = "done"
 	SSEEventError     SSEEventType = "error"
 	SSEEventSessionID SSEEventType = "session_id"
-
-	// maxSSEEvents limits the number of events accumulated in writeJSON to prevent
-	// unbounded memory growth from buggy or malicious StreamHandlers. When exceeded,
-	// an error event is emitted and remaining events are dropped.
-	maxSSEEvents = 10000
 )
 
 // SSEEvent represents a single server-sent event.
@@ -58,6 +50,68 @@ type StreamHandler interface {
 // RegisterStreamHandler sets the handler used by the SSE endpoint.
 func (s *Server) RegisterStreamHandler(h StreamHandler) {
 	s.streamHandler = h
+}
+
+// --- Typed SSE event data for huma OpenAPI schema ---
+//
+// Each SSE event type has a corresponding Go type wrapping json.RawMessage.
+// These types serve two purposes:
+//   1. OpenAPI schema generation via sseEventTypeMap
+//   2. Type-safe SSE event emission via huma's sse.Sender
+//
+// Each implements json.Marshaler to pass through raw JSON without re-encoding.
+
+// TextDeltaEventData carries a text_delta SSE event payload.
+type TextDeltaEventData json.RawMessage
+
+// MarshalJSON returns the raw JSON bytes.
+func (d TextDeltaEventData) MarshalJSON() ([]byte, error) { return json.RawMessage(d), nil }
+
+// ToolCallEventData carries a tool_call SSE event payload.
+type ToolCallEventData json.RawMessage
+
+// MarshalJSON returns the raw JSON bytes.
+func (d ToolCallEventData) MarshalJSON() ([]byte, error) { return json.RawMessage(d), nil }
+
+// UsageEventData carries a usage SSE event payload.
+type UsageEventData json.RawMessage
+
+// MarshalJSON returns the raw JSON bytes.
+func (d UsageEventData) MarshalJSON() ([]byte, error) { return json.RawMessage(d), nil }
+
+// DoneEventData carries a done SSE event payload.
+type DoneEventData json.RawMessage
+
+// MarshalJSON returns the raw JSON bytes.
+func (d DoneEventData) MarshalJSON() ([]byte, error) { return json.RawMessage(d), nil }
+
+// ErrorEventData carries an error SSE event payload.
+type ErrorEventData json.RawMessage
+
+// MarshalJSON returns the raw JSON bytes.
+func (d ErrorEventData) MarshalJSON() ([]byte, error) { return json.RawMessage(d), nil }
+
+// SessionIDEventData carries a session_id SSE event payload.
+type SessionIDEventData json.RawMessage
+
+// MarshalJSON returns the raw JSON bytes.
+func (d SessionIDEventData) MarshalJSON() ([]byte, error) { return json.RawMessage(d), nil }
+
+// sseEventTypeMap maps SSE event names to their corresponding Go types.
+// Used by buildSSEResponseSchema to generate the OpenAPI oneOf schema,
+// and by toTypedEventData to route events to the correct type for sse.Sender.
+var sseEventTypeMap = map[string]any{
+	string(SSEEventTextDelta): TextDeltaEventData{},
+	string(SSEEventToolCall):  ToolCallEventData{},
+	string(SSEEventUsage):     UsageEventData{},
+	string(SSEEventDone):      DoneEventData{},
+	string(SSEEventError):     ErrorEventData{},
+	string(SSEEventSessionID): SessionIDEventData{},
+}
+
+// chatStreamInput is the huma-compatible input type for the SSE streaming endpoint.
+type chatStreamInput struct {
+	Body ChatStreamRequest
 }
 
 // checkWorkspaceMembership verifies the authenticated user has access to the
@@ -95,141 +149,183 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 	return huma.Error403Forbidden("access denied")
 }
 
+// registerSSERoute registers the SSE streaming endpoint using huma.Register
+// with a StreamResponse. This integrates with huma's input validation, error
+// handling, and OpenAPI spec generation while supporting pre-stream error
+// returns (e.g., workspace membership checks, missing handler).
+//
+// The SSE OpenAPI schema is built from sseEventTypeMap to document all event
+// types in the spec using the same pattern as huma's sse.Register.
 func (s *Server) registerSSERoute() {
-	s.router.Post("/api/v1/chat/stream", s.handleChatStream)
-
-	// registerSSERoute registers the SSE streaming endpoint outside huma's standard
-	// handler registration. The SSE endpoint needs raw http.ResponseWriter access
-	// for streaming, which huma's typed handler signature doesn't support. The chi
-	// route handles actual requests while the huma OpenAPI entry below provides
-	// documentation only. Auth middleware is still applied via the global chi
-	// middleware stack registered in New().
-	// Register the operation in the OpenAPI spec manually. The SSE streaming
-	// handler needs raw http.ResponseWriter access, so it cannot use Huma's
-	// standard handler signature. We keep the chi route above for actual
-	// request handling and add the spec entry here for documentation.
-	minContentLen := 1
-	s.api.OpenAPI().AddOperation(&huma.Operation{
+	op := huma.Operation{
 		OperationID: "chat-stream",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/chat/stream",
 		Summary:     "Stream a chat response via SSE",
-		Description: "Send a message and receive a streaming response. Set Accept: text/event-stream for SSE, otherwise receives a JSON object containing an events array.",
+		Description: "Send a message and receive a streaming response as server-sent events.",
 		Tags:        []string{"chat"},
-		RequestBody: &huma.RequestBody{
-			Required: true,
-			Content: map[string]*huma.MediaType{
-				"application/json": {
-					Schema: &huma.Schema{
-						Type:     "object",
-						Required: []string{"content"},
-						Properties: map[string]*huma.Schema{
-							"content": {
-								Type:        "string",
-								MinLength:   &minContentLen,
-								Description: "Message content",
-							},
-							"workspace_id": {
-								Type:        "string",
-								Description: "Target workspace",
-							},
-							"session_id": {
-								Type:        "string",
-								Description: "Optional session to resume",
-							},
-						},
-					},
-				},
-			},
-		},
-		Responses: map[string]*huma.Response{
-			"200": {
-				Description: "Streaming response (SSE or JSON depending on Accept header)",
-				Content: map[string]*huma.MediaType{
-					"text/event-stream": {
-						Schema: &huma.Schema{
-							Type:        "string",
-							Description: "Server-sent event stream",
-						},
-					},
-					"application/json": {
-						Schema: &huma.Schema{
-							Type: "object",
-							Properties: map[string]*huma.Schema{
-								"events": {
-									Type:        "array",
-									Description: "Collected events with type and data",
-									Items: &huma.Schema{
-										Type: "object",
-										Properties: map[string]*huma.Schema{
-											"event": {
-												Type:        "string",
-												Description: "Event type (text_delta, session_id, error, done)",
-											},
-											"data": {
-												Description: "Event payload",
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			"422": {Description: "Validation error (missing content)"},
-			"503": {Description: "Stream handler not configured"},
-		},
-	})
+		Errors:      []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+	}
+
+	// Build SSE response schema from the event type map.
+	buildSSEResponseSchema(s.api, &op)
+
+	huma.Register(s.api, op, s.handleChatStream)
 }
 
-func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
-	// Limit request body to 1MB to prevent memory exhaustion.
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var req ChatStreamRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Type-safe detection of MaxBytesError (Go 1.22+).
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			jsonError(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
-			return
-		}
-		jsonError(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-		return
+// buildSSEResponseSchema adds the SSE event schema to the operation's 200
+// response, documenting each event type as a oneOf entry. This mirrors what
+// huma's sse.Register does internally but allows us to use huma.Register
+// directly (which supports returning errors before streaming starts).
+func buildSSEResponseSchema(api huma.API, op *huma.Operation) {
+	if op.Responses == nil {
+		op.Responses = map[string]*huma.Response{}
 	}
-	if req.Content == "" {
-		jsonError(w, `{"error":"content is required"}`, http.StatusUnprocessableEntity)
-		return
+	if op.Responses["200"] == nil {
+		op.Responses["200"] = &huma.Response{}
+	}
+	if op.Responses["200"].Content == nil {
+		op.Responses["200"].Content = map[string]*huma.MediaType{}
 	}
 
-	// Verify workspace membership before streaming.
-	if err := s.checkWorkspaceMembership(r.Context(), req.WorkspaceID); err != nil {
-		status := http.StatusForbidden
-		if se, ok := err.(huma.StatusError); ok {
-			status = se.GetStatus()
+	dataSchemas := make([]*huma.Schema, 0, len(sseEventTypeMap))
+	for k := range sseEventTypeMap {
+		required := []string{"data"}
+		if k != "" && k != "message" {
+			required = append(required, "event")
 		}
-		errBody, marshalErr := json.Marshal(map[string]string{"error": err.Error()})
-		if marshalErr != nil {
-			jsonError(w, `{"error":"internal error"}`, status)
-			return
+		s := &huma.Schema{
+			Title: "Event " + k,
+			Type:  huma.TypeObject,
+			Properties: map[string]*huma.Schema{
+				"event": {
+					Type:        huma.TypeString,
+					Description: "The event name.",
+					Extensions: map[string]interface{}{
+						"const": k,
+					},
+				},
+				"data": {
+					Description: "The event payload (JSON object).",
+				},
+			},
+			Required: required,
 		}
-		jsonError(w, string(errBody), status)
-		return
+		dataSchemas = append(dataSchemas, s)
 	}
 
+	// Sort for deterministic output (same as huma's sse package).
+	sortSchemasByTitle(dataSchemas)
+
+	schema := &huma.Schema{
+		Title:       "Server Sent Events",
+		Description: "Each oneOf object in the array represents one possible Server Sent Events (SSE) message.",
+		Type:        huma.TypeArray,
+		Items: &huma.Schema{
+			Extensions: map[string]interface{}{
+				"oneOf": dataSchemas,
+			},
+		},
+	}
+	op.Responses["200"].Content["text/event-stream"] = &huma.MediaType{
+		Schema: schema,
+	}
+}
+
+// sortSchemasByTitle sorts schemas by Title for deterministic OpenAPI output.
+func sortSchemasByTitle(schemas []*huma.Schema) {
+	for i := 1; i < len(schemas); i++ {
+		for j := i; j > 0 && schemas[j].Title < schemas[j-1].Title; j-- {
+			schemas[j], schemas[j-1] = schemas[j-1], schemas[j]
+		}
+	}
+}
+
+func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (*huma.StreamResponse, error) {
+	// Pre-stream validation: return HTTP errors before streaming begins.
+	if err := s.checkWorkspaceMembership(ctx, input.Body.WorkspaceID); err != nil {
+		return nil, err
+	}
 	if s.streamHandler == nil {
-		jsonError(w, `{"error":"stream handler not configured"}`, http.StatusServiceUnavailable)
-		return
+		return nil, huma.Error503ServiceUnavailable("stream handler not configured")
 	}
 
-	// Check if client wants SSE or JSON.
-	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-		s.writeSSE(w, r, req)
-		return
-	}
-	s.writeJSON(w, r, req)
+	return &huma.StreamResponse{
+		Body: func(ctx huma.Context) {
+			ctx.SetHeader("Content-Type", "text/event-stream")
+			ctx.SetHeader("Cache-Control", "no-cache")
+			ctx.SetHeader("Connection", "keep-alive")
+
+			bw := ctx.BodyWriter()
+			encoder := json.NewEncoder(bw)
+
+			// Get flusher from the body writer.
+			var flusher http.Flusher
+			if f, ok := bw.(http.Flusher); ok {
+				flusher = f
+			}
+
+			ch := make(chan SSEEvent, 16)
+			go s.streamHandler.HandleStream(ctx.Context(), input.Body, ch)
+
+			for event := range ch {
+				if !validateEventType(event.Event) {
+					slog.Warn("sse: skipping event with invalid type containing newlines", "event_type", event.Event)
+					continue
+				}
+
+				data := ensureValidJSON(event.Data)
+
+				// Write event type.
+				if _, err := fmt.Fprintf(bw, "event: %s\n", event.Event); err != nil {
+					slog.Warn("sse: write error", "error", err)
+					drainSSEChannel(ch)
+					return
+				}
+
+				// Write data line: "data: " + JSON + "\n" (json.Encode adds \n).
+				if _, err := bw.Write([]byte("data: ")); err != nil {
+					slog.Warn("sse: write error", "error", err)
+					drainSSEChannel(ch)
+					return
+				}
+				if err := encoder.Encode(json.RawMessage(data)); err != nil {
+					slog.Warn("sse: encode error", "error", err)
+					drainSSEChannel(ch)
+					return
+				}
+
+				// Empty line terminates the event.
+				if _, err := bw.Write([]byte("\n")); err != nil {
+					slog.Warn("sse: write error", "error", err)
+					drainSSEChannel(ch)
+					return
+				}
+
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+		},
+	}, nil
 }
+
+// ensureValidJSON wraps data as a JSON string if it is not already valid JSON.
+// This prevents sending malformed data that would break the SSE JSON encoding.
+func ensureValidJSON(data string) json.RawMessage {
+	raw := []byte(data)
+	if json.Valid(raw) {
+		return raw
+	}
+	// Wrap non-JSON text as a JSON string.
+	wrapped, err := json.Marshal(data)
+	if err != nil {
+		slog.Warn("sse: failed to marshal event data as string", "error", err)
+		return json.RawMessage(`{"error":"marshal failure"}`)
+	}
+	return wrapped
+}
+
 
 // validateEventType checks if an SSE event type contains invalid newline characters.
 // Returns true if the event type is valid (no newlines).
@@ -245,162 +341,4 @@ func drainSSEChannel(ch <-chan SSEEvent) {
 		for range ch {
 		}
 	}()
-}
-
-// writeSSEField writes a single SSE line and returns true if writing failed.
-func writeSSEField(w http.ResponseWriter, format string, args ...any) bool {
-	if _, err := fmt.Fprintf(w, format, args...); err != nil {
-		slog.Warn("sse: write error", "error", err)
-		return true
-	}
-	return false
-}
-
-func (s *Server) writeSSE(w http.ResponseWriter, r *http.Request, req ChatStreamRequest) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		// Graceful degradation if response writer does not support Flush.
-		flusher = nil
-	}
-
-	ch := make(chan SSEEvent, 16)
-	go s.streamHandler.HandleStream(r.Context(), req, ch)
-
-	for event := range ch {
-		if !validateEventType(event.Event) {
-			slog.Warn("sse: skipping event with invalid type containing newlines", "event_type", event.Event)
-			continue
-		}
-		// SSE spec requires each line of a multi-line payload to be
-		// prefixed with "data: ". Split on newlines and emit each line.
-		if writeSSEField(w, "event: %s\n", event.Event) {
-			drainSSEChannel(ch)
-			return
-		}
-		for _, line := range strings.Split(event.Data, "\n") {
-			if writeSSEField(w, "data: %s\n", line) {
-				drainSSEChannel(ch)
-				return
-			}
-		}
-		if writeSSEField(w, "\n") {
-			drainSSEChannel(ch)
-			return
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-}
-
-// marshalError is the error payload structure for marshal failures.
-type marshalError struct {
-	Error   string `json:"error"`
-	Message string `json:"message"`
-}
-
-// newMarshalErrorMessage constructs a marshalError with a properly formatted message.
-// The message is constructed by concatenating context and error details without
-// string interpolation to ensure all special characters are properly escaped by json.Marshal.
-func newMarshalErrorMessage(context string, err error) marshalError {
-	msg := context
-	if err != nil {
-		msg = msg + ": " + err.Error()
-	}
-	return marshalError{
-		Error:   "marshal_failure",
-		Message: msg,
-	}
-}
-
-// jsonEvent pairs an event type with its data payload for JSON responses.
-type jsonEvent struct {
-	Event SSEEventType    `json:"event"`
-	Data  json.RawMessage `json:"data"`
-}
-
-func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStreamRequest) {
-	ch := make(chan SSEEvent, 16)
-	go s.streamHandler.HandleStream(r.Context(), req, ch)
-
-	events := make([]jsonEvent, 0)
-	overflowed := false
-	for event := range ch {
-		// Check if we've reached the max event limit before processing.
-		if len(events) >= maxSSEEvents {
-			if !overflowed {
-				overflowed = true
-				slog.Warn("writeJSON: SSE event accumulation exceeded maximum limit", "limit", maxSSEEvents)
-				// Emit an overflow error event to signal to the client that events were dropped.
-				err := sigilerr.New(sigilerr.CodeServerInternalFailure, "SSE event stream exceeded maximum limit")
-				errPayload, innerErr := json.Marshal(marshalError{
-					Error:   "stream_overflow",
-					Message: err.Error(),
-				})
-				if innerErr != nil {
-					slog.Warn("writeJSON: failed to marshal overflow error event payload", "error", innerErr)
-				} else {
-					events = append(events, jsonEvent{Event: SSEEventError, Data: json.RawMessage(errPayload)})
-				}
-			}
-			// Continue draining the channel to avoid blocking the producer, but drop remaining events.
-			continue
-		}
-
-		if !validateEventType(event.Event) {
-			slog.Warn("sse: skipping event with invalid type containing newlines", "event_type", event.Event)
-			continue
-		}
-		raw := []byte(event.Data)
-		if !json.Valid(raw) {
-			// Wrap non-JSON text as a JSON string so the response stays valid.
-			var err error
-			raw, err = json.Marshal(event.Data)
-			if err != nil {
-				slog.Warn("writeJSON: failed to marshal event data, emitting error event", "error", err, "event", event.Event)
-				// Emit synthetic error event so client knows events were dropped.
-				// Use a helper type to construct the error payload with proper escaping.
-				errPayload, innerErr := json.Marshal(newMarshalErrorMessage("failed to marshal event data", err))
-				if innerErr != nil {
-					slog.Warn("writeJSON: failed to marshal error event payload", "error", innerErr)
-					continue
-				}
-				events = append(events, jsonEvent{Event: "error", Data: json.RawMessage(errPayload)})
-				// Drain the channel to prevent blocking the producer, then stop processing.
-				// Further events are dropped since we can't guarantee valid JSON serialization.
-				for range ch {}
-				break
-			}
-		}
-		events = append(events, jsonEvent{Event: event.Event, Data: raw})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	resp := struct {
-		Events []jsonEvent `json:"events"`
-	}{Events: events}
-
-	// Encode to buffer first to detect errors before writing to ResponseWriter.
-	// This ensures correct HTTP semantics — either full response or error, not partial.
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
-		http.Error(w, `{"error":"encoding response"}`, http.StatusInternalServerError)
-		return
-	}
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		slog.Warn("writeJSON: failed to write response", "error", err)
-	}
-}
-
-// jsonError writes an HTTP error response with Content-Type: application/json.
-func jsonError(w http.ResponseWriter, body string, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	if _, err := fmt.Fprint(w, body); err != nil {
-		slog.Debug("jsonError: failed to write error response", "error", err, "code", code)
-	}
 }
