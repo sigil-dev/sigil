@@ -279,19 +279,115 @@ func TestEnforcer_AuditFailure_DeniedStillDenies(t *testing.T) {
 func TestEnforcer_AuditFailure_BestEffort(t *testing.T) {
 	t.Parallel()
 
-	audit := &mockAuditStore{err: errors.New("database offline")}
-	enforcer := security.NewEnforcer(audit)
-	enforcer.RegisterPlugin("test-plugin", security.NewCapabilitySet("read"), security.NewCapabilitySet())
+	// sigil-kqd.207: Test that audit store failures don't block operations.
+	// This is critical for availability — a failing audit system must not
+	// cause cascading failures in the authorization system.
+	tests := []struct {
+		name           string
+		auditErr       error
+		pluginAllow    []string
+		pluginDeny     []string
+		capability     string
+		workspaceAllow []string
+		userPerms      []string
+		expectAllowed  bool
+		expectReason   string
+	}{
+		{
+			name:           "allowed check succeeds despite audit failure",
+			auditErr:       errors.New("database offline"),
+			pluginAllow:    []string{"read"},
+			pluginDeny:     []string{},
+			capability:     "read",
+			workspaceAllow: []string{"read"},
+			userPerms:      []string{"read"},
+			expectAllowed:  true,
+		},
+		{
+			name:           "denied check still denies despite audit failure",
+			auditErr:       errors.New("audit store timeout"),
+			pluginAllow:    []string{"read"},
+			pluginDeny:     []string{},
+			capability:     "write",
+			workspaceAllow: []string{"write"},
+			userPerms:      []string{"write"},
+			expectAllowed:  false,
+			expectReason:   "plugin_allow_missing",
+		},
+		{
+			name:           "explicit deny still enforced despite audit failure",
+			auditErr:       errors.New("audit store unreachable"),
+			pluginAllow:    []string{"exec.*"},
+			pluginDeny:     []string{"exec.*"},
+			capability:     "exec.run",
+			workspaceAllow: []string{"exec.*"},
+			userPerms:      []string{"exec.*"},
+			expectAllowed:  false,
+			expectReason:   "plugin_deny_match",
+		},
+		{
+			name:           "workspace deny still enforced despite audit failure",
+			auditErr:       errors.New("audit disk full"),
+			pluginAllow:    []string{"file.read"},
+			pluginDeny:     []string{},
+			capability:     "file.read",
+			workspaceAllow: []string{"calendar.*"},
+			userPerms:      []string{"*"},
+			expectAllowed:  false,
+			expectReason:   "workspace_allow_missing",
+		},
+		{
+			name:           "user permission deny still enforced despite audit failure",
+			auditErr:       errors.New("audit connection refused"),
+			pluginAllow:    []string{"messages.send"},
+			pluginDeny:     []string{},
+			capability:     "messages.send",
+			workspaceAllow: []string{"*"},
+			userPerms:      []string{"messages.read"},
+			expectAllowed:  false,
+			expectReason:   "user_permission_missing",
+		},
+	}
 
-	// An allowed check should succeed even when audit store fails (best-effort).
-	err := enforcer.Check(context.Background(), security.CheckRequest{
-		Plugin:          "test-plugin",
-		Capability:      "read",
-		WorkspaceAllow:  security.NewCapabilitySet("read"),
-		UserPermissions: security.NewCapabilitySet("read"),
-	})
-	assert.NoError(t, err, "allowed check should not fail when audit store is unavailable")
-	assert.Empty(t, audit.snapshot())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			audit := &mockAuditStore{err: tt.auditErr}
+			enforcer := security.NewEnforcer(audit)
+			enforcer.RegisterPlugin("test-plugin",
+				security.NewCapabilitySet(tt.pluginAllow...),
+				security.NewCapabilitySet(tt.pluginDeny...))
+
+			err := enforcer.Check(context.Background(), security.CheckRequest{
+				Plugin:          "test-plugin",
+				Capability:      tt.capability,
+				WorkspaceID:     "ws-1",
+				WorkspaceAllow:  security.NewCapabilitySet(tt.workspaceAllow...),
+				UserPermissions: security.NewCapabilitySet(tt.userPerms...),
+			})
+
+			if tt.expectAllowed {
+				assert.NoError(t, err, "operation should succeed despite audit store failure")
+			} else {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied),
+					"should return capability denied error, not audit error")
+				if tt.expectReason != "" {
+					assert.Contains(t, err.Error(), tt.expectReason)
+				}
+			}
+
+			// Verify audit store received no entries (because append failed).
+			assert.Empty(t, audit.snapshot(),
+				"audit store should have no entries when append fails")
+
+			// Note: This test verifies best-effort audit behavior where:
+			// 1. Operations proceed despite audit failures (allowed checks succeed)
+			// 2. Denied checks still return denial errors (not audit errors)
+			// 3. Errors are not leaked to clients
+			// 4. Warning logs are emitted (verified by code inspection in enforcer.go:116-120, 145-149)
+			//    Log capture is not performed as it's not part of the codebase's test patterns.
+		})
+	}
 }
 
 // --- sigil-anm.11: Missing spec test cases ---
