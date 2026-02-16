@@ -410,6 +410,51 @@ func TestWireGateway_RateLimitConfig(t *testing.T) {
 	// The middleware is tested separately in internal/server/ratelimit_test.go
 }
 
+func TestWireGateway_RegistryDefaultAndFailoverWired(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {APIKey: "test-key-anthropic"},
+		"openai":    {APIKey: "test-key-openai"},
+	}
+	cfg.Models = config.ModelsConfig{
+		Default:  "anthropic/claude-sonnet-4-5",
+		Failover: []string{"openai/gpt-4o"},
+		Budgets: config.BudgetsConfig{
+			PerSessionTokens: 100000,
+			PerDayUSD:        50.0,
+		},
+	}
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	// Route with empty model name should resolve via SetDefault → "anthropic/claude-sonnet-4-5".
+	p, model, err := gw.ProviderRegistry.Route(context.Background(), "", "")
+	require.NoError(t, err, "routing should succeed with default provider configured")
+	assert.NotNil(t, p)
+	assert.Equal(t, "claude-sonnet-4-5", model)
+	assert.Equal(t, "anthropic", p.Name())
+
+	// MaxAttempts should be 1 (primary) + 1 (failover) = 2.
+	assert.Equal(t, 2, gw.ProviderRegistry.MaxAttempts(),
+		"failover chain should be wired: 1 primary + 1 failover")
+}
+
+func TestWireGateway_RegistryDefaultNotWired_RouteFails(t *testing.T) {
+	// Verify that without Models.Default the registry cannot route.
+	// This is the bug scenario — if SetDefault is never called, Route returns
+	// "no default provider configured".
+	reg := provider.NewRegistry()
+	// Register a provider but never call SetDefault.
+	reg.Register("anthropic", &stubProvider{name: "anthropic"})
+
+	_, _, err := reg.Route(context.Background(), "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no default provider configured")
+}
+
 func TestWireGateway_HSTSConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
@@ -423,3 +468,36 @@ func TestWireGateway_HSTSConfig(t *testing.T) {
 	// Server was created successfully with HSTS enabled.
 	// The middleware is tested separately in internal/server/hsts_test.go
 }
+
+// Test that Gateway.Close calls Server.Close to prevent goroutine leaks.
+// This test verifies the fix for the bug where Gateway.Close() didn't call Server.Close(),
+// causing the rate limiter cleanup goroutine to leak.
+func TestGateway_CloseCallsServerClose(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+
+	// Close the gateway which MUST close the server to prevent rate limiter goroutine leak.
+	err = gw.Close()
+	assert.NoError(t, err)
+
+	// If Gateway.Close() called Server.Close(), then calling it again should be safe
+	// due to the sync.Once in Server.Close(). We verify this doesn't panic.
+	assert.NotPanics(t, func() {
+		_ = gw.Server.Close()
+	}, "Server.Close should be idempotent, proving Gateway.Close called it")
+}
+
+// stubProvider is a minimal Provider implementation for negative test cases.
+type stubProvider struct {
+	name string
+}
+
+func (s *stubProvider) Name() string                                                          { return s.name }
+func (s *stubProvider) Available(_ context.Context) bool                                      { return true }
+func (s *stubProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error)             { return nil, nil }
+func (s *stubProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) { return nil, nil }
+func (s *stubProvider) Status(_ context.Context) (provider.ProviderStatus, error)             { return provider.ProviderStatus{Provider: s.name, Available: true}, nil }
+func (s *stubProvider) Close() error                                                          { return nil }

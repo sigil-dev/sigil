@@ -68,10 +68,19 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		slog.Info("discovered plugins", "count", len(manifests))
 	}
 
-	// 4. Provider registry — register built-in providers from config.
+	// 4. Provider registry — register built-in providers and wire routing.
 	provReg := provider.NewRegistry()
 
 	registerBuiltinProviders(cfg, provReg)
+
+	// Wire default model and failover chain from config so the agent loop
+	// can route requests without "no default provider configured" errors.
+	if cfg.Models.Default != "" {
+		provReg.SetDefault(cfg.Models.Default)
+	}
+	if len(cfg.Models.Failover) > 0 {
+		provReg.SetFailover(cfg.Models.Failover)
+	}
 
 	// 5. Workspace manager.
 	wsMgr := workspace.NewManager(filepath.Join(dataDir, "workspaces"), storeCfg)
@@ -156,6 +165,11 @@ func (gw *Gateway) Start(ctx context.Context) error {
 // Close releases all resources held by the gateway.
 func (gw *Gateway) Close() error {
 	var errs []error
+	if gw.Server != nil {
+		if err := gw.Server.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if gw.ProviderRegistry != nil {
 		if err := gw.ProviderRegistry.Close(); err != nil {
 			errs = append(errs, err)
