@@ -308,6 +308,20 @@ type marshalError struct {
 	Message string `json:"message"`
 }
 
+// newMarshalErrorMessage constructs a marshalError with a properly formatted message.
+// The message is constructed by concatenating context and error details without
+// string interpolation to ensure all special characters are properly escaped by json.Marshal.
+func newMarshalErrorMessage(context string, err error) marshalError {
+	msg := context
+	if err != nil {
+		msg = msg + ": " + err.Error()
+	}
+	return marshalError{
+		Error:   "marshal_failure",
+		Message: msg,
+	}
+}
+
 // jsonEvent pairs an event type with its data payload for JSON responses.
 type jsonEvent struct {
 	Event SSEEventType    `json:"event"`
@@ -354,10 +368,8 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, req ChatStrea
 			if err != nil {
 				slog.Warn("writeJSON: failed to marshal event data, emitting error event", "error", err, "event", event.Event)
 				// Emit synthetic error event so client knows events were dropped.
-				errPayload, innerErr := json.Marshal(marshalError{
-					Error:   "marshal_failure",
-					Message: fmt.Sprintf("failed to marshal event data: %s", err.Error()),
-				})
+				// Use a helper type to construct the error payload with proper escaping.
+				errPayload, innerErr := json.Marshal(newMarshalErrorMessage("failed to marshal event data", err))
 				if innerErr != nil {
 					slog.Warn("writeJSON: failed to marshal error event payload", "error", innerErr)
 					continue
