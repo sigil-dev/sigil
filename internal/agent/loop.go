@@ -369,6 +369,9 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 	maxAttempts := l.providerRouter.MaxAttempts()
 	var lastErr error
 	var triedProviders []string
+	// Accumulate provider failures for comprehensive error reporting.
+	// Each element is "providerName: error message".
+	var providerFailures []string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		prov, resolvedModel, err := l.providerRouter.RouteWithBudget(ctx, workspaceID, modelName, budget, triedProviders)
 		if err != nil {
@@ -380,6 +383,8 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 				return nil, err
 			}
 			lastErr = err
+			// Record routing failures so users can see which providers were skipped.
+			providerFailures = append(providerFailures, fmt.Sprintf("route attempt %d: %s", attempt+1, err.Error()))
 			continue
 		}
 
@@ -403,6 +408,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 			// cooldown period for recovery.
 			l.recordProviderFailure(prov)
 			lastErr = sigilerr.Wrap(err, sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("chat call to %s", prov.Name()), sigilerr.FieldProvider(prov.Name()))
+			providerFailures = append(providerFailures, fmt.Sprintf("%s: %s", prov.Name(), err.Error()))
 			continue
 		}
 
@@ -415,23 +421,23 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		if !ok {
 			l.recordProviderFailure(prov)
 			lastErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("provider %s: stream closed without events", prov.Name()), sigilerr.FieldProvider(prov.Name()))
+			providerFailures = append(providerFailures, fmt.Sprintf("%s: stream closed without events", prov.Name()))
 			continue
 		}
 
 		if firstEvent.Type == provider.EventTypeError {
 			l.recordProviderFailure(prov)
 			lastErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("provider %s: %s", prov.Name(), firstEvent.Error), sigilerr.FieldProvider(prov.Name()))
+			providerFailures = append(providerFailures, fmt.Sprintf("%s: %s", prov.Name(), firstEvent.Error))
 			l.drainEventChannel(eventCh)
 			continue
 		}
 
 		// First event is valid — wrap it back with the rest of the stream.
 		// NOTE: Failover only covers first-event failures (auth errors, rate
-		// limits, provider down). Mid-stream failures are not retried because
-		// replaying the full conversation to a fallback provider requires
-		// buffering all events and resending all messages — significant
-		// complexity with partial-output ambiguity. Mid-stream errors surface
-		// to the caller via processEvents. See D036 in docs/decisions/decision-log.md (mid-stream failover).
+		// D036: No mid-stream failover — replaying the full conversation to a
+		// fallback provider requires buffering all events and resending messages.
+		// Mid-stream errors surface to the caller via processEvents.
 		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
 		wrappedCh <- firstEvent
 		go func() {
@@ -443,6 +449,23 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		return wrappedCh, nil
 	}
 
+	// All providers failed. Build comprehensive error message showing all failures.
+	if len(providerFailures) > 0 {
+		combinedMsg := fmt.Sprintf("all providers failed for workspace %s: %s", workspaceID, strings.Join(providerFailures, "; "))
+		if lastErr != nil {
+			// For single provider failure, preserve the original error code if available.
+			// For multiple failures or routing errors, use CodeProviderAllUnavailable.
+			code := sigilerr.CodeOf(lastErr)
+			if len(providerFailures) == 1 && code != "" {
+				// Single failure with a specific error code: preserve it.
+				return nil, sigilerr.Errorf(code, "%s", combinedMsg)
+			}
+			// Multiple failures or non-sigilerr error: all providers unavailable.
+			// Create new error instead of wrapping to ensure correct code.
+			return nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
+		}
+		return nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
+	}
 	if lastErr != nil {
 		return nil, sigilerr.Wrapf(lastErr, sigilerr.CodeProviderAllUnavailable, "all providers failed for workspace %s", workspaceID)
 	}

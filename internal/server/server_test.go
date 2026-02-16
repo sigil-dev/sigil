@@ -423,3 +423,233 @@ func TestConfig_Validate_AppliesDefaults(t *testing.T) {
 	assert.Equal(t, 30*time.Second, cfg.ReadTimeout, "ReadTimeout should have default")
 	assert.Equal(t, 60*time.Second, cfg.WriteTimeout, "WriteTimeout should have default")
 }
+
+func TestConfig_Validate_Boundary(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     server.Config
+		wantErr bool
+		errMsg  string
+	}{
+		// ListenAddr boundary: whitespace-only is not empty but will fail at net.Listen time,
+		// not at Validate(). Validate only checks for empty string.
+		{
+			name: "listen addr with port 0 accepted by validation",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:0",
+			},
+			wantErr: false,
+		},
+		{
+			name: "listen addr with max port accepted by validation",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:65535",
+			},
+			wantErr: false,
+		},
+		// Note: server.Config.ListenAddr is a string parsed by net.Listen, not an int port.
+		// Invalid ports like 65536 or -1 are caught by net.Listen in Start(), not Validate().
+		// These tests confirm Validate() does not reject them (it only checks for empty).
+		{
+			name: "listen addr with out-of-range port passes validation",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:65536",
+			},
+			wantErr: false,
+		},
+		{
+			name: "listen addr with negative port passes validation",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:-1",
+			},
+			wantErr: false,
+		},
+
+		// CORS boundary: wildcard mixed with valid origins still rejected
+		{
+			name: "CORS wildcard among valid origins rejected",
+			cfg: server.Config{
+				ListenAddr:  "127.0.0.1:8080",
+				CORSOrigins: []string{"https://example.com", "*"},
+			},
+			wantErr: true,
+			errMsg:  "CORS origin",
+		},
+		{
+			name: "CORS single valid origin accepted",
+			cfg: server.Config{
+				ListenAddr:  "127.0.0.1:8080",
+				CORSOrigins: []string{"https://example.com"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "CORS empty slice accepted",
+			cfg: server.Config{
+				ListenAddr:  "127.0.0.1:8080",
+				CORSOrigins: []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "CORS nil slice accepted",
+			cfg: server.Config{
+				ListenAddr:  "127.0.0.1:8080",
+				CORSOrigins: nil,
+			},
+			wantErr: false,
+		},
+
+		// RateLimit boundary: smallest positive rate requires burst > 0
+		{
+			name: "rate limit smallest positive rate with zero burst rejected",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+				RateLimit: server.RateLimitConfig{
+					RequestsPerSecond: 0.001,
+					Burst:             0,
+				},
+			},
+			wantErr: true,
+			errMsg:  "burst must be positive",
+		},
+		{
+			name: "rate limit smallest positive rate with burst 1 accepted",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+				RateLimit: server.RateLimitConfig{
+					RequestsPerSecond: 0.001,
+					Burst:             1,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "rate limit negative rate rejected",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+				RateLimit: server.RateLimitConfig{
+					RequestsPerSecond: -0.001,
+					Burst:             5,
+				},
+			},
+			wantErr: true,
+			errMsg:  "requests per second must not be negative",
+		},
+		{
+			name: "rate limit zero rate with negative burst accepted (disabled)",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+				RateLimit: server.RateLimitConfig{
+					RequestsPerSecond: 0,
+					Burst:             -1,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "rate limit max visitors boundary 1 accepted",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+				RateLimit: server.RateLimitConfig{
+					RequestsPerSecond: 10,
+					Burst:             5,
+					MaxVisitors:       1,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "rate limit max visitors negative rejected",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+				RateLimit: server.RateLimitConfig{
+					RequestsPerSecond: 10,
+					Burst:             5,
+					MaxVisitors:       -1,
+				},
+			},
+			wantErr: true,
+			errMsg:  "max visitors must not be negative",
+		},
+
+		// BehindProxy boundary: empty CIDR string in list
+		{
+			name: "behind proxy with empty CIDR string in list",
+			cfg: server.Config{
+				ListenAddr:     "127.0.0.1:8080",
+				BehindProxy:    true,
+				TrustedProxies: []string{""},
+			},
+			wantErr: true,
+			errMsg:  "trusted_proxies must contain at least one valid CIDR",
+		},
+		{
+			name: "behind proxy with multiple CIDRs accepted",
+			cfg: server.Config{
+				ListenAddr:     "127.0.0.1:8080",
+				BehindProxy:    true,
+				TrustedProxies: []string{"10.0.0.0/8", "172.16.0.0/12"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "behind proxy with mixed valid and invalid CIDR rejected",
+			cfg: server.Config{
+				ListenAddr:     "127.0.0.1:8080",
+				BehindProxy:    true,
+				TrustedProxies: []string{"10.0.0.0/8", "not-valid"},
+			},
+			wantErr: true,
+			errMsg:  "invalid trusted proxy CIDR",
+		},
+
+		// Timeout boundary: custom timeouts preserved through ApplyDefaults
+		{
+			name: "custom read timeout preserved",
+			cfg: server.Config{
+				ListenAddr:  "127.0.0.1:8080",
+				ReadTimeout: 1 * time.Millisecond,
+			},
+			wantErr: false,
+		},
+		{
+			name: "custom write timeout preserved",
+			cfg: server.Config{
+				ListenAddr:   "127.0.0.1:8080",
+				WriteTimeout: 1 * time.Millisecond,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			cfg.ApplyDefaults()
+			err := cfg.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerConfigInvalid),
+					"expected CodeServerConfigInvalid, got %s", sigilerr.CodeOf(err))
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfig_ApplyDefaults_PreservesCustomTimeouts(t *testing.T) {
+	cfg := server.Config{
+		ListenAddr:   "127.0.0.1:8080",
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	cfg.ApplyDefaults()
+
+	assert.Equal(t, 5*time.Second, cfg.ReadTimeout, "custom ReadTimeout should not be overwritten")
+	assert.Equal(t, 10*time.Second, cfg.WriteTimeout, "custom WriteTimeout should not be overwritten")
+}

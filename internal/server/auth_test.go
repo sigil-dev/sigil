@@ -537,7 +537,7 @@ func TestAuthMiddleware_EmptyAuthorizationHeaderValue(t *testing.T) {
 	}
 }
 
-// TestNewAuthenticatedUser_Validation tests R18#30: NewAuthenticatedUser validation.
+// TestNewAuthenticatedUser_Validation tests NewAuthenticatedUser validation.
 // Tests that empty userID or nil permissions are handled correctly.
 func TestNewAuthenticatedUser_Validation(t *testing.T) {
 	tests := []struct {

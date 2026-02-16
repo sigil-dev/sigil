@@ -5,6 +5,9 @@ package provider_test
 
 import (
 	"context"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/provider"
@@ -12,6 +15,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// atomicInt64 wraps atomic.Int64 for concurrent counter tracking in tests.
+type atomicInt64 = atomic.Int64
 
 // mockRegistryProvider embeds mockProviderBase for registry tests.
 type mockRegistryProvider struct {
@@ -582,7 +588,7 @@ func TestNewBudget_Validation(t *testing.T) {
 	}
 }
 
-// TestRegistry_BudgetMidSessionExhaustion tests R18#6: budget mid-session exhaustion.
+// TestRegistry_BudgetMidSessionExhaustion tests budget mid-session exhaustion.
 // When a session at 900/1000 tokens consumes 200 more tokens mid-turn,
 // the budget check at callLLM entry only checks 900 < 1000 (passes),
 // but final count can exceed limit (1100 > 1000). This test documents
@@ -648,4 +654,390 @@ func TestRegistry_SetFailover_AllRegistered(t *testing.T) {
 
 	err := reg.SetFailover([]string{"openai/gpt-4.1", "google/gemini-2.5-pro"})
 	require.NoError(t, err)
+}
+
+// --- Concurrent access tests ---
+
+func TestRegistry_ConcurrentRouteWithBudgetChecks(t *testing.T) {
+	// Concurrent RouteWithBudget calls with different budget states should not
+	// race on registry internal state. Each call creates its own Budget so the
+	// contention is on the registry's RWMutex-protected provider map.
+	reg := provider.NewRegistry()
+	reg.Register("anthropic", &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)})
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
+
+	const goroutines = 20
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	// Barrier: all goroutines start simultaneously.
+	start := make(chan struct{})
+	ctx := context.Background()
+
+	// Half the goroutines route with budget under limit (should succeed).
+	for i := 0; i < goroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				budget, err := provider.NewBudget(1000, 500, 500, 200, 5000, 1000)
+				require.NoError(t, err)
+				p, model, err := reg.RouteWithBudget(ctx, "", "", budget, nil)
+				require.NoError(t, err)
+				assert.Equal(t, "anthropic", p.Name())
+				assert.Equal(t, "claude-sonnet-4-5", model)
+			}
+		}()
+	}
+
+	// Other half route with exhausted budget (should fail).
+	for i := 0; i < goroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				budget, err := provider.NewBudget(1000, 1000, 0, 0, 0, 0)
+				require.NoError(t, err)
+				_, _, err = reg.RouteWithBudget(ctx, "", "", budget, nil)
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded))
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+}
+
+func TestRegistry_ConcurrentRouteWithDifferentBudgetTypes(t *testing.T) {
+	// Concurrent RouteWithBudget calls exercising token, hourly, and daily
+	// budget paths simultaneously to verify no races on shared registry state.
+	reg := provider.NewRegistry()
+	reg.Register("anthropic", &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)})
+	reg.Register("openai", &mockRegistryProvider{mockProviderBase: newMockProviderBase("openai", true)})
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
+	require.NoError(t, reg.SetFailover([]string{"openai/gpt-4.1"}))
+
+	const goroutines = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		budget  func() *provider.Budget
+		wantErr bool
+	}{
+		{
+			name: "token budget under limit",
+			budget: func() *provider.Budget {
+				b, _ := provider.NewBudget(1000, 500, 0, 0, 0, 0)
+				return b
+			},
+			wantErr: false,
+		},
+		{
+			name: "token budget exhausted",
+			budget: func() *provider.Budget {
+				b, _ := provider.NewBudget(1000, 1000, 0, 0, 0, 0)
+				return b
+			},
+			wantErr: true,
+		},
+		{
+			name: "hourly budget exhausted",
+			budget: func() *provider.Budget {
+				b, _ := provider.NewBudget(0, 0, 500, 500, 0, 0)
+				return b
+			},
+			wantErr: true,
+		},
+		{
+			name: "daily budget exhausted",
+			budget: func() *provider.Budget {
+				b, _ := provider.NewBudget(0, 0, 0, 0, 5000, 5000)
+				return b
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil budget passes",
+			budget: func() *provider.Budget {
+				return nil
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(wantErr bool, budgetFn func() *provider.Budget) {
+				defer wg.Done()
+				<-start
+				for j := 0; j < iterations; j++ {
+					_, _, err := reg.RouteWithBudget(ctx, "", "", budgetFn(), nil)
+					if wantErr {
+						assert.Error(t, err)
+					} else {
+						assert.NoError(t, err)
+					}
+				}
+			}(tt.wantErr, tt.budget)
+		}
+	}
+
+	close(start)
+	wg.Wait()
+}
+
+func TestRegistry_ConcurrentRegisterAndRoute(t *testing.T) {
+	// Concurrent Register calls interleaved with Route calls exercise the
+	// write-lock (Register) vs read-lock (Route) contention on the registry.
+	reg := provider.NewRegistry()
+
+	// Pre-register a default so Route has a valid target.
+	reg.Register("base", &mockRegistryProvider{mockProviderBase: newMockProviderBase("base", true)})
+	require.NoError(t, reg.SetDefault("base/model"))
+
+	const goroutines = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	ctx := context.Background()
+
+	// Writers: register new providers concurrently.
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				name := "provider-" + strconv.Itoa(id) + "-" + strconv.Itoa(j)
+				reg.Register(name, &mockRegistryProvider{
+					mockProviderBase: newMockProviderBase(name, true),
+				})
+			}
+		}(i)
+	}
+
+	// Readers: route concurrently with budget checks.
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				budget, _ := provider.NewBudget(10000, j, 0, 0, 0, 0)
+				p, _, err := reg.RouteWithBudget(ctx, "", "", budget, nil)
+				require.NoError(t, err)
+				assert.Equal(t, "base", p.Name())
+			}
+		}()
+	}
+
+	// Readers: Get concurrently.
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				p, err := reg.Get("base")
+				require.NoError(t, err)
+				assert.Equal(t, "base", p.Name())
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+}
+
+func TestRegistry_ConcurrentBudgetExhaustionRace(t *testing.T) {
+	// Simulates the scenario where multiple goroutines race to route with
+	// budgets near the exhaustion boundary. Each goroutine creates a budget
+	// at exactly limit-1 (passes) or exactly limit (fails). We verify that
+	// the budget check correctly returns the expected result for each case
+	// even under heavy contention on the registry's read lock.
+	reg := provider.NewRegistry()
+	reg.Register("anthropic", &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)})
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
+
+	const goroutines = 20
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	ctx := context.Background()
+
+	var (
+		passCount atomicInt64
+		failCount atomicInt64
+	)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				// Alternate between just-under and at-limit budgets.
+				var budget *provider.Budget
+				if (id+j)%2 == 0 {
+					budget, _ = provider.NewBudget(1000, 999, 0, 0, 0, 0) // under limit
+				} else {
+					budget, _ = provider.NewBudget(1000, 1000, 0, 0, 0, 0) // at limit
+				}
+				_, _, err := reg.RouteWithBudget(ctx, "", "", budget, nil)
+				if err == nil {
+					passCount.Add(1)
+				} else {
+					assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded))
+					failCount.Add(1)
+				}
+			}
+		}(i)
+	}
+
+	close(start)
+	wg.Wait()
+
+	// Every goroutine did iterations calls. Verify totals are consistent.
+	total := passCount.Load() + failCount.Load()
+	assert.Equal(t, int64(goroutines*iterations), total)
+	// Both pass and fail paths must have been exercised.
+	assert.Greater(t, passCount.Load(), int64(0), "expected some routes to pass budget check")
+	assert.Greater(t, failCount.Load(), int64(0), "expected some routes to fail budget check")
+}
+
+func TestRegistry_ConcurrentFailoverWithBudget(t *testing.T) {
+	// Concurrent RouteWithBudget with failover exercised: primary is down,
+	// fallback is up. Multiple goroutines route simultaneously, some with
+	// valid budgets and some with exhausted budgets.
+	reg := provider.NewRegistry()
+	reg.Register("primary", &mockRegistryProvider{mockProviderBase: newMockProviderBase("primary", false)})
+	reg.Register("fallback", &mockRegistryProvider{mockProviderBase: newMockProviderBase("fallback", true)})
+	require.NoError(t, reg.SetDefault("primary/model-a"))
+	require.NoError(t, reg.SetFailover([]string{"fallback/model-b"}))
+
+	const goroutines = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	ctx := context.Background()
+
+	// Goroutines with valid budget: should failover to fallback.
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				budget, _ := provider.NewBudget(10000, 100, 0, 0, 0, 0)
+				p, model, err := reg.RouteWithBudget(ctx, "", "", budget, nil)
+				require.NoError(t, err)
+				assert.Equal(t, "fallback", p.Name())
+				assert.Equal(t, "model-b", model)
+			}
+		}()
+	}
+
+	// Goroutines with exhausted budget: should fail before trying any provider.
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				budget, _ := provider.NewBudget(100, 100, 0, 0, 0, 0)
+				_, _, err := reg.RouteWithBudget(ctx, "", "", budget, nil)
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded))
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+}
+
+func TestRegistry_ConcurrentConfigMutationWithBudgetRouting(t *testing.T) {
+	// Exercises concurrent writes (SetDefault, SetOverride, SetFailover) against
+	// concurrent reads (RouteWithBudget) to stress the RWMutex boundaries.
+	reg := provider.NewRegistry()
+	reg.Register("a", &mockRegistryProvider{mockProviderBase: newMockProviderBase("a", true)})
+	reg.Register("b", &mockRegistryProvider{mockProviderBase: newMockProviderBase("b", true)})
+	reg.Register("c", &mockRegistryProvider{mockProviderBase: newMockProviderBase("c", true)})
+	require.NoError(t, reg.SetDefault("a/model"))
+
+	const goroutines = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	ctx := context.Background()
+
+	// Config writers: cycle the default provider.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		refs := []string{"a/model", "b/model", "c/model"}
+		for j := 0; j < goroutines*iterations; j++ {
+			_ = reg.SetDefault(refs[j%len(refs)])
+		}
+	}()
+
+	// Config writers: cycle workspace overrides.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		refs := []string{"a/model", "b/model", "c/model"}
+		for j := 0; j < goroutines*iterations; j++ {
+			_ = reg.SetOverride("ws-1", refs[j%len(refs)])
+		}
+	}()
+
+	// Config writers: cycle failover chain.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		chains := [][]string{
+			{"b/model"},
+			{"c/model"},
+			{"b/model", "c/model"},
+		}
+		for j := 0; j < goroutines*iterations; j++ {
+			_ = reg.SetFailover(chains[j%len(chains)])
+		}
+	}()
+
+	// Readers: route with budget, accepting any valid provider.
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				budget, _ := provider.NewBudget(10000, 100, 500, 50, 5000, 500)
+				p, _, err := reg.RouteWithBudget(ctx, "", "", budget, nil)
+				// Should always succeed: all providers are available and budget is under limit.
+				require.NoError(t, err)
+				// Provider name must be one of the registered ones.
+				assert.Contains(t, []string{"a", "b", "c"}, p.Name())
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
 }

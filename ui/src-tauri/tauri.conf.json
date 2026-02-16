@@ -80,7 +80,7 @@
             "start",
             "--config",
             {
-              "validator": "^(?!.*\\.\\.)([\\w\\-./]*\\.ya?ml)$"
+              "validator": "^[\\w\\-]+\\.ya?ml$"
             }
           ]
         }

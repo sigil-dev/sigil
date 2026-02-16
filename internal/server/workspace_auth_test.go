@@ -230,7 +230,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 	}
 }
 
-// TestCheckWorkspaceMembership_ErrorObservability tests R18#33: workspace membership error observability.
+// TestCheckWorkspaceMembership_ErrorObservability tests workspace membership error observability.
 // When workspace membership check fails with an internal error (not NotFound),
 // the error should be logged via slog so operators can diagnose issues.
 func TestCheckWorkspaceMembership_ErrorObservability(t *testing.T) {

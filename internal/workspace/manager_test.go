@@ -25,6 +25,13 @@ func newTestManager(t *testing.T) *workspace.Manager {
 	return m
 }
 
+func assertToolAllowed(t *testing.T, ws *workspace.Workspace, capability string, want bool, msg string) {
+	t.Helper()
+	got, err := ws.ToolAllowed(capability)
+	require.NoError(t, err)
+	assert.Equal(t, want, got, msg)
+}
+
 func TestManager_OpenWorkspace(t *testing.T) {
 	m := newTestManager(t)
 
@@ -115,10 +122,10 @@ func TestManager_ToolAllowlist(t *testing.T) {
 	ws, err := m.Open(context.Background(), "tooled")
 	require.NoError(t, err)
 
-	assert.True(t, ws.ToolAllowed("calendar.create"), "calendar.create should be allowed")
-	assert.True(t, ws.ToolAllowed("shopping.list"), "shopping.list should be allowed")
-	assert.False(t, ws.ToolAllowed("exec.run"), "exec.run should be denied")
-	assert.False(t, ws.ToolAllowed("unknown.tool"), "unknown.tool should not match allow list")
+	assertToolAllowed(t, ws, "calendar.create", true, "calendar.create should be allowed")
+	assertToolAllowed(t, ws, "shopping.list", true, "shopping.list should be allowed")
+	assertToolAllowed(t, ws, "exec.run", false, "exec.run should be denied")
+	assertToolAllowed(t, ws, "unknown.tool", false, "unknown.tool should not match allow list")
 }
 
 func TestManager_SetConfigRefreshesCachedPolicy(t *testing.T) {
@@ -137,8 +144,8 @@ func TestManager_SetConfigRefreshesCachedPolicy(t *testing.T) {
 
 	ws, err := m.Open(context.Background(), "ws")
 	require.NoError(t, err)
-	assert.True(t, ws.ToolAllowed("calendar.create"), "initial config should allow calendar tools")
-	assert.False(t, ws.ToolAllowed("exec.run"), "initial config should deny exec tools")
+	assertToolAllowed(t, ws, "calendar.create", true, "initial config should allow calendar tools")
+	assertToolAllowed(t, ws, "exec.run", false, "initial config should deny exec tools")
 
 	// Update config to change the allow set — cached workspace should reflect the change.
 	cfg2 := workspace.Config{
@@ -152,8 +159,8 @@ func TestManager_SetConfigRefreshesCachedPolicy(t *testing.T) {
 	}
 	require.NoError(t, m.SetConfig(cfg2))
 
-	assert.True(t, ws.ToolAllowed("exec.run"), "updated config should allow exec tools")
-	assert.False(t, ws.ToolAllowed("calendar.create"), "updated config should deny calendar tools")
+	assertToolAllowed(t, ws, "exec.run", true, "updated config should allow exec tools")
+	assertToolAllowed(t, ws, "calendar.create", false, "updated config should deny calendar tools")
 }
 
 func TestManager_PersonalWorkspaceIsUserScoped(t *testing.T) {

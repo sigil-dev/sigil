@@ -392,10 +392,7 @@ func formatCents(cents int64) string {
 	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
 }
 
-// checkBudgetLimit is a generic helper for budget limit checks.
-// It takes a maximum, used value, and a formatter function that generates
-// the error message. T can be int or int64. Returns nil if max is 0 (unlimited)
-// or used < max.
+// checkBudgetLimit returns nil if max is 0 (unlimited) or used < max.
 func checkBudgetLimit[T int | int64](max, used T, formatMsg func(used, max T) string) error {
 	if max > 0 && used >= max {
 		return sigilerr.New(sigilerr.CodeProviderBudgetExceeded, formatMsg(used, max))

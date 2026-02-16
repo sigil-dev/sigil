@@ -174,7 +174,7 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
                         "Sigil gateway health check passed (attempt {})",
                         attempt + 1
                     );
-                    // R18#4: Retry critical sidecar-ready event emission with fallback logging
+                    // Retry critical sidecar-ready event emission with fallback logging
                     emit_critical_event(&app_handle, "sidecar-ready", ());
                     return;
                 }
@@ -217,7 +217,7 @@ fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
             delays.len()
         );
         error!("{}", msg);
-        // R18#4: Retry critical sidecar-error event emission with fallback logging
+        // Retry critical sidecar-error event emission with fallback logging
         emit_critical_event(&app_handle, "sidecar-error", &msg);
     });
 

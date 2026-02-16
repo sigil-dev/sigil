@@ -95,22 +95,34 @@ func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
 		return e.deny(ctx, req, "plugin_not_registered", false, false, false, false)
 	}
 
-	pluginAllow := pluginCaps.allow.Contains(req.Capability)
+	pluginAllow, err := pluginCaps.allow.Contains(req.Capability)
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid, "checking plugin allow capabilities for %q", req.Plugin)
+	}
 	if !pluginAllow {
 		return e.deny(ctx, req, "plugin_allow_missing", pluginAllow, false, false, false)
 	}
 
-	pluginDeny := pluginCaps.deny.Contains(req.Capability)
+	pluginDeny, err := pluginCaps.deny.Contains(req.Capability)
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid, "checking plugin deny capabilities for %q", req.Plugin)
+	}
 	if pluginDeny {
 		return e.deny(ctx, req, "plugin_deny_match", pluginAllow, pluginDeny, false, false)
 	}
 
-	workspaceAllow := req.WorkspaceAllow.Contains(req.Capability)
+	workspaceAllow, err := req.WorkspaceAllow.Contains(req.Capability)
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid, "checking workspace capabilities")
+	}
 	if !workspaceAllow {
 		return e.deny(ctx, req, "workspace_allow_missing", pluginAllow, pluginDeny, workspaceAllow, false)
 	}
 
-	userAllow := req.UserPermissions.Contains(req.Capability)
+	userAllow, err := req.UserPermissions.Contains(req.Capability)
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid, "checking user permissions")
+	}
 	if !userAllow {
 		return e.deny(ctx, req, "user_permission_missing", pluginAllow, pluginDeny, workspaceAllow, userAllow)
 	}

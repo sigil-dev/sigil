@@ -994,3 +994,301 @@ func TestSSE_HumaErrorFormat(t *testing.T) {
 	// Huma error format includes "detail" field.
 	assert.Contains(t, errResp, "detail")
 }
+
+// ---- Negative Tests for Stream Handling ----
+
+func TestSSE_InvalidJSONMidStream(t *testing.T) {
+	// Provider emits valid session_id, text_delta, then invalid JSON,
+	// then another valid event, then done. The ensureValidJSON function
+	// wraps non-JSON data as a JSON string, so the stream should NOT break.
+	events := []server.SSEEvent{
+		{Event: "session_id", Data: `{"session_id":"sess-123"}`},
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "text_delta", Data: "this is not valid json {{{"},
+		{Event: "text_delta", Data: `{"text":"world"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestSSEServer(t, events)
+
+	body := `{"content": "Test", "workspace_id": "test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	output := w.Body.String()
+	// All events should be present.
+	assert.Contains(t, output, "event: session_id")
+	assert.Contains(t, output, "event: text_delta")
+	assert.Contains(t, output, "event: done")
+
+	// The invalid JSON should be wrapped as a JSON string.
+	assert.Contains(t, output, `"this is not valid json {{{"`)
+
+	// Parse SSE events - should have all 5 events.
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	eventCount := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "event: ") {
+			eventCount++
+		}
+	}
+	assert.Equal(t, 5, eventCount, "should have all 5 events in output")
+}
+
+func TestSSE_UnknownEventTypes(t *testing.T) {
+	// Provider emits events with types NOT in sseEventTypeMap.
+	// These should be passed through since the event type map is only for
+	// OpenAPI schema generation. The isValidEventType check only rejects newlines.
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `{"text":"valid"}`},
+		{Event: "heartbeat", Data: `{"timestamp":12345}`},
+		{Event: "custom_metric", Data: `{"value":42}`},
+		{Event: "text_delta", Data: `{"text":"more"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestSSEServer(t, events)
+
+	body := `{"content": "Test", "workspace_id": "test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	output := w.Body.String()
+	// All event types should appear in the output.
+	assert.Contains(t, output, "event: text_delta")
+	assert.Contains(t, output, "event: heartbeat")
+	assert.Contains(t, output, "event: custom_metric")
+	assert.Contains(t, output, "event: done")
+
+	// Verify unknown event types have their data intact.
+	assert.Contains(t, output, `"timestamp":12345`)
+	assert.Contains(t, output, `"value":42`)
+}
+
+func TestSSE_EmptyDataField(t *testing.T) {
+	// Provider emits an event with empty Data string.
+	// ensureValidJSON("") will wrap it as `""` (valid JSON string).
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: ""},
+		{Event: "text_delta", Data: `{"text":"after empty"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestSSEServer(t, events)
+
+	body := `{"content": "Test", "workspace_id": "test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	output := w.Body.String()
+	// Should have all 3 events.
+	assert.Contains(t, output, "event: text_delta")
+	assert.Contains(t, output, "event: done")
+
+	// The empty data should be wrapped as an empty JSON string: ""
+	assert.Contains(t, output, `""`)
+	assert.Contains(t, output, `"after empty"`)
+}
+
+// blockingStreamHandler sends one event then blocks forever.
+type blockingStreamHandler struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+func (h *blockingStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	defer close(ch)
+	defer close(h.done)
+	close(h.started)
+
+	// Send one event.
+	select {
+	case ch <- server.SSEEvent{Event: "text_delta", Data: `{"text":"first"}`}:
+	case <-ctx.Done():
+		return
+	}
+
+	// Block forever or until context is cancelled.
+	<-ctx.Done()
+}
+
+func TestSSE_HangingProviderTimeout(t *testing.T) {
+	// Create a blocking handler that hangs forever after sending one event.
+	handler := &blockingStreamHandler{
+		started: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
+	require.NoError(t, err)
+
+	body := `{"content":"test","workspace_id":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	// Use a context with a short timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+	}()
+
+	// Wait for handler to start.
+	select {
+	case <-handler.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	// Verify the handler goroutine exits when context is cancelled.
+	select {
+	case <-handler.done:
+		// Success - goroutine exited cleanly.
+	case <-time.After(3 * time.Second):
+		t.Fatal("HandleStream goroutine did not exit after context timeout (goroutine leak)")
+	}
+
+	select {
+	case <-httpDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("HTTP handler did not finish")
+	}
+}
+
+func TestSSE_ContextCancellationDuringEventRouting(t *testing.T) {
+	// Cancel the context right after the first event is sent.
+	// Verify the handler exits cleanly and response has at least one event.
+	handler := &rapidStreamHandler{
+		eventCount: 100,
+		started:    make(chan struct{}),
+		done:       make(chan struct{}),
+	}
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
+	require.NoError(t, err)
+
+	body := `{"content":"test cancellation","workspace_id":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+
+	w := &countingResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		writeTrigger:     1, // Cancel after first write.
+		onTrigger:        cancel,
+	}
+
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		srv.Handler().ServeHTTP(w, req)
+	}()
+
+	select {
+	case <-handler.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	// Verify handler exits cleanly.
+	select {
+	case <-handler.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("HandleStream did not exit after context cancellation")
+	}
+
+	select {
+	case <-httpDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("HTTP handler did not finish")
+	}
+
+	// Verify at least one event was written.
+	assert.GreaterOrEqual(t, w.writeCount, 1)
+}
+
+func TestSSE_MixedValidAndInvalidDataPayloads(t *testing.T) {
+	// Table-driven test with various data payloads: valid JSON, invalid JSON,
+	// empty string, large data, unicode, control characters.
+	// All should produce valid SSE output via ensureValidJSON.
+
+	largeData := strings.Repeat("x", 10*1024) // 10KB of 'x'
+	unicodeData := "Hello 世界 🌍 café"
+	controlCharData := "line1\x00\x01\x02line2"
+
+	tests := []struct {
+		name string
+		data string
+	}{
+		{"valid json object", `{"text":"valid"}`},
+		{"valid json array", `["item1","item2"]`},
+		{"invalid json braces", `{this is not json}`},
+		{"invalid json truncated", `{"incomplete":`},
+		{"empty string", ""},
+		{"plain text", "plain text data"},
+		{"large data", largeData},
+		{"unicode characters", unicodeData},
+		{"control characters", controlCharData},
+		{"multiline text", "line1\nline2\nline3"},
+		{"single quote json-like", `{'key': 'value'}`},
+		{"number only", "42"},
+		{"boolean only", "true"},
+		{"null only", "null"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := []server.SSEEvent{
+				{Event: "text_delta", Data: tt.data},
+				{Event: "done", Data: `{}`},
+			}
+			srv := newTestSSEServer(t, events)
+
+			body := `{"content": "Test", "workspace_id": "test"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code, "test case: %s", tt.name)
+
+			output := w.Body.String()
+			// Should contain both events.
+			assert.Contains(t, output, "event: text_delta", "test case: %s", tt.name)
+			assert.Contains(t, output, "event: done", "test case: %s", tt.name)
+
+			// Parse data lines to verify they are valid JSON.
+			scanner := bufio.NewScanner(strings.NewReader(output))
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.HasPrefix(line, "data: ") {
+					dataJSON := strings.TrimPrefix(line, "data: ")
+					// Each data line should be valid JSON.
+					assert.True(t, json.Valid([]byte(dataJSON)),
+						"data line should be valid JSON in test case %s: %s", tt.name, dataJSON)
+				}
+			}
+		})
+	}
+}

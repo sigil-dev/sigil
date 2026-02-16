@@ -123,6 +123,48 @@ describe("parseSSEStream robustness", () => {
   });
 });
 
+describe("parseSSEStream error recovery", () => {
+  it("handles multiple consecutive malformed events", () => {
+    const raw = [
+      "event: text_delta\ndata: not json 1\n\n",
+      "event: text_delta\ndata: not json 2\n\n",
+      "event: text_delta\ndata: not json 3\n\n",
+    ].join("");
+    const events = parseSSEStream(raw);
+    expect(events).toHaveLength(3);
+    events.forEach((e) => expect(e.type).toBe("parse_error"));
+  });
+
+  it("handles event: field with no data: field", () => {
+    // Per SSE spec, an event with type but no data lines has no dataLines to dispatch
+    const raw = "event: text_delta\n\n";
+    const events = parseSSEStream(raw);
+    // No data lines means no dispatch (dataLines.length === 0)
+    expect(events).toHaveLength(0);
+  });
+
+  it("recovers from malformed event and processes subsequent valid events", () => {
+    const raw = [
+      "event: text_delta\ndata: {\"text\":\"good1\"}\n\n",
+      "event: text_delta\ndata: broken\n\n",
+      "event: text_delta\ndata: {\"text\":\"good2\"}\n\n",
+    ].join("");
+    const events = parseSSEStream(raw);
+    expect(events).toHaveLength(3);
+    expect(events[0]).toEqual({ type: "text_delta", text: "good1" });
+    expect(events[1].type).toBe("parse_error");
+    expect(events[2]).toEqual({ type: "text_delta", text: "good2" });
+  });
+
+  it("handles unknown event types in parseSSEEventData", () => {
+    const result = parseSSEEventData("heartbeat", "{}");
+    expect(result.type).toBe("parse_error");
+    if (result.type === "parse_error") {
+      expect(result.error).toContain("Unknown event type");
+    }
+  });
+});
+
 describe("parseSSEEventData edge cases", () => {
   it("handles empty string for session_id", () => {
     const result = parseSSEEventData("session_id", "{\"session_id\":\"\"}");

@@ -192,21 +192,28 @@ func (gw *Gateway) Validate() error {
 	return nil
 }
 
-// Close releases all resources held by the gateway.
+// Close releases all resources held by the gateway. Unlike Validate(),
+// Close tolerates nil fields to avoid leaking resources from partial initialization.
 func (gw *Gateway) Close() error {
-	if err := gw.Validate(); err != nil {
-		return err
-	}
-
-	type closer interface{ Close() error }
-	closers := []closer{gw.Server, gw.ProviderRegistry, gw.WorkspaceManager, gw.GatewayStore}
-
 	var errs []error
-	for _, c := range closers {
-		if c != nil {
-			if err := c.Close(); err != nil {
-				errs = append(errs, err)
-			}
+	if gw.Server != nil {
+		if err := gw.Server.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if gw.ProviderRegistry != nil {
+		if err := gw.ProviderRegistry.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if gw.WorkspaceManager != nil {
+		if err := gw.WorkspaceManager.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if gw.GatewayStore != nil {
+		if err := gw.GatewayStore.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)

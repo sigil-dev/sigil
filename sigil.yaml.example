@@ -51,6 +51,7 @@ models:
     - "anthropic/claude-sonnet-4-5"
   budgets:
     per_session_tokens: 100000
+    per_hour_usd: 5.00
     per_day_usd: 50.00
 
 # Sessions

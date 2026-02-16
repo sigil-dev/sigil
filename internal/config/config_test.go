@@ -96,6 +96,7 @@ func validConfig() *config.Config {
 			Failover: []string{"anthropic/claude-sonnet-4-5"},
 			Budgets: config.BudgetsConfig{
 				PerSessionTokens: 100000,
+				PerHourUSD:       5.00,
 				PerDayUSD:        50.00,
 			},
 		},
@@ -280,20 +281,24 @@ func TestValidate_Budgets(t *testing.T) {
 	tests := []struct {
 		name             string
 		perSessionTokens int
+		perHourUSD       float64
 		perDayUSD        float64
 		wantErr          string
 	}{
-		{"valid budgets", 100000, 50.0, ""},
-		{"zero tokens", 0, 50.0, "models.budgets.per_session_tokens"},
-		{"negative tokens", -1, 50.0, "models.budgets.per_session_tokens"},
-		{"zero usd", 100000, 0, "models.budgets.per_day_usd"},
-		{"negative usd", 100000, -5.0, "models.budgets.per_day_usd"},
+		{"valid budgets", 100000, 5.0, 50.0, ""},
+		{"zero tokens", 0, 5.0, 50.0, "models.budgets.per_session_tokens"},
+		{"negative tokens", -1, 5.0, 50.0, "models.budgets.per_session_tokens"},
+		{"zero hour usd", 100000, 0, 50.0, "models.budgets.per_hour_usd"},
+		{"negative hour usd", 100000, -1.0, 50.0, "models.budgets.per_hour_usd"},
+		{"zero day usd", 100000, 5.0, 0, "models.budgets.per_day_usd"},
+		{"negative day usd", 100000, 5.0, -5.0, "models.budgets.per_day_usd"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
 			cfg.Models.Budgets.PerSessionTokens = tt.perSessionTokens
+			cfg.Models.Budgets.PerHourUSD = tt.perHourUSD
 			cfg.Models.Budgets.PerDayUSD = tt.perDayUSD
 			errs := cfg.Validate()
 			if tt.wantErr != "" {
@@ -412,6 +417,7 @@ func TestValidate_MultipleErrors(t *testing.T) {
 			Default: "",
 			Budgets: config.BudgetsConfig{
 				PerSessionTokens: -1,
+				PerHourUSD:       -1,
 				PerDayUSD:        -1,
 			},
 		},

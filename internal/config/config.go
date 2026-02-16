@@ -65,6 +65,7 @@ type ModelsConfig struct {
 // BudgetsConfig sets token and cost limits.
 type BudgetsConfig struct {
 	PerSessionTokens int     `mapstructure:"per_session_tokens"`
+	PerHourUSD       float64 `mapstructure:"per_hour_usd"`
 	PerDayUSD        float64 `mapstructure:"per_day_usd"`
 }
 
@@ -123,6 +124,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("sessions.memory.compaction.batch_size", 50)
 	v.SetDefault("models.default", "anthropic/claude-sonnet-4-5")
 	v.SetDefault("models.budgets.per_session_tokens", 100000)
+	v.SetDefault("models.budgets.per_hour_usd", 5.00)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
 }
 
@@ -300,6 +302,13 @@ func (c *Config) validateModels() []error {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: models.budgets.per_session_tokens must be greater than 0, got %d",
 			c.Models.Budgets.PerSessionTokens,
+		))
+	}
+
+	if c.Models.Budgets.PerHourUSD <= 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: models.budgets.per_hour_usd must be greater than 0, got %g",
+			c.Models.Budgets.PerHourUSD,
 		))
 	}
 

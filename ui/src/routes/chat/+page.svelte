@@ -16,7 +16,6 @@
 	});
 
 	$effect(() => {
-		// Scroll to bottom when messages change
 		if (chatStore.messages.length && messagesContainer) {
 			messagesContainer.scrollTop = messagesContainer.scrollHeight;
 		}

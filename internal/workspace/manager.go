@@ -63,9 +63,14 @@ type Workspace struct {
 // workspace's tool configuration. Uses fail-closed semantics: if no allow
 // patterns are configured, all tools are denied. Deny patterns are
 // evaluated first; then the allow set must explicitly permit the capability.
-func (w *Workspace) ToolAllowed(capability string) bool {
-	if w.denySet.Contains(capability) {
-		return false
+// Returns an error if any capability pattern is invalid.
+func (w *Workspace) ToolAllowed(capability string) (bool, error) {
+	denied, err := w.denySet.Contains(capability)
+	if err != nil {
+		return false, err
+	}
+	if denied {
+		return false, nil
 	}
 	return w.allowSet.Contains(capability)
 }

@@ -368,7 +368,7 @@ func TestGateway_CloseDoesNotPanic(t *testing.T) {
 
 	// Close is idempotent for both subsystems, so we cannot verify that
 	// errors.Join collects errors from both without injectable mock closers.
-	// This test confirms Close does not panic on a properly initialized Gateway.
+	// This test verifies Close returns nil on a properly initialized Gateway.
 }
 
 // Test that Gateway.Close properly closes the ProviderRegistry
@@ -595,9 +595,9 @@ func TestConfigTokenValidator_MalformedTokens(t *testing.T) {
 	}
 }
 
-// Test that token validation timing is constant regardless of token position in the map.
-// This test verifies that the implementation iterates through ALL tokens before returning,
-// preventing timing attacks that could reveal which token position matched.
+// Test that token validation uses constant-time comparison via subtle.ConstantTimeCompare.
+// Note: Go map iteration is randomized, so position-based timing attacks are not viable,
+// but we still iterate all tokens to avoid leaking match position via short-circuit.
 func TestConfigTokenValidator_ConstantTimeIteration(t *testing.T) {
 	// Create validator with many tokens to make timing differences more measurable
 	tokens := make([]config.TokenConfig, 10)
@@ -790,20 +790,19 @@ func TestGateway_ValidateRequiredFields(t *testing.T) {
 }
 
 // Test Gateway.Close calls Validate and fails fast on invalid gateway
-func TestGateway_CloseValidatesFields(t *testing.T) {
+func TestGateway_CloseToleratesNilFields(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 
 	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 
-	// Simulate incomplete initialization by nil'ing a field
+	// Simulate partial initialization by nil'ing a field.
+	// Close must still release remaining resources.
 	gw.Server = nil
 
-	// Close should fail fast with validation error
 	err = gw.Close()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "gateway server is nil")
+	assert.NoError(t, err, "Close should skip nil fields, not fail")
 }
 
 // stubProvider is a minimal Provider implementation for negative test cases.

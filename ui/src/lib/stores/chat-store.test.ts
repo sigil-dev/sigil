@@ -109,8 +109,7 @@ describe("ChatStore", () => {
       store.newSession("ws-1");
       await store.sendMessage("test");
 
-      expect(store.error).toContain("401");
-      expect(store.error).toContain("Unauthorized");
+      expect(store.error).toContain("Authentication required");
       expect(store.messages).toHaveLength(1);
       expect(store.messages[0].role).toBe("user");
     });
@@ -125,8 +124,7 @@ describe("ChatStore", () => {
       store.newSession("ws-1");
       await store.sendMessage("test");
 
-      expect(store.error).toContain("403");
-      expect(store.error).toContain("Forbidden");
+      expect(store.error).toContain("Access denied");
     });
 
     it("handles 429 Rate Limit error", async () => {
@@ -139,7 +137,6 @@ describe("ChatStore", () => {
       store.newSession("ws-1");
       await store.sendMessage("test");
 
-      expect(store.error).toContain("429");
       expect(store.error).toContain("Rate limit exceeded");
     });
 
@@ -263,6 +260,37 @@ describe("ChatStore", () => {
       expect(store.error).not.toContain("Network error");
       expect(store.error).not.toContain("AbortError");
       expect(store.loading).toBe(false);
+      // Empty assistant message should be removed
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0].role).toBe("user");
+    });
+
+    it("marks message as incomplete when parse error occurs after partial content", async () => {
+      const sseData = [
+        "event: text_delta\ndata: {\"text\":\"Here are 5 steps to\"}\n\n",
+        "event: text_delta\ndata: not-valid-json\n\n",
+      ].join("");
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockSSEResponse(sseData)));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.error).toContain("Failed to parse text_delta event");
+      expect(store.messages).toHaveLength(2);
+      expect(store.messages[1].content).toBe("Here are 5 steps to");
+      expect(store.messages[1].incomplete).toBe(true);
+    });
+
+    it("does not mark message as incomplete when parse error occurs with no content", async () => {
+      const sseData = "event: session_id\ndata: not-json\n\n";
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockSSEResponse(sseData)));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.error).toContain("parse");
       // Empty assistant message should be removed
       expect(store.messages).toHaveLength(1);
       expect(store.messages[0].role).toBe("user");

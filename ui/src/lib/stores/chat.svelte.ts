@@ -27,6 +27,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   toolCalls?: ToolCall[];
+  incomplete?: boolean;
 }
 
 /** A session summary for the sidebar */
@@ -83,6 +84,7 @@ export class ChatStore {
   authToken = $state<string | null>(null);
 
   private abortController: AbortController | null = null;
+  private streamLockFailed = false;
 
   /** Load workspaces and their sessions for the sidebar */
   async loadSidebar(): Promise<void> {
@@ -165,6 +167,10 @@ export class ChatStore {
    */
   async sendMessage(content: string): Promise<void> {
     if (!content.trim() || this.loading) return;
+    if (this.streamLockFailed) {
+      this.error = "Stream error — please reload the page to continue";
+      return;
+    }
     if (!this.workspaceId || this.workspaceId.trim() === "") {
       this.error = "No workspace selected";
       return;
@@ -355,6 +361,8 @@ export class ChatStore {
           reader.releaseLock();
         } catch (retryErr) {
           logger.error("Failed to cancel and retry reader lock release", { error: retryErr });
+          this.streamLockFailed = true;
+          this.error = "Stream error — please reload the page to continue";
         }
       }
     }
@@ -393,9 +401,18 @@ export class ChatStore {
           rawData: event.rawData,
         });
         this.error = `Failed to parse ${event.eventType} event`;
+        this.markMessageIncomplete(messageId);
         // Abort stream on parse error to prevent further invalid events
         this.abortController?.abort();
         return;
+    }
+  }
+
+  /** Mark a message as incomplete when the stream ends with an error */
+  private markMessageIncomplete(messageId: string): void {
+    const msg = this.messages.find((m) => m.id === messageId);
+    if (msg && msg.content) {
+      this.messages = this.messages.map((m) => m.id === messageId ? { ...m, incomplete: true } : m);
     }
   }
 

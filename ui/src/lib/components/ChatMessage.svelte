@@ -2,6 +2,7 @@
 <!-- Copyright 2026 Sigil Contributors -->
 <script lang="ts">
 	import type { ChatMessage, ToolCall } from '$lib/stores/chat.svelte';
+	import { logger } from '$lib/logger';
 
 	interface Props {
 		message: ChatMessage;
@@ -38,7 +39,7 @@
 		try {
 			return JSON.stringify(value, null, 2);
 		} catch (e) {
-			console.warn('formatJson: failed to stringify value', e);
+			logger.warn('formatJson: failed to stringify value', { error: e, valueType: typeof value });
 			return '<unparseable value>';
 		}
 	}

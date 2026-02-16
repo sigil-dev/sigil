@@ -99,7 +99,7 @@ func TestHealthTracker_MidStreamFailure(t *testing.T) {
 	assert.False(t, h.IsHealthy(), "should be unhealthy after mid-stream failure despite prior success")
 }
 
-// TestHealthTracker_ConcurrentRecordCalls tests R18#7: provider health tracking race condition.
+// TestHealthTracker_ConcurrentRecordCalls tests provider health tracking race condition.
 // RecordFailure() can be called from both agent loop (pre-stream) AND provider
 // internals (mid-stream) concurrently. This test verifies concurrent calls
 // don't corrupt state. Run with `go test -race` to detect data races.

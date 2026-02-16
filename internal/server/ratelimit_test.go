@@ -355,7 +355,7 @@ func TestRateLimitMiddleware_MaxVisitorsCap(t *testing.T) {
 	// which isn't exposed. This test verifies the config is accepted.
 }
 
-// TestRateLimitMiddleware_TokenRefillBoundary tests R18#32: rate limit token refill boundary.
+// TestRateLimitMiddleware_TokenRefillBoundary tests rate limit token refill boundary.
 // At 10 RPS, 1 token should be refilled every 100ms. Test exact boundary timing.
 func TestRateLimitMiddleware_TokenRefillBoundary(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -1239,6 +1239,49 @@ func TestAgentLoop_FailoverCapMatchesRouterChainLength(t *testing.T) {
 	assert.Equal(t, 3, router.callCount(), "loop should try exactly MaxAttempts() providers")
 }
 
+func TestAgentLoop_FailoverAccumulatesAllProviderFailures(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Router that returns different providers with different failure modes.
+	router := &mockProviderRouterMultipleFailures{
+		providers: []provider.Provider{
+			&mockProviderChatErrorNamed{name: "provider-alpha"},
+			&mockProviderEmptyStreamNamed{name: "provider-beta"},
+			&mockProviderFirstEventErrorNamed{name: "provider-gamma", errMsg: "rate limit exceeded"},
+		},
+	}
+
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: router,
+		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
+	})
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderAllUnavailable),
+		"expected CodeProviderAllUnavailable, got %s", sigilerr.CodeOf(err))
+
+	// Error message should include all provider names and their failures.
+	errMsg := err.Error()
+	assert.Contains(t, errMsg, "provider-alpha")
+	assert.Contains(t, errMsg, "provider-beta")
+	assert.Contains(t, errMsg, "provider-gamma")
+	assert.Contains(t, errMsg, "rate limit exceeded")
+	assert.Contains(t, errMsg, "all providers failed")
+}
+
 // mockProviderRouterWithAttempts is a router that tracks RouteWithBudget calls
 // and returns a provider that fails on Chat() to trigger retry.
 type mockProviderRouterWithAttempts struct {
@@ -2201,4 +2244,110 @@ func TestNewLoop_ValidatesDependencies(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mockProviderRouterMultipleFailures is a router that returns different providers
+// in sequence, all of which fail in different ways.
+type mockProviderRouterMultipleFailures struct {
+	providers []provider.Provider
+	mu        sync.Mutex
+	callIndex int
+}
+
+func (r *mockProviderRouterMultipleFailures) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return nil, "", assert.AnError
+}
+
+func (r *mockProviderRouterMultipleFailures) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.callIndex >= len(r.providers) {
+		return nil, "", assert.AnError
+	}
+
+	prov := r.providers[r.callIndex]
+	r.callIndex++
+	return prov, "mock-model", nil
+}
+
+func (r *mockProviderRouterMultipleFailures) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+
+func (r *mockProviderRouterMultipleFailures) MaxAttempts() int {
+	return len(r.providers)
+}
+
+func (r *mockProviderRouterMultipleFailures) Close() error {
+	return nil
+}
+
+// mockProviderChatErrorNamed is a provider whose Chat() fails with a named provider.
+type mockProviderChatErrorNamed struct {
+	name string
+}
+
+func (p *mockProviderChatErrorNamed) Name() string                     { return p.name }
+func (p *mockProviderChatErrorNamed) Available(_ context.Context) bool { return true }
+func (p *mockProviderChatErrorNamed) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: p.name}, nil
+}
+
+func (p *mockProviderChatErrorNamed) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderChatErrorNamed) Close() error { return nil }
+
+func (p *mockProviderChatErrorNamed) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	return nil, fmt.Errorf("chat failed")
+}
+
+// mockProviderEmptyStreamNamed is a provider whose Chat() returns a channel that closes immediately.
+type mockProviderEmptyStreamNamed struct {
+	name string
+}
+
+func (p *mockProviderEmptyStreamNamed) Name() string                     { return p.name }
+func (p *mockProviderEmptyStreamNamed) Available(_ context.Context) bool { return true }
+func (p *mockProviderEmptyStreamNamed) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: p.name}, nil
+}
+
+func (p *mockProviderEmptyStreamNamed) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderEmptyStreamNamed) Close() error { return nil }
+
+func (p *mockProviderEmptyStreamNamed) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent)
+	close(ch)
+	return ch, nil
+}
+
+// mockProviderFirstEventErrorNamed is a provider whose first event is an error.
+type mockProviderFirstEventErrorNamed struct {
+	name   string
+	errMsg string
+}
+
+func (p *mockProviderFirstEventErrorNamed) Name() string                     { return p.name }
+func (p *mockProviderFirstEventErrorNamed) Available(_ context.Context) bool { return true }
+func (p *mockProviderFirstEventErrorNamed) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: p.name}, nil
+}
+
+func (p *mockProviderFirstEventErrorNamed) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderFirstEventErrorNamed) Close() error { return nil }
+
+func (p *mockProviderFirstEventErrorNamed) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 1)
+	ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: p.errMsg}
+	close(ch)
+	return ch, nil
 }
