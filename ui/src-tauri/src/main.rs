@@ -385,10 +385,10 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
             // Log PID at Error level before kill attempt to ensure it's available for manual cleanup if kill fails
             error!("Attempting to terminate Sigil gateway process with PID {}", pid);
 
-            // NOTE: We intentionally hold process_lock for the entire shutdown
-            // sequence. The atomic phase prevents new starts, and the lock
-            // prevents any other code from seeing an empty process slot until
-            // we are fully done.
+            // Drop lock immediately after taking the process. The atomic phase
+            // prevents new starts. Holding the lock during graceful shutdown polling
+            // (up to 5 seconds) blocks other concurrent operations.
+            drop(process_lock);
 
             // Phase 1: Attempt graceful shutdown with SIGTERM (Unix only)
             #[cfg(unix)]
