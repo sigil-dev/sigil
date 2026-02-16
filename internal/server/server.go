@@ -225,6 +225,7 @@ func securityHeadersMiddleware(enableHSTS bool) func(http.Handler) http.Handler 
 			w.Header().Set("X-Frame-Options", "DENY")
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("X-XSS-Protection", "0")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'nonce-*'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 			if enableHSTS {
 				w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 			}

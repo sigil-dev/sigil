@@ -194,6 +194,22 @@ func TestServer_HSTSHeader_DisabledByDefault(t *testing.T) {
 	assert.Empty(t, w.Header().Get("Strict-Transport-Security"))
 }
 
+func TestServer_CSPHeader_IsPresent(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	csp := w.Header().Get("Content-Security-Policy")
+	assert.NotEmpty(t, csp)
+	// Verify key directives are present
+	assert.Contains(t, csp, "default-src 'self'")
+	assert.Contains(t, csp, "script-src 'self'")
+	assert.Contains(t, csp, "frame-ancestors 'none'")
+}
+
 func TestServer_RateLimiterBeforeAuth(t *testing.T) {
 	// Create a server with auth enabled and rate limiting enabled.
 	// The rate limiter should block requests BEFORE auth checks them,
