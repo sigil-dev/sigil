@@ -150,13 +150,21 @@ type ToolDispatcher struct {
 }
 
 // NewToolDispatcher creates a ToolDispatcher with the given configuration.
-func NewToolDispatcher(cfg ToolDispatcherConfig) *ToolDispatcher {
+// Returns an error if required fields are nil.
+func NewToolDispatcher(cfg ToolDispatcherConfig) (*ToolDispatcher, error) {
+	if cfg.Enforcer == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Enforcer is required")
+	}
+	if cfg.PluginManager == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "PluginManager is required")
+	}
+
 	return &ToolDispatcher{
 		enforcer:       cfg.Enforcer,
 		pluginManager:  cfg.PluginManager,
 		auditStore:     cfg.AuditStore,
 		defaultTimeout: cfg.DefaultTimeout,
-	}
+	}, nil
 }
 
 // ClearTurn removes the budget entry for the given turn ID, freeing memory.

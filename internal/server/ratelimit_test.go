@@ -306,7 +306,9 @@ func TestRateLimitConfig_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.cfg.Validate()
+			cfg := tt.cfg
+			cfg.ApplyDefaults()
+			err := cfg.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {

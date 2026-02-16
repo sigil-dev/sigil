@@ -35,22 +35,25 @@ type Config struct {
 	Services       *Services       // nil = service-dependent routes fail closed
 }
 
-// Validate checks that the Config is valid and applies defaults.
-func (c *Config) Validate() error {
-	if c.ListenAddr == "" {
-		return sigilerr.New(sigilerr.CodeServerConfigInvalid, "listen address is required")
-	}
-
-	// Apply defaults
+// ApplyDefaults sets default values for zero-valued fields.
+func (c *Config) ApplyDefaults() {
 	if c.ReadTimeout == 0 {
 		c.ReadTimeout = 30 * time.Second
 	}
 	if c.WriteTimeout == 0 {
 		c.WriteTimeout = 60 * time.Second
 	}
+	c.RateLimit.ApplyDefaults()
+}
 
-	// Validate rate limit config (applies defaults as a side effect)
-	if err := (&c.RateLimit).Validate(); err != nil {
+// Validate checks that the Config is valid.
+func (c *Config) Validate() error {
+	if c.ListenAddr == "" {
+		return sigilerr.New(sigilerr.CodeServerConfigInvalid, "listen address is required")
+	}
+
+	// Validate rate limit config
+	if err := c.RateLimit.Validate(); err != nil {
 		return err
 	}
 
@@ -91,7 +94,8 @@ type Server struct {
 // New creates a Server with chi router, huma API, health endpoint, and CORS.
 // StreamHandler and Services can be nil and set later, but routes requiring them will fail closed.
 func New(cfg Config) (*Server, error) {
-	// Validate config (applies defaults as a side effect)
+	// Apply defaults and validate config
+	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -261,8 +265,10 @@ func securityHeadersMiddleware(enableHSTS bool) func(http.Handler) http.Handler 
 			w.Header().Set("X-Frame-Options", "DENY")
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("X-XSS-Protection", "0")
-			// CSP nonce support requires per-request nonce generation and template integration.
-			// Currently using 'unsafe-inline' for styles until nonce infrastructure is implemented.
+			// CSP uses 'unsafe-inline' for style-src because nonce-based CSP requires
+			// per-request nonce generation and template integration (not yet implemented).
+			// This weakens XSS protection for inline styles. Remove 'unsafe-inline'
+			// from style-src once nonce infrastructure is added.
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 			if enableHSTS {
 				w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")

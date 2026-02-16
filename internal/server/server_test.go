@@ -390,6 +390,7 @@ func TestConfig_Validate(t *testing.T) {
 			hadDefaultReadTimeout := cfg.ReadTimeout == 0
 			hadDefaultWriteTimeout := cfg.WriteTimeout == 0
 
+			cfg.ApplyDefaults()
 			err := cfg.Validate()
 			if tt.wantErr {
 				require.Error(t, err)
@@ -416,6 +417,7 @@ func TestConfig_Validate_AppliesDefaults(t *testing.T) {
 		// No timeouts specified
 	}
 
+	cfg.ApplyDefaults()
 	err := cfg.Validate()
 	require.NoError(t, err)
 	assert.Equal(t, 30*time.Second, cfg.ReadTimeout, "ReadTimeout should have default")

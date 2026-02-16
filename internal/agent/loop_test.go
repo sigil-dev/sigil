@@ -822,12 +822,13 @@ func TestAgentLoop_ToolCallDispatch(t *testing.T) {
 	enforcer := security.NewEnforcer(nil)
 	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
-	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
 		PluginManager:  newMockPluginManagerWithResult("sunny, 22C"),
 		AuditStore:     newMockAuditStore(),
 		DefaultTimeout: 5 * time.Second,
 	})
+	require.NoError(t, err)
 
 	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
@@ -880,12 +881,13 @@ func TestAgentLoop_ToolCallDenied(t *testing.T) {
 	enforcer := security.NewEnforcer(nil)
 	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet(), security.NewCapabilitySet())
 
-	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
 		PluginManager:  newMockPluginManager(),
 		AuditStore:     newMockAuditStore(),
 		DefaultTimeout: 5 * time.Second,
 	})
+	require.NoError(t, err)
 
 	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
@@ -1126,12 +1128,13 @@ func TestAgentLoop_UsageAccountedInToolLoop(t *testing.T) {
 	enforcer := security.NewEnforcer(nil)
 	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
-	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
 		PluginManager:  newMockPluginManagerWithResult("sunny"),
 		AuditStore:     newMockAuditStore(),
 		DefaultTimeout: 5 * time.Second,
 	})
+	require.NoError(t, err)
 
 	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
@@ -1518,12 +1521,13 @@ func TestAgentLoop_ToolLoopIterationCapEnforced(t *testing.T) {
 	enforcer := security.NewEnforcer(nil)
 	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
-	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
 		PluginManager:  newMockPluginManagerWithResult("result"),
 		AuditStore:     newMockAuditStore(),
 		DefaultTimeout: 5 * time.Second,
 	})
+	require.NoError(t, err)
 
 	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
@@ -1574,12 +1578,13 @@ func TestAgentLoop_ToolRuntimeFailureRecovery(t *testing.T) {
 	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
 	// Plugin executor that returns an error simulating a tool crash/timeout.
-	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
 		PluginManager:  newMockPluginManagerWithError(sigilerr.New(sigilerr.CodePluginRuntimeCallFailure, "tool crashed")),
 		AuditStore:     newMockAuditStore(),
 		DefaultTimeout: 5 * time.Second,
 	})
+	require.NoError(t, err)
 
 	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
@@ -1691,12 +1696,13 @@ func TestAgentLoop_BudgetCumulativeAcrossMultipleToolIterations(t *testing.T) {
 	enforcer := security.NewEnforcer(nil)
 	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
 
-	dispatcher := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
 		Enforcer:       enforcer,
 		PluginManager:  newMockPluginManagerWithResult("ok"),
 		AuditStore:     newMockAuditStore(),
 		DefaultTimeout: 5 * time.Second,
 	})
+	require.NoError(t, err)
 
 	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,

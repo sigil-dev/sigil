@@ -26,7 +26,14 @@ type RateLimitConfig struct {
 	MaxVisitors int
 }
 
-// Validate checks that the RateLimitConfig is valid and applies defaults.
+// ApplyDefaults sets default values for zero-valued fields.
+func (c *RateLimitConfig) ApplyDefaults() {
+	if c.MaxVisitors == 0 {
+		c.MaxVisitors = 10000
+	}
+}
+
+// Validate checks that the RateLimitConfig is valid.
 func (c *RateLimitConfig) Validate() error {
 	if c.RequestsPerSecond > 0 && c.Burst <= 0 {
 		return sigilerr.Errorf(sigilerr.CodeServerConfigInvalid,
@@ -42,10 +49,6 @@ func (c *RateLimitConfig) Validate() error {
 		return sigilerr.Errorf(sigilerr.CodeServerConfigInvalid,
 			"rate limit max visitors must not be negative (got %d)",
 			c.MaxVisitors)
-	}
-	// Apply default MaxVisitors if not set
-	if c.MaxVisitors == 0 {
-		c.MaxVisitors = 10000
 	}
 	return nil
 }

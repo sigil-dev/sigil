@@ -142,8 +142,9 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 			RequestsPerSecond: cfg.Networking.RateLimitRPS,
 			Burst:             cfg.Networking.RateLimitBurst,
 		},
-		// Stub stream handler so chat endpoints return a helpful message instead of 503.
-		// Will be replaced by real agent loop.
+		// Provide stub stream handler so chat endpoints work during initial startup
+		// (before real agent loop integration). Prevents 503 errors that would occur
+		// with nil StreamHandler.
 		StreamHandler: &stubStreamHandler{},
 		Services:      services,
 	})
@@ -386,7 +387,8 @@ type userServiceAdapter struct {
 	store store.UserStore
 }
 
-// stubStreamHandler returns a placeholder message until a real agent loop is wired.
+// stubStreamHandler implements StreamHandler by returning a placeholder message.
+// Used during initial startup until the real agent loop is integrated.
 type stubStreamHandler struct{}
 
 func (h *stubStreamHandler) HandleStream(_ context.Context, _ server.ChatStreamRequest, events chan<- server.SSEEvent) {
