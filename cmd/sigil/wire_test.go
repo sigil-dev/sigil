@@ -261,10 +261,11 @@ func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
 
 // Test constant-time token comparison prevents timing attacks
 func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
-	validator := newConfigTokenValidator([]config.TokenConfig{
+	validator, err := newConfigTokenValidator([]config.TokenConfig{
 		{Token: "valid-token-123", UserID: "user-1", Name: "Test User", Permissions: []string{"*"}},
 		{Token: "another-valid-token", UserID: "user-2", Name: "Another User", Permissions: []string{"read.*"}},
 	})
+	require.NoError(t, err)
 
 	tests := []struct {
 		name     string
@@ -324,11 +325,12 @@ func TestConfigTokenValidator_ConstantTimeComparison(t *testing.T) {
 // Test that ValidateToken uses constant-time comparison by verifying it checks ALL tokens
 func TestConfigTokenValidator_ChecksAllTokens(t *testing.T) {
 	// Create validator with multiple tokens to ensure all are checked
-	validator := newConfigTokenValidator([]config.TokenConfig{
+	validator, err := newConfigTokenValidator([]config.TokenConfig{
 		{Token: "token-1", UserID: "user-1", Name: "User 1", Permissions: []string{"*"}},
 		{Token: "token-2", UserID: "user-2", Name: "User 2", Permissions: []string{"*"}},
 		{Token: "token-3", UserID: "user-3", Name: "User 3", Permissions: []string{"*"}},
 	})
+	require.NoError(t, err)
 
 	// All tokens should be validated successfully
 	for i := 1; i <= 3; i++ {
@@ -339,6 +341,17 @@ func TestConfigTokenValidator_ChecksAllTokens(t *testing.T) {
 		require.NotNil(t, user)
 		assert.Equal(t, userID, user.ID())
 	}
+}
+
+// Test that newConfigTokenValidator returns error when all tokens fail validation.
+func TestConfigTokenValidator_AllTokensInvalid_ReturnsError(t *testing.T) {
+	// All tokens have empty UserID which fails NewAuthenticatedUser validation.
+	_, err := newConfigTokenValidator([]config.TokenConfig{
+		{Token: "token-1", UserID: "", Name: "User 1", Permissions: []string{"*"}},
+		{Token: "token-2", UserID: "", Name: "User 2", Permissions: []string{"*"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "all configured auth tokens failed validation")
 }
 
 // Test Gateway.Close does not panic during shutdown

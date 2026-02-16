@@ -45,6 +45,10 @@ func (s *stubWorkspaceService) List(_ context.Context) ([]server.WorkspaceSummar
 	return nil, nil
 }
 
+func (s *stubWorkspaceService) ListForUser(_ context.Context, _ string) ([]server.WorkspaceSummary, error) {
+	return nil, nil
+}
+
 func (s *stubWorkspaceService) Get(ctx context.Context, id string) (*server.WorkspaceDetail, error) {
 	return s.getFunc(ctx, id)
 }

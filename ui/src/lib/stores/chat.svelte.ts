@@ -235,9 +235,16 @@ export class ChatStore {
         }
         return;
       }
-      logger.error("SSE stream error", { error: err });
-      const classified = classifyError(err);
-      this.error = classified.message;
+      // Separate fetch errors (TypeError for network failure) from SSE stream errors.
+      const errorType = err instanceof Error ? err.constructor.name : typeof err;
+      if (err instanceof TypeError) {
+        logger.error("Fetch network error", { errorType, error: err });
+        this.error = "Network error — could not reach the gateway";
+      } else {
+        logger.error("SSE stream error", { errorType, error: err });
+        const classified = classifyError(err);
+        this.error = classified.message;
+      }
       // Only remove message if no content was streamed yet
       const msg = this.messages.find((m) => m.id === assistantMessage.id);
       if (!msg?.content) {

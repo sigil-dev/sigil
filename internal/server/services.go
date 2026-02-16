@@ -88,6 +88,9 @@ func (s *Services) Users() UserService {
 // WorkspaceService provides workspace operations for REST handlers.
 type WorkspaceService interface {
 	List(ctx context.Context) ([]WorkspaceSummary, error)
+	// ListForUser returns only workspaces the given user is a member of.
+	// Avoids the N+1 Get calls that List+filter would require.
+	ListForUser(ctx context.Context, userID string) ([]WorkspaceSummary, error)
 	Get(ctx context.Context, id string) (*WorkspaceDetail, error)
 }
 

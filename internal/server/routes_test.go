@@ -32,6 +32,27 @@ func (m *mockWorkspaceService) List(_ context.Context) ([]server.WorkspaceSummar
 	}, nil
 }
 
+func (m *mockWorkspaceService) ListForUser(ctx context.Context, userID string) ([]server.WorkspaceSummary, error) {
+	all, err := m.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []server.WorkspaceSummary
+	for _, ws := range all {
+		detail, err := m.Get(ctx, ws.ID)
+		if err != nil {
+			continue
+		}
+		for _, member := range detail.Members {
+			if member == userID {
+				out = append(out, ws)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (m *mockWorkspaceService) Get(_ context.Context, id string) (*server.WorkspaceDetail, error) {
 	switch id {
 	case "homelab":

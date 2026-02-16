@@ -198,31 +198,18 @@ func notFoundOr500(err error, notFoundMsg, context string) error {
 }
 
 func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWorkspacesOutput, error) {
-	ws, err := s.services.Workspaces().List(ctx)
+	// When auth is enabled, use ListForUser to avoid N+1 Get calls.
+	user := UserFromContext(ctx)
+	var ws []WorkspaceSummary
+	var err error
+	if user != nil {
+		ws, err = s.services.Workspaces().ListForUser(ctx, user.ID())
+	} else {
+		ws, err = s.services.Workspaces().List(ctx)
+	}
 	if err != nil {
 		slog.Error("internal error", "context", "listing workspaces", "error", err)
 		return nil, huma.Error500InternalServerError("internal server error")
-	}
-
-	// When auth is enabled, filter workspaces to only those the user is a member of.
-	user := UserFromContext(ctx)
-	if user != nil {
-		filtered := make([]WorkspaceSummary, 0, len(ws))
-		for _, w := range ws {
-			// Fetch full workspace detail to check membership.
-			detail, detailErr := s.services.Workspaces().Get(ctx, w.ID)
-			if detailErr != nil {
-				slog.Warn("skipping workspace during membership filter", "workspace_id", w.ID, "error", detailErr)
-				continue
-			}
-			for _, member := range detail.Members {
-				if member == user.ID() {
-					filtered = append(filtered, w)
-					break
-				}
-			}
-		}
-		ws = filtered
 	}
 
 	out := &listWorkspacesOutput{}

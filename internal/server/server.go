@@ -59,6 +59,14 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
+	// Reject CORS wildcard with credentials — reflects any Origin, enabling cross-origin credential theft.
+	for _, origin := range cfg.CORSOrigins {
+		if origin == "*" {
+			return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid,
+				`CORS origin "*" cannot be used with credentials; specify explicit origins`)
+		}
+	}
+
 	// Parse and validate trusted proxy CIDRs when behind a proxy
 	var trustedNets []*net.IPNet
 	if cfg.BehindProxy {

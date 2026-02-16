@@ -18,6 +18,9 @@ import (
 type stubWorkspaceService struct{}
 
 func (s *stubWorkspaceService) List(context.Context) ([]WorkspaceSummary, error) { return nil, nil }
+func (s *stubWorkspaceService) ListForUser(context.Context, string) ([]WorkspaceSummary, error) {
+	return nil, nil
+}
 func (s *stubWorkspaceService) Get(context.Context, string) (*WorkspaceDetail, error) {
 	return nil, nil
 }

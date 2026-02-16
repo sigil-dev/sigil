@@ -153,6 +153,16 @@ func TestServer_CORSOrigins_DefaultsToLocalhost(t *testing.T) {
 	assert.Equal(t, "http://localhost:5173", w.Header().Get("Access-Control-Allow-Origin"))
 }
 
+func TestServer_CORSOrigins_WildcardRejected(t *testing.T) {
+	_, err := server.New(server.Config{
+		ListenAddr:  "127.0.0.1:0",
+		CORSOrigins: []string{"*"},
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerConfigInvalid))
+	assert.Contains(t, err.Error(), "CORS origin")
+}
+
 func TestServer_HSTSHeader_WhenEnabled(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr: "127.0.0.1:0",

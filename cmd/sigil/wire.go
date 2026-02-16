@@ -94,7 +94,12 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	// 6. HTTP server.
 	var tokenValidator server.TokenValidator
 	if len(cfg.Auth.Tokens) > 0 {
-		tokenValidator = newConfigTokenValidator(cfg.Auth.Tokens)
+		var tvErr error
+		tokenValidator, tvErr = newConfigTokenValidator(cfg.Auth.Tokens)
+		if tvErr != nil {
+			_ = gs.Close()
+			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "configuring auth tokens: %w", tvErr)
+		}
 	} else {
 		slog.Warn("authentication disabled: no API tokens configured — all endpoints are unauthenticated")
 	}
@@ -246,6 +251,26 @@ func (a *workspaceServiceAdapter) List(_ context.Context) ([]server.WorkspaceSum
 	return out, nil
 }
 
+func (a *workspaceServiceAdapter) ListForUser(_ context.Context, userID string) ([]server.WorkspaceSummary, error) {
+	if a.cfg.Workspaces == nil {
+		return []server.WorkspaceSummary{}, nil
+	}
+	out := make([]server.WorkspaceSummary, 0, len(a.cfg.Workspaces))
+	for id, ws := range a.cfg.Workspaces {
+		for _, member := range ws.Members {
+			if member == userID {
+				out = append(out, server.WorkspaceSummary{
+					ID:          id,
+					Description: ws.Description,
+				})
+				break
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 func (a *workspaceServiceAdapter) Get(_ context.Context, id string) (*server.WorkspaceDetail, error) {
 	if a.cfg.Workspaces == nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "workspace %q not found", id)
@@ -361,7 +386,7 @@ type configTokenValidator struct {
 	tokens map[[32]byte]*server.AuthenticatedUser
 }
 
-func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator {
+func newConfigTokenValidator(tokens []config.TokenConfig) (*configTokenValidator, error) {
 	m := make(map[[32]byte]*server.AuthenticatedUser, len(tokens))
 	for _, tc := range tokens {
 		user, err := server.NewAuthenticatedUser(tc.UserID, tc.Name, tc.Permissions)
@@ -373,9 +398,10 @@ func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator 
 		m[hash] = user
 	}
 	if len(tokens) > 0 && len(m) == 0 {
-		slog.Error("no valid auth tokens configured — all tokens failed validation")
+		return nil, sigilerr.New(sigilerr.CodeCLISetupFailure,
+			"all configured auth tokens failed validation — gateway would be unusable")
 	}
-	return &configTokenValidator{tokens: m}
+	return &configTokenValidator{tokens: m}, nil
 }
 
 func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {

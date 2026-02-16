@@ -296,15 +296,8 @@ fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
             Ok(false)
         }
         Err(ureq::Error::Transport(transport_err)) => {
-            // Connection failed - gateway not running
-            // R18#5: Log full transport error context before returning Ok(false)
-            eprintln!(
-                "Health check transport error at {}: {} ({})",
-                health_url,
-                transport_err,
-                transport_err.kind()
-            );
-            Ok(false)
+            // Connection failed — return Err to distinguish "unreachable" from "unhealthy".
+            Err(Box::new(transport_err) as Box<dyn std::error::Error>)
         }
     }
 }

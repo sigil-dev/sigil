@@ -59,16 +59,14 @@ type mockPairingStore struct {
 }
 
 func (m *mockPairingStore) Create(_ context.Context, p *store.Pairing) error {
+	// Wait for delay signal before acquiring lock to avoid unlock-block-relock antipattern.
+	// This increases the window for TOCTOU races in concurrent tests.
+	if m.createDelay != nil {
+		<-m.createDelay
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// If createDelay is set, wait for signal before completing create
-	// This increases the window for TOCTOU races in concurrent tests
-	if m.createDelay != nil {
-		m.mu.Unlock()
-		<-m.createDelay
-		m.mu.Lock()
-	}
 
 	m.created = append(m.created, p)
 	return nil
