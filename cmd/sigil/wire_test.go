@@ -719,6 +719,93 @@ func TestConfigTokenValidator_AllTokensInvalidConfig_ReturnsError(t *testing.T) 
 	assert.Contains(t, err.Error(), "all configured auth tokens failed validation")
 }
 
+// Test Gateway.Validate catches nil fields
+func TestGateway_ValidateRequiredFields(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+
+	// Get a properly initialized gateway first
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	// Validate should pass on properly initialized gateway
+	err = gw.Validate()
+	assert.NoError(t, err, "validate should pass for properly initialized gateway")
+
+	// Test each required field individually
+	tests := []struct {
+		name      string
+		mutate    func(*Gateway)
+		expectErr string
+	}{
+		{
+			name:      "nil server",
+			mutate:    func(g *Gateway) { g.Server = nil },
+			expectErr: "gateway server is nil",
+		},
+		{
+			name:      "nil gateway store",
+			mutate:    func(g *Gateway) { g.GatewayStore = nil },
+			expectErr: "gateway store is nil",
+		},
+		{
+			name:      "nil plugin manager",
+			mutate:    func(g *Gateway) { g.PluginManager = nil },
+			expectErr: "plugin manager is nil",
+		},
+		{
+			name:      "nil provider registry",
+			mutate:    func(g *Gateway) { g.ProviderRegistry = nil },
+			expectErr: "provider registry is nil",
+		},
+		{
+			name:      "nil workspace manager",
+			mutate:    func(g *Gateway) { g.WorkspaceManager = nil },
+			expectErr: "workspace manager is nil",
+		},
+		{
+			name:      "nil enforcer",
+			mutate:    func(g *Gateway) { g.Enforcer = nil },
+			expectErr: "enforcer is nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a fresh gateway for each test
+			gwTest, err := WireGateway(context.Background(), cfg, dir)
+			require.NoError(t, err)
+			defer func() { _ = gwTest.Close() }()
+
+			// Mutate the field
+			tt.mutate(gwTest)
+
+			// Validate should fail
+			err = gwTest.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectErr)
+		})
+	}
+}
+
+// Test Gateway.Close calls Validate and fails fast on invalid gateway
+func TestGateway_CloseValidatesFields(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+
+	// Simulate incomplete initialization by nil'ing a field
+	gw.Server = nil
+
+	// Close should fail fast with validation error
+	err = gw.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gateway server is nil")
+}
+
 // stubProvider is a minimal Provider implementation for negative test cases.
 type stubProvider struct {
 	name string

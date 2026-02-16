@@ -35,6 +35,48 @@ type Config struct {
 	Services       *Services       // nil = service-dependent routes fail closed
 }
 
+// Validate checks that the Config is valid and applies defaults.
+func (c *Config) Validate() error {
+	if c.ListenAddr == "" {
+		return sigilerr.New(sigilerr.CodeServerConfigInvalid, "listen address is required")
+	}
+
+	// Apply defaults
+	if c.ReadTimeout == 0 {
+		c.ReadTimeout = 30 * time.Second
+	}
+	if c.WriteTimeout == 0 {
+		c.WriteTimeout = 60 * time.Second
+	}
+
+	// Validate rate limit config (applies defaults as a side effect)
+	if err := (&c.RateLimit).Validate(); err != nil {
+		return err
+	}
+
+	// Reject CORS wildcard with credentials — reflects any Origin, enabling cross-origin credential theft.
+	for _, origin := range c.CORSOrigins {
+		if origin == "*" {
+			return sigilerr.New(sigilerr.CodeServerConfigInvalid,
+				`CORS origin "*" cannot be used with credentials; specify explicit origins`)
+		}
+	}
+
+	// Validate trusted proxy CIDRs when behind a proxy
+	if c.BehindProxy {
+		if len(c.TrustedProxies) == 0 {
+			return sigilerr.New(sigilerr.CodeServerConfigInvalid,
+				"trusted_proxies must be configured when behind_proxy is true")
+		}
+		// Parse to validate CIDRs
+		if _, err := parseTrustedProxies(c.TrustedProxies); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Server wraps a chi router with huma API and HTTP server.
 type Server struct {
 	router        chi.Router
@@ -49,36 +91,14 @@ type Server struct {
 // New creates a Server with chi router, huma API, health endpoint, and CORS.
 // StreamHandler and Services can be nil and set later, but routes requiring them will fail closed.
 func New(cfg Config) (*Server, error) {
-	if cfg.ListenAddr == "" {
-		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "listen address is required")
-	}
-	if cfg.ReadTimeout == 0 {
-		cfg.ReadTimeout = 30 * time.Second
-	}
-	if cfg.WriteTimeout == 0 {
-		cfg.WriteTimeout = 60 * time.Second
-	}
-
-	// Validate rate limit config (applies defaults as a side effect)
-	if err := (&cfg.RateLimit).Validate(); err != nil {
+	// Validate config (applies defaults as a side effect)
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	// Reject CORS wildcard with credentials — reflects any Origin, enabling cross-origin credential theft.
-	for _, origin := range cfg.CORSOrigins {
-		if origin == "*" {
-			return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid,
-				`CORS origin "*" cannot be used with credentials; specify explicit origins`)
-		}
-	}
-
-	// Parse and validate trusted proxy CIDRs when behind a proxy
+	// Parse trusted proxy CIDRs if behind a proxy
 	var trustedNets []*net.IPNet
 	if cfg.BehindProxy {
-		if len(cfg.TrustedProxies) == 0 {
-			return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid,
-				"trusted_proxies must be configured when behind_proxy is true")
-		}
 		var err error
 		trustedNets, err = parseTrustedProxies(cfg.TrustedProxies)
 		if err != nil {

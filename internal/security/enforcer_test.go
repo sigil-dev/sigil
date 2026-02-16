@@ -632,13 +632,35 @@ func TestCheckRequest_Validate(t *testing.T) {
 			req:     security.CheckRequest{Plugin: "", Capability: ""},
 			wantErr: true,
 		},
+		{
+			name:    "valid glob pattern with wildcard",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "sessions.*"},
+			wantErr: false,
+		},
+		{
+			name:    "valid glob pattern with question mark",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "exec.?un"},
+			wantErr: false,
+		},
+		{
+			name:    "invalid glob pattern with unclosed bracket",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "exec.[run"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid glob pattern with unmatched bracket",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "tool:[abc"},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.req.Validate()
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityInvalidInput),
+					"expected CodeSecurityInvalidInput, got: %v", sigilerr.CodeOf(err))
 			} else {
 				assert.NoError(t, err)
 			}

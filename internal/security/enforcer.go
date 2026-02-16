@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,13 +30,16 @@ type CheckRequest struct {
 	UserPermissions CapabilitySet
 }
 
-// Validate checks that required fields are non-empty.
+// Validate checks that required fields are non-empty and that Capability is a valid glob pattern.
 func (r CheckRequest) Validate() error {
 	if r.Plugin == "" {
 		return sigilerr.New(sigilerr.CodeSecurityInvalidInput, "CheckRequest: Plugin must not be empty")
 	}
 	if r.Capability == "" {
 		return sigilerr.New(sigilerr.CodeSecurityInvalidInput, "CheckRequest: Capability must not be empty")
+	}
+	if _, err := filepath.Match(r.Capability, ""); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeSecurityInvalidInput, "CheckRequest: Capability contains invalid glob pattern: %w", err)
 	}
 	return nil
 }

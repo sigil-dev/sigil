@@ -167,8 +167,36 @@ func (gw *Gateway) Start(ctx context.Context) error {
 	return gw.Server.Start(ctx)
 }
 
+// Validate checks that all required Gateway fields are non-nil.
+// This method ensures the Gateway was properly initialized by WireGateway.
+func (gw *Gateway) Validate() error {
+	if gw.Server == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "gateway server is nil")
+	}
+	if gw.GatewayStore == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "gateway store is nil")
+	}
+	if gw.PluginManager == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "plugin manager is nil")
+	}
+	if gw.ProviderRegistry == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "provider registry is nil")
+	}
+	if gw.WorkspaceManager == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "workspace manager is nil")
+	}
+	if gw.Enforcer == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "enforcer is nil")
+	}
+	return nil
+}
+
 // Close releases all resources held by the gateway.
 func (gw *Gateway) Close() error {
+	if err := gw.Validate(); err != nil {
+		return err
+	}
+
 	type closer interface{ Close() error }
 	closers := []closer{gw.Server, gw.ProviderRegistry, gw.WorkspaceManager, gw.GatewayStore}
 

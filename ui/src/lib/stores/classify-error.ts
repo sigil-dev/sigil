@@ -2,29 +2,29 @@
 // Copyright 2026 Sigil Contributors
 
 /** Classified error for user-facing display */
-export interface ClassifiedError {
-  message: string;
-  isNetwork: boolean;
-  httpStatus?: number;
-}
+export type ClassifiedError =
+  | { kind: "network"; message: string }
+  | { kind: "http"; message: string; status: number | undefined }
+  | { kind: "client"; message: string }
+  | { kind: "unknown"; message: string };
 
 /** Classify a caught error into a user-facing message */
 export function classifyError(error: unknown): ClassifiedError {
   if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
-    return { message: "Network error — cannot reach gateway", isNetwork: true };
+    return { kind: "network", message: "Network error — cannot reach gateway" };
   }
   if (error instanceof TypeError) {
-    return { message: `Client error: ${error.message}`, isNetwork: false };
+    return { kind: "client", message: `Client error: ${error.message}` };
   }
   if (error instanceof Response || (error && typeof error === "object" && "status" in error)) {
     const status = (error as { status?: number }).status;
-    return { message: `Gateway error (HTTP ${status ?? "unknown"})`, isNetwork: false, httpStatus: status };
+    return { kind: "http", message: `Gateway error (HTTP ${status ?? "unknown"})`, status };
   }
   if (error instanceof DOMException && error.name === "TimeoutError") {
-    return { message: "Request timed out — the gateway took too long to respond", isNetwork: false };
+    return { kind: "client", message: "Request timed out — the gateway took too long to respond" };
   }
   if (error instanceof Error) {
-    return { message: error.message, isNetwork: false };
+    return { kind: "unknown", message: error.message };
   }
   let message: string;
   if (typeof error === "string") {
@@ -34,5 +34,5 @@ export function classifyError(error: unknown): ClassifiedError {
   } else {
     message = "An unexpected error occurred";
   }
-  return { message, isNetwork: false };
+  return { kind: "unknown", message };
 }

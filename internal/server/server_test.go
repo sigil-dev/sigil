@@ -286,3 +286,138 @@ func TestServer_BehindProxy_InvalidCIDR(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid trusted proxy CIDR")
 }
+
+func TestConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     server.Config
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid minimal config",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid config with all fields",
+			cfg: server.Config{
+				ListenAddr:  "127.0.0.1:8080",
+				CORSOrigins: []string{"https://example.com"},
+				ReadTimeout: 10 * time.Second,
+				WriteTimeout: 20 * time.Second,
+				EnableHSTS:  true,
+				RateLimit: server.RateLimitConfig{
+					RequestsPerSecond: 10,
+					Burst:             5,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty listen address",
+			cfg: server.Config{
+				ListenAddr: "",
+			},
+			wantErr: true,
+			errMsg:  "listen address is required",
+		},
+		{
+			name: "CORS wildcard rejected",
+			cfg: server.Config{
+				ListenAddr:  "127.0.0.1:8080",
+				CORSOrigins: []string{"*"},
+			},
+			wantErr: true,
+			errMsg:  "CORS origin",
+		},
+		{
+			name: "behind proxy without trusted proxies",
+			cfg: server.Config{
+				ListenAddr:  "127.0.0.1:8080",
+				BehindProxy: true,
+			},
+			wantErr: true,
+			errMsg:  "trusted_proxies must be configured",
+		},
+		{
+			name: "behind proxy with trusted proxies",
+			cfg: server.Config{
+				ListenAddr:     "127.0.0.1:8080",
+				BehindProxy:    true,
+				TrustedProxies: []string{"10.0.0.0/8"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid trusted proxy CIDR",
+			cfg: server.Config{
+				ListenAddr:     "127.0.0.1:8080",
+				BehindProxy:    true,
+				TrustedProxies: []string{"not-a-cidr"},
+			},
+			wantErr: true,
+			errMsg:  "invalid trusted proxy CIDR",
+		},
+		{
+			name: "invalid rate limit config",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+				RateLimit: server.RateLimitConfig{
+					RequestsPerSecond: 10,
+					Burst:             0, // invalid: burst must be positive when rate is set
+				},
+			},
+			wantErr: true,
+			errMsg:  "burst must be positive",
+		},
+		{
+			name: "applies default timeouts",
+			cfg: server.Config{
+				ListenAddr: "127.0.0.1:8080",
+				// ReadTimeout and WriteTimeout not set
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Make a copy to avoid modifying the test case
+			cfg := tt.cfg
+			hadDefaultReadTimeout := cfg.ReadTimeout == 0
+			hadDefaultWriteTimeout := cfg.WriteTimeout == 0
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				// Verify defaults are applied
+				if hadDefaultReadTimeout {
+					assert.Equal(t, 30*time.Second, cfg.ReadTimeout, "ReadTimeout should have default applied")
+				}
+				if hadDefaultWriteTimeout {
+					assert.Equal(t, 60*time.Second, cfg.WriteTimeout, "WriteTimeout should have default applied")
+				}
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_AppliesDefaults(t *testing.T) {
+	cfg := server.Config{
+		ListenAddr: "127.0.0.1:8080",
+		// No timeouts specified
+	}
+
+	err := cfg.Validate()
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Second, cfg.ReadTimeout, "ReadTimeout should have default")
+	assert.Equal(t, 60*time.Second, cfg.WriteTimeout, "WriteTimeout should have default")
+}

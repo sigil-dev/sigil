@@ -9,8 +9,8 @@ describe("classifyError", () => {
     const error = new TypeError("fetch failed");
     const result = classifyError(error);
     expect(result).toEqual({
+      kind: "network",
       message: "Network error — cannot reach gateway",
-      isNetwork: true,
     });
   });
 
@@ -18,8 +18,8 @@ describe("classifyError", () => {
     const error = new TypeError("Network request failed");
     const result = classifyError(error);
     expect(result).toEqual({
+      kind: "network",
       message: "Network error — cannot reach gateway",
-      isNetwork: true,
     });
   });
 
@@ -27,8 +27,8 @@ describe("classifyError", () => {
     const error = new TypeError("Something else went wrong");
     const result = classifyError(error);
     expect(result).toEqual({
+      kind: "client",
       message: "Client error: Something else went wrong",
-      isNetwork: false,
     });
   });
 
@@ -36,9 +36,9 @@ describe("classifyError", () => {
     const response = new Response(null, { status: 500 });
     const result = classifyError(response);
     expect(result).toEqual({
+      kind: "http",
       message: "Gateway error (HTTP 500)",
-      isNetwork: false,
-      httpStatus: 500,
+      status: 500,
     });
   });
 
@@ -46,9 +46,9 @@ describe("classifyError", () => {
     const error = { status: 404 };
     const result = classifyError(error);
     expect(result).toEqual({
+      kind: "http",
       message: "Gateway error (HTTP 404)",
-      isNetwork: false,
-      httpStatus: 404,
+      status: 404,
     });
   });
 
@@ -56,9 +56,9 @@ describe("classifyError", () => {
     const error = { status: undefined };
     const result = classifyError(error);
     expect(result).toEqual({
+      kind: "http",
       message: "Gateway error (HTTP unknown)",
-      isNetwork: false,
-      httpStatus: undefined,
+      status: undefined,
     });
   });
 
@@ -66,8 +66,8 @@ describe("classifyError", () => {
     const error = new DOMException("The operation timed out", "TimeoutError");
     const result = classifyError(error);
     expect(result).toEqual({
+      kind: "client",
       message: "Request timed out — the gateway took too long to respond",
-      isNetwork: false,
     });
   });
 
@@ -75,8 +75,8 @@ describe("classifyError", () => {
     const error = new Error("Custom error message");
     const result = classifyError(error);
     expect(result).toEqual({
+      kind: "unknown",
       message: "Custom error message",
-      isNetwork: false,
     });
   });
 
@@ -84,24 +84,24 @@ describe("classifyError", () => {
     const error = "just a string";
     const result = classifyError(error);
     expect(result).toEqual({
+      kind: "unknown",
       message: "just a string",
-      isNetwork: false,
     });
   });
 
   it("classifies null as unexpected error", () => {
     const result = classifyError(null);
     expect(result).toEqual({
+      kind: "unknown",
       message: "An unexpected error occurred",
-      isNetwork: false,
     });
   });
 
   it("classifies number as unexpected error", () => {
     const result = classifyError(42);
     expect(result).toEqual({
+      kind: "unknown",
       message: "An unexpected error occurred",
-      isNetwork: false,
     });
   });
 });
