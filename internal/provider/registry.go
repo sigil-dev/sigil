@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -209,7 +210,7 @@ func (r *Registry) RouteWithBudget(ctx context.Context, workspaceID, modelName s
 	if budget != nil && budget.MaxSessionTokens() > 0 && budget.UsedSessionTokens() >= budget.MaxSessionTokens() {
 		return nil, "", sigilerr.New(
 			sigilerr.CodeProviderBudgetExceeded,
-			"budget exceeded: used "+itoa(budget.UsedSessionTokens())+" of "+itoa(budget.MaxSessionTokens())+" tokens",
+			"budget exceeded: used "+strconv.Itoa(budget.UsedSessionTokens())+" of "+strconv.Itoa(budget.MaxSessionTokens())+" tokens",
 		)
 	}
 
@@ -351,24 +352,4 @@ func parseRef(ref string) (providerName, model string) {
 // formatUSD formats a float64 as a two-decimal USD string (e.g. "5.00").
 func formatUSD(v float64) string {
 	return fmt.Sprintf("%.2f", v)
-}
-
-// itoa converts an int to a string without importing strconv.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	if n < 0 {
-		return "-" + itoa(-n)
-	}
-	digits := make([]byte, 0, 10)
-	for n > 0 {
-		digits = append(digits, byte('0'+n%10))
-		n /= 10
-	}
-	// Reverse.
-	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
-		digits[i], digits[j] = digits[j], digits[i]
-	}
-	return string(digits)
 }
