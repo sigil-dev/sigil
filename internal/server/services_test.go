@@ -116,10 +116,10 @@ func TestNewServices(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, svc)
-				assert.Equal(t, tt.ws, svc.Workspaces)
-				assert.Equal(t, tt.plugins, svc.Plugins)
-				assert.Equal(t, tt.sessions, svc.Sessions)
-				assert.Equal(t, tt.users, svc.Users)
+				assert.Equal(t, tt.ws, svc.Workspaces())
+				assert.Equal(t, tt.plugins, svc.Plugins())
+				assert.Equal(t, tt.sessions, svc.Sessions())
+				assert.Equal(t, tt.users, svc.Users())
 			}
 		})
 	}

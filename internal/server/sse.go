@@ -73,11 +73,11 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 		// Auth enabled but no workspace specified — reject.
 		return huma.Error422UnprocessableEntity("workspace_id is required")
 	}
-	if s.services == nil || s.services.Workspaces == nil {
+	if s.services == nil || s.services.Workspaces() == nil {
 		// Services not registered — fail closed.
 		return huma.Error503ServiceUnavailable("workspace service not available")
 	}
-	ws, err := s.services.Workspaces.Get(ctx, workspaceID)
+	ws, err := s.services.Workspaces().Get(ctx, workspaceID)
 	if err != nil {
 		if IsNotFound(err) {
 			// Return 403 (not 404) to prevent workspace ID enumeration.

@@ -445,12 +445,12 @@ func TestSSE_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(t *testing.T) {
 	}
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
 	require.NoError(t, err)
-	srv.RegisterServices(&server.Services{
-		Workspaces: &mockWorkspaceService{},
-		Plugins:    &mockPluginService{},
-		Sessions:   &mockSessionService{},
-		Users:      &mockUserService{},
-	})
+	srv.RegisterServices(server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+	))
 	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
 
 	body := `{"content": "Hello", "workspace_id": "any-workspace-id"}`
@@ -481,12 +481,12 @@ func TestSSE_WorkspaceMembership_ValidMember_Succeeds(t *testing.T) {
 		TokenValidator: validator,
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(&server.Services{
-		Workspaces: &mockWorkspaceService{},
-		Plugins:    &mockPluginService{},
-		Sessions:   &mockSessionService{},
-		Users:      &mockUserService{},
-	})
+	srv.RegisterServices(server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+	))
 	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
 
 	// workspace "homelab" has member "user-1" (see mockWorkspaceService.Get)
@@ -515,12 +515,12 @@ func TestSSE_WorkspaceMembership_NonMember_Returns403(t *testing.T) {
 		TokenValidator: validator,
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(&server.Services{
-		Workspaces: &mockWorkspaceService{},
-		Plugins:    &mockPluginService{},
-		Sessions:   &mockSessionService{},
-		Users:      &mockUserService{},
-	})
+	srv.RegisterServices(server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+	))
 	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
 
 	// workspace "homelab" has member "user-1", not "user-2"
@@ -550,12 +550,12 @@ func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns403(t *testing.T) {
 		TokenValidator: validator,
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(&server.Services{
-		Workspaces: &mockWorkspaceService{},
-		Plugins:    &mockPluginService{},
-		Sessions:   &mockSessionService{},
-		Users:      &mockUserService{},
-	})
+	srv.RegisterServices(server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+	))
 	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
 
 	body := `{"content": "Hello", "workspace_id": "nonexistent"}`
@@ -605,12 +605,12 @@ func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *testing.T) {
 		TokenValidator: validator,
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(&server.Services{
-		Workspaces: &mockWorkspaceService{},
-		Plugins:    &mockPluginService{},
-		Sessions:   &mockSessionService{},
-		Users:      &mockUserService{},
-	})
+	srv.RegisterServices(server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+	))
 	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
 
 	body := `{"content": "Hello", "workspace_id": ""}`

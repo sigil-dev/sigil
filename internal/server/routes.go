@@ -198,7 +198,7 @@ func notFoundOr500(err error, notFoundMsg, context string) error {
 }
 
 func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWorkspacesOutput, error) {
-	ws, err := s.services.Workspaces.List(ctx)
+	ws, err := s.services.Workspaces().List(ctx)
 	if err != nil {
 		slog.Error("internal error", "context", "listing workspaces", "error", err)
 		return nil, huma.Error500InternalServerError("internal server error")
@@ -210,7 +210,7 @@ func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWo
 		filtered := make([]WorkspaceSummary, 0, len(ws))
 		for _, w := range ws {
 			// Fetch full workspace detail to check membership.
-			detail, detailErr := s.services.Workspaces.Get(ctx, w.ID)
+			detail, detailErr := s.services.Workspaces().Get(ctx, w.ID)
 			if detailErr != nil {
 				slog.Warn("skipping workspace during membership filter", "workspace_id", w.ID, "error", detailErr)
 				continue
@@ -235,7 +235,7 @@ func (s *Server) handleGetWorkspace(ctx context.Context, input *getWorkspaceInpu
 		return nil, err
 	}
 
-	ws, err := s.services.Workspaces.Get(ctx, input.ID)
+	ws, err := s.services.Workspaces().Get(ctx, input.ID)
 	if err != nil {
 		return nil, notFoundOr500(err,
 			fmt.Sprintf("workspace %q not found", input.ID),
@@ -249,7 +249,7 @@ func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInpu
 		return nil, err
 	}
 
-	sessions, err := s.services.Sessions.List(ctx, input.ID)
+	sessions, err := s.services.Sessions().List(ctx, input.ID)
 	if err != nil {
 		slog.Error("internal error", "context", "listing sessions", "error", err)
 		return nil, huma.Error500InternalServerError("internal server error")
@@ -264,7 +264,7 @@ func (s *Server) handleGetSession(ctx context.Context, input *getSessionInput) (
 		return nil, err
 	}
 
-	session, err := s.services.Sessions.Get(ctx, input.ID, input.SessionID)
+	session, err := s.services.Sessions().Get(ctx, input.ID, input.SessionID)
 	if err != nil {
 		return nil, notFoundOr500(err,
 			fmt.Sprintf("session %q not found", input.SessionID),
@@ -297,7 +297,7 @@ func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPlugi
 		return nil, err
 	}
 
-	plugins, err := s.services.Plugins.List(ctx)
+	plugins, err := s.services.Plugins().List(ctx)
 	if err != nil {
 		slog.Error("internal error", "context", "listing plugins", "error", err)
 		return nil, huma.Error500InternalServerError("internal server error")
@@ -312,7 +312,7 @@ func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*
 		return nil, err
 	}
 
-	p, err := s.services.Plugins.Get(ctx, input.Name)
+	p, err := s.services.Plugins().Get(ctx, input.Name)
 	if err != nil {
 		return nil, notFoundOr500(err,
 			fmt.Sprintf("plugin %q not found", input.Name),
@@ -326,7 +326,7 @@ func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput)
 		return nil, err
 	}
 
-	if err := s.services.Plugins.Reload(ctx, input.Name); err != nil {
+	if err := s.services.Plugins().Reload(ctx, input.Name); err != nil {
 		return nil, notFoundOr500(err,
 			fmt.Sprintf("plugin %q not found", input.Name),
 			fmt.Sprintf("reloading plugin %q", input.Name))
@@ -471,7 +471,7 @@ func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOu
 		return nil, err
 	}
 
-	users, err := s.services.Users.List(ctx)
+	users, err := s.services.Users().List(ctx)
 	if err != nil {
 		slog.Error("internal error", "context", "listing users", "error", err)
 		return nil, huma.Error500InternalServerError("internal server error")

@@ -350,8 +350,8 @@ func TestRegistry_BudgetEnforcement_CombinedLimits(t *testing.T) {
 func TestBudget_USDFieldsExist(t *testing.T) {
 	b, err := provider.NewBudget(100000, 0, 5.00, 0, 50.00, 0)
 	require.NoError(t, err)
-	assert.Equal(t, 5.00, b.MaxHourUSD)
-	assert.Equal(t, 50.00, b.MaxDayUSD)
+	assert.Equal(t, 5.00, b.MaxHourUSD())
+	assert.Equal(t, 50.00, b.MaxDayUSD())
 }
 
 func TestNewBudget_Validation(t *testing.T) {
@@ -568,66 +568,12 @@ func TestNewBudget_Validation(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, b)
-				assert.Equal(t, tt.maxSessionTokens, b.MaxSessionTokens)
-				assert.Equal(t, tt.usedSessionTokens, b.UsedSessionTokens)
-				assert.Equal(t, tt.maxHourUSD, b.MaxHourUSD)
-				assert.Equal(t, tt.usedHourUSD, b.UsedHourUSD)
-				assert.Equal(t, tt.maxDayUSD, b.MaxDayUSD)
-				assert.Equal(t, tt.usedDayUSD, b.UsedDayUSD)
-			}
-		})
-	}
-}
-
-func TestBudget_Validate(t *testing.T) {
-	tests := []struct {
-		name        string
-		budget      *provider.Budget
-		wantErr     bool
-		errContains string
-	}{
-		{
-			name: "valid budget",
-			budget: &provider.Budget{
-				MaxSessionTokens:  10000,
-				UsedSessionTokens: 5000,
-				MaxHourUSD:        5.00,
-				UsedHourUSD:       2.50,
-				MaxDayUSD:         50.00,
-				UsedDayUSD:        25.00,
-			},
-			wantErr: false,
-		},
-		{
-			name: "invalid - negative MaxSessionTokens",
-			budget: &provider.Budget{
-				MaxSessionTokens: -100,
-			},
-			wantErr:     true,
-			errContains: "MaxSessionTokens must be non-negative",
-		},
-		{
-			name: "invalid - UsedSessionTokens exceeds MaxSessionTokens",
-			budget: &provider.Budget{
-				MaxSessionTokens:  1000,
-				UsedSessionTokens: 1500,
-			},
-			wantErr:     true,
-			errContains: "UsedSessionTokens (1500) exceeds MaxSessionTokens (1000)",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.budget.Validate()
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeConfigValidateInvalidValue))
-				if tt.errContains != "" {
-					assert.Contains(t, err.Error(), tt.errContains)
-				}
-			} else {
-				require.NoError(t, err)
+				assert.Equal(t, tt.maxSessionTokens, b.MaxSessionTokens())
+				assert.Equal(t, tt.usedSessionTokens, b.UsedSessionTokens())
+				assert.Equal(t, tt.maxHourUSD, b.MaxHourUSD())
+				assert.Equal(t, tt.usedHourUSD, b.UsedHourUSD())
+				assert.Equal(t, tt.maxDayUSD, b.MaxDayUSD())
+				assert.Equal(t, tt.usedDayUSD, b.UsedDayUSD())
 			}
 		})
 	}

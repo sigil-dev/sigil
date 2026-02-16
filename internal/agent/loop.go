@@ -93,6 +93,7 @@ type Loop struct {
 	toolRegistry        ToolRegistry
 	maxToolCallsPerTurn int
 	hooks               *LoopHooks
+	auditFailCount      int
 }
 
 // NewLoop creates a Loop with the given dependencies.
@@ -293,6 +294,8 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	if err := l.validateSessionStatus(session); err != nil {
 		return nil, nil, err
 	}
+
+	// TODO(sigil-39g): Implement input sanitization and prompt injection scanning per design/03 §Agent Integrity step 1
 
 	// Append the incoming user message to the session store.
 	userMsg := &store.Message{
@@ -578,6 +581,7 @@ func (l *Loop) runToolLoop(
 				return "", nil, sigilerr.Wrapf(appendErr, sigilerr.CodeAgentLoopFailure, "persisting tool result: session %s", msg.SessionID)
 			}
 
+			// TODO(sigil-j32): Implement tool result injection scanning per design/03 §Agent Integrity step 6
 			currentMessages = append(currentMessages, provider.Message{
 				Role:       store.MessageRoleTool,
 				Content:    resultContent,
@@ -618,6 +622,8 @@ func (l *Loop) runToolLoop(
 }
 
 func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {
+	// TODO(sigil-hnh): Implement output filtering for PII/secrets per design/03 §Defense Matrix
+
 	// Persist the assistant response.
 	assistantMsg := &store.Message{
 		ID:        uuid.New().String(),
@@ -655,10 +661,14 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 
 	// Best-effort audit; do not fail the response on audit errors.
 	if err := l.auditStore.Append(ctx, entry); err != nil {
-		slog.Error("audit store append failed",
+		l.auditFailCount++
+		slog.Warn("audit store append failed",
 			"error", err,
 			"workspace_id", msg.WorkspaceID,
 			"session_id", msg.SessionID,
+			"consecutive_failures", l.auditFailCount,
 		)
+	} else {
+		l.auditFailCount = 0
 	}
 }

@@ -49,6 +49,39 @@ func (s *stubWorkspaceService) Get(ctx context.Context, id string) (*server.Work
 	return s.getFunc(ctx, id)
 }
 
+// stubPluginService is a minimal stub for PluginService.
+type stubPluginService struct{}
+
+func (s *stubPluginService) List(_ context.Context) ([]server.PluginSummary, error) {
+	return nil, nil
+}
+
+func (s *stubPluginService) Get(_ context.Context, _ string) (*server.PluginDetail, error) {
+	return nil, nil
+}
+
+func (s *stubPluginService) Reload(_ context.Context, _ string) error {
+	return nil
+}
+
+// stubSessionService is a minimal stub for SessionService.
+type stubSessionService struct{}
+
+func (s *stubSessionService) List(_ context.Context, _ string) ([]server.SessionSummary, error) {
+	return nil, nil
+}
+
+func (s *stubSessionService) Get(_ context.Context, _, _ string) (*server.SessionDetail, error) {
+	return nil, nil
+}
+
+// stubUserService is a minimal stub for UserService.
+type stubUserService struct{}
+
+func (s *stubUserService) List(_ context.Context) ([]server.UserSummary, error) {
+	return nil, nil
+}
+
 func TestCheckWorkspaceMembership(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -88,7 +121,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			name:        "nil Workspaces field returns 503",
 			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "ws-1",
-			services:    &server.Services{Workspaces: nil},
+			services:    server.NewServicesForTest(nil, &stubPluginService{}, &stubSessionService{}, &stubUserService{}),
 			wantErr:     true,
 			wantStatus:  503,
 			wantMsg:     "workspace service not available",
@@ -97,13 +130,14 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			name:        "workspace not found returns 403 to prevent enumeration",
 			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "nonexistent",
-			services: &server.Services{
-				Workspaces: &stubWorkspaceService{
+			services: server.NewServicesForTest(
+				&stubWorkspaceService{
 					getFunc: func(_ context.Context, id string) (*server.WorkspaceDetail, error) {
 						return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "workspace %q not found", id)
 					},
 				},
-			},
+				&stubPluginService{}, &stubSessionService{}, &stubUserService{},
+			),
 			wantErr:    true,
 			wantStatus: 403,
 			wantMsg:    "access denied",
@@ -112,13 +146,14 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			name:        "workspace Get returns internal error returns 500",
 			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "ws-broken",
-			services: &server.Services{
-				Workspaces: &stubWorkspaceService{
+			services: server.NewServicesForTest(
+				&stubWorkspaceService{
 					getFunc: func(_ context.Context, _ string) (*server.WorkspaceDetail, error) {
 						return nil, fmt.Errorf("database connection lost")
 					},
 				},
-			},
+				&stubPluginService{}, &stubSessionService{}, &stubUserService{},
+			),
 			wantErr:    true,
 			wantStatus: 500,
 			wantMsg:    "internal server error",
@@ -127,8 +162,8 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			name:        "user is not a member returns 403",
 			user:        mustNewAuthenticatedUser("user-99", "Outsider", nil),
 			workspaceID: "ws-1",
-			services: &server.Services{
-				Workspaces: &stubWorkspaceService{
+			services: server.NewServicesForTest(
+				&stubWorkspaceService{
 					getFunc: func(_ context.Context, _ string) (*server.WorkspaceDetail, error) {
 						return &server.WorkspaceDetail{
 							ID:      "ws-1",
@@ -136,7 +171,8 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 						}, nil
 					},
 				},
-			},
+				&stubPluginService{}, &stubSessionService{}, &stubUserService{},
+			),
 			wantErr:    true,
 			wantStatus: 403,
 			wantMsg:    "access denied",
@@ -145,8 +181,8 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			name:        "user is a member returns nil",
 			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "ws-1",
-			services: &server.Services{
-				Workspaces: &stubWorkspaceService{
+			services: server.NewServicesForTest(
+				&stubWorkspaceService{
 					getFunc: func(_ context.Context, _ string) (*server.WorkspaceDetail, error) {
 						return &server.WorkspaceDetail{
 							ID:      "ws-1",
@@ -154,7 +190,8 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 						}, nil
 					},
 				},
-			},
+				&stubPluginService{}, &stubSessionService{}, &stubUserService{},
+			),
 			wantErr: false,
 		},
 	}
@@ -206,13 +243,14 @@ func TestCheckWorkspaceMembership_ErrorObservability(t *testing.T) {
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
 	require.NoError(t, err)
 
-	srv.RegisterServices(&server.Services{
-		Workspaces: &stubWorkspaceService{
+	srv.RegisterServices(server.NewServicesForTest(
+		&stubWorkspaceService{
 			getFunc: func(_ context.Context, _ string) (*server.WorkspaceDetail, error) {
 				return nil, fmt.Errorf("database connection lost")
 			},
 		},
-	})
+		&stubPluginService{}, &stubSessionService{}, &stubUserService{},
+	))
 
 	user := mustNewAuthenticatedUser("user-1", "Sean", nil)
 	ctx := server.ContextWithUser(context.Background(), user)

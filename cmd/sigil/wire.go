@@ -26,6 +26,7 @@ import (
 	_ "github.com/sigil-dev/sigil/internal/store/sqlite" // register sqlite backend
 	"github.com/sigil-dev/sigil/internal/workspace"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	pluginpkg "github.com/sigil-dev/sigil/pkg/plugin"
 )
 
 // Gateway holds all wired subsystems and manages their lifecycle.
@@ -271,9 +272,9 @@ func (a *pluginServiceAdapter) List(_ context.Context) ([]server.PluginSummary, 
 	for i, inst := range instances {
 		out[i] = server.PluginSummary{
 			Name:    inst.Name(),
-			Type:    inst.Type(),
+			Type:    pluginpkg.PluginType(inst.Type()),
 			Version: inst.Version(),
-			Status:  inst.State().String(),
+			Status:  server.PluginStatus(inst.State().String()),
 		}
 	}
 	return out, nil
@@ -293,10 +294,10 @@ func (a *pluginServiceAdapter) Get(_ context.Context, name string) (*server.Plug
 	}
 	return &server.PluginDetail{
 		Name:         inst.Name(),
-		Type:         inst.Type(),
+		Type:         pluginpkg.PluginType(inst.Type()),
 		Version:      inst.Version(),
-		Status:       inst.State().String(),
-		Tier:         inst.Tier(),
+		Status:       server.PluginStatus(inst.State().String()),
+		Tier:         pluginpkg.ExecutionTier(inst.Tier()),
 		Capabilities: caps,
 	}, nil
 }

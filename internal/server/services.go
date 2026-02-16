@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 
+	"github.com/sigil-dev/sigil/pkg/plugin"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
@@ -16,13 +17,29 @@ func IsNotFound(err error) bool {
 	return sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound)
 }
 
+// PluginStatus represents the runtime status of a plugin instance.
+// Values correspond to plugin lifecycle states.
+type PluginStatus string
+
+const (
+	PluginStatusDiscovered PluginStatus = "discovered"
+	PluginStatusValidating PluginStatus = "validating"
+	PluginStatusLoading    PluginStatus = "loading"
+	PluginStatusRunning    PluginStatus = "running"
+	PluginStatusDraining   PluginStatus = "draining"
+	PluginStatusStopping   PluginStatus = "stopping"
+	PluginStatusStopped    PluginStatus = "stopped"
+	PluginStatusError      PluginStatus = "error"
+)
+
 // Services holds dependencies injected into route handlers.
 // Each field is an interface so subsystems can be mocked in tests.
+// Use NewServices constructor to ensure all required services are provided.
 type Services struct {
-	Workspaces WorkspaceService
-	Plugins    PluginService
-	Sessions   SessionService
-	Users      UserService
+	workspaces WorkspaceService
+	plugins    PluginService
+	sessions   SessionService
+	users      UserService
 }
 
 // NewServices creates a Services instance with validation.
@@ -41,11 +58,31 @@ func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionSer
 		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "user service is required")
 	}
 	return &Services{
-		Workspaces: ws,
-		Plugins:    plugins,
-		Sessions:   sessions,
-		Users:      users,
+		workspaces: ws,
+		plugins:    plugins,
+		sessions:   sessions,
+		users:      users,
 	}, nil
+}
+
+// Workspaces returns the workspace service.
+func (s *Services) Workspaces() WorkspaceService {
+	return s.workspaces
+}
+
+// Plugins returns the plugin service.
+func (s *Services) Plugins() PluginService {
+	return s.plugins
+}
+
+// Sessions returns the session service.
+func (s *Services) Sessions() SessionService {
+	return s.sessions
+}
+
+// Users returns the user service.
+func (s *Services) Users() UserService {
+	return s.users
 }
 
 // WorkspaceService provides workspace operations for REST handlers.
@@ -88,20 +125,20 @@ type WorkspaceDetail struct {
 
 // PluginSummary is the REST representation of a plugin in list results.
 type PluginSummary struct {
-	Name    string `json:"name" doc:"Plugin name"`
-	Type    string `json:"type" doc:"Plugin type (provider, channel, tool, skill)"`
-	Version string `json:"version" doc:"Plugin version"`
-	Status  string `json:"status" doc:"Plugin status (running, stopped, error)"`
+	Name    string           `json:"name" doc:"Plugin name"`
+	Type    plugin.PluginType `json:"type" doc:"Plugin type (provider, channel, tool, skill)"`
+	Version string           `json:"version" doc:"Plugin version"`
+	Status  PluginStatus     `json:"status" doc:"Plugin status (running, stopped, error)"`
 }
 
 // PluginDetail is the full REST representation of a plugin.
 type PluginDetail struct {
-	Name         string   `json:"name" doc:"Plugin name"`
-	Type         string   `json:"type" doc:"Plugin type"`
-	Version      string   `json:"version" doc:"Plugin version"`
-	Status       string   `json:"status" doc:"Plugin status"`
-	Tier         string   `json:"tier" doc:"Execution tier (wasm, process, container)"`
-	Capabilities []string `json:"capabilities" doc:"Granted capabilities"`
+	Name         string               `json:"name" doc:"Plugin name"`
+	Type         plugin.PluginType    `json:"type" doc:"Plugin type"`
+	Version      string               `json:"version" doc:"Plugin version"`
+	Status       PluginStatus         `json:"status" doc:"Plugin status"`
+	Tier         plugin.ExecutionTier `json:"tier" doc:"Execution tier (wasm, process, container)"`
+	Capabilities []string             `json:"capabilities" doc:"Granted capabilities"`
 }
 
 // SessionSummary is the REST representation of a session in list results.
@@ -123,4 +160,16 @@ type SessionDetail struct {
 type UserSummary struct {
 	ID   string `json:"id" doc:"User identifier"`
 	Name string `json:"name" doc:"Display name"`
+}
+
+// NewServicesForTest creates a Services instance for testing, bypassing validation.
+// This is exported for use in server_test package where unexported fields are inaccessible.
+// Production code should use NewServices which enforces validation.
+func NewServicesForTest(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService) *Services {
+	return &Services{
+		workspaces: ws,
+		plugins:    plugins,
+		sessions:   sessions,
+		users:      users,
+	}
 }

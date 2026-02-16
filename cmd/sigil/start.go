@@ -43,6 +43,9 @@ func runStart(cmd *cobra.Command, _ []string) error {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	}
 
+	// Warn if config file has overly permissive permissions (tokens may be exposed).
+	config.WarnInsecurePermissions(v.ConfigFileUsed())
+
 	dataDir := v.GetString("data_dir")
 	if dataDir == "" {
 		home, err := os.UserHomeDir()

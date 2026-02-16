@@ -17,14 +17,14 @@ import (
 // The caller (agent loop) is responsible for tracking cumulative spend
 // and populating these fields; routing only enforces the limits.
 type Budget struct {
-	MaxSessionTokens  int
-	UsedSessionTokens int
+	maxSessionTokens  int
+	usedSessionTokens int
 
 	// USD budget constraints (0 = unlimited).
-	MaxHourUSD  float64
-	UsedHourUSD float64
-	MaxDayUSD   float64
-	UsedDayUSD  float64
+	maxHourUSD  float64
+	usedHourUSD float64
+	maxDayUSD   float64
+	usedDayUSD  float64
 }
 
 // NewBudget creates a validated Budget. It returns an error if:
@@ -34,12 +34,12 @@ type Budget struct {
 // - UsedDayUSD > MaxDayUSD (when MaxDayUSD > 0)
 func NewBudget(maxSessionTokens, usedSessionTokens int, maxHourUSD, usedHourUSD, maxDayUSD, usedDayUSD float64) (*Budget, error) {
 	b := &Budget{
-		MaxSessionTokens:  maxSessionTokens,
-		UsedSessionTokens: usedSessionTokens,
-		MaxHourUSD:        maxHourUSD,
-		UsedHourUSD:       usedHourUSD,
-		MaxDayUSD:         maxDayUSD,
-		UsedDayUSD:        usedDayUSD,
+		maxSessionTokens:  maxSessionTokens,
+		usedSessionTokens: usedSessionTokens,
+		maxHourUSD:        maxHourUSD,
+		usedHourUSD:       usedHourUSD,
+		maxDayUSD:         maxDayUSD,
+		usedDayUSD:        usedDayUSD,
 	}
 	if err := b.Validate(); err != nil {
 		return nil, err
@@ -49,37 +49,67 @@ func NewBudget(maxSessionTokens, usedSessionTokens int, maxHourUSD, usedHourUSD,
 
 // Validate checks that all budget fields are valid.
 func (b *Budget) Validate() error {
-	if b.MaxSessionTokens < 0 {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxSessionTokens must be non-negative, got %d", b.MaxSessionTokens)
+	if b.maxSessionTokens < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxSessionTokens must be non-negative, got %d", b.maxSessionTokens)
 	}
-	if b.UsedSessionTokens < 0 {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedSessionTokens must be non-negative, got %d", b.UsedSessionTokens)
+	if b.usedSessionTokens < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedSessionTokens must be non-negative, got %d", b.usedSessionTokens)
 	}
-	if b.MaxHourUSD < 0 {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxHourUSD must be non-negative, got %.2f", b.MaxHourUSD)
+	if b.maxHourUSD < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxHourUSD must be non-negative, got %.2f", b.maxHourUSD)
 	}
-	if b.UsedHourUSD < 0 {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedHourUSD must be non-negative, got %.2f", b.UsedHourUSD)
+	if b.usedHourUSD < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedHourUSD must be non-negative, got %.2f", b.usedHourUSD)
 	}
-	if b.MaxDayUSD < 0 {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxDayUSD must be non-negative, got %.2f", b.MaxDayUSD)
+	if b.maxDayUSD < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "MaxDayUSD must be non-negative, got %.2f", b.maxDayUSD)
 	}
-	if b.UsedDayUSD < 0 {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedDayUSD must be non-negative, got %.2f", b.UsedDayUSD)
+	if b.usedDayUSD < 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedDayUSD must be non-negative, got %.2f", b.usedDayUSD)
 	}
 
 	// Check that usage doesn't exceed limits (when limits are set).
-	if b.MaxSessionTokens > 0 && b.UsedSessionTokens > b.MaxSessionTokens {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedSessionTokens (%d) exceeds MaxSessionTokens (%d)", b.UsedSessionTokens, b.MaxSessionTokens)
+	if b.maxSessionTokens > 0 && b.usedSessionTokens > b.maxSessionTokens {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedSessionTokens (%d) exceeds MaxSessionTokens (%d)", b.usedSessionTokens, b.maxSessionTokens)
 	}
-	if b.MaxHourUSD > 0 && b.UsedHourUSD > b.MaxHourUSD {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedHourUSD (%.2f) exceeds MaxHourUSD (%.2f)", b.UsedHourUSD, b.MaxHourUSD)
+	if b.maxHourUSD > 0 && b.usedHourUSD > b.maxHourUSD {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedHourUSD (%.2f) exceeds MaxHourUSD (%.2f)", b.usedHourUSD, b.maxHourUSD)
 	}
-	if b.MaxDayUSD > 0 && b.UsedDayUSD > b.MaxDayUSD {
-		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedDayUSD (%.2f) exceeds MaxDayUSD (%.2f)", b.UsedDayUSD, b.MaxDayUSD)
+	if b.maxDayUSD > 0 && b.usedDayUSD > b.maxDayUSD {
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "UsedDayUSD (%.2f) exceeds MaxDayUSD (%.2f)", b.usedDayUSD, b.maxDayUSD)
 	}
 
 	return nil
+}
+
+// MaxSessionTokens returns the maximum tokens allowed per session.
+func (b *Budget) MaxSessionTokens() int {
+	return b.maxSessionTokens
+}
+
+// UsedSessionTokens returns the tokens already used in the session.
+func (b *Budget) UsedSessionTokens() int {
+	return b.usedSessionTokens
+}
+
+// MaxHourUSD returns the maximum hourly USD spend limit.
+func (b *Budget) MaxHourUSD() float64 {
+	return b.maxHourUSD
+}
+
+// UsedHourUSD returns the USD spent in the current hour.
+func (b *Budget) UsedHourUSD() float64 {
+	return b.usedHourUSD
+}
+
+// MaxDayUSD returns the maximum daily USD spend limit.
+func (b *Budget) MaxDayUSD() float64 {
+	return b.maxDayUSD
+}
+
+// UsedDayUSD returns the USD spent in the current day.
+func (b *Budget) UsedDayUSD() float64 {
+	return b.usedDayUSD
 }
 
 // Registry manages provider registration, lookup, and routing with
@@ -176,26 +206,26 @@ func (r *Registry) Route(ctx context.Context, workspaceID, modelName string) (Pr
 // providers that don't implement HealthReporter.
 func (r *Registry) RouteWithBudget(ctx context.Context, workspaceID, modelName string, budget *Budget, exclude []string) (Provider, string, error) {
 	// 1. Check budget.
-	if budget != nil && budget.MaxSessionTokens > 0 && budget.UsedSessionTokens >= budget.MaxSessionTokens {
+	if budget != nil && budget.MaxSessionTokens() > 0 && budget.UsedSessionTokens() >= budget.MaxSessionTokens() {
 		return nil, "", sigilerr.New(
 			sigilerr.CodeProviderBudgetExceeded,
-			"budget exceeded: used "+itoa(budget.UsedSessionTokens)+" of "+itoa(budget.MaxSessionTokens)+" tokens",
+			"budget exceeded: used "+itoa(budget.UsedSessionTokens())+" of "+itoa(budget.MaxSessionTokens())+" tokens",
 		)
 	}
 
 	// 1b. Check hourly USD budget.
-	if budget != nil && budget.MaxHourUSD > 0 && budget.UsedHourUSD >= budget.MaxHourUSD {
+	if budget != nil && budget.MaxHourUSD() > 0 && budget.UsedHourUSD() >= budget.MaxHourUSD() {
 		return nil, "", sigilerr.New(
 			sigilerr.CodeProviderBudgetExceeded,
-			"budget exceeded: hourly USD spend $"+formatUSD(budget.UsedHourUSD)+" of $"+formatUSD(budget.MaxHourUSD)+" limit",
+			"budget exceeded: hourly USD spend $"+formatUSD(budget.UsedHourUSD())+" of $"+formatUSD(budget.MaxHourUSD())+" limit",
 		)
 	}
 
 	// 1c. Check daily USD budget.
-	if budget != nil && budget.MaxDayUSD > 0 && budget.UsedDayUSD >= budget.MaxDayUSD {
+	if budget != nil && budget.MaxDayUSD() > 0 && budget.UsedDayUSD() >= budget.MaxDayUSD() {
 		return nil, "", sigilerr.New(
 			sigilerr.CodeProviderBudgetExceeded,
-			"budget exceeded: daily USD spend $"+formatUSD(budget.UsedDayUSD)+" of $"+formatUSD(budget.MaxDayUSD)+" limit",
+			"budget exceeded: daily USD spend $"+formatUSD(budget.UsedDayUSD())+" of $"+formatUSD(budget.MaxDayUSD())+" limit",
 		)
 	}
 

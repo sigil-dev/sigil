@@ -389,7 +389,7 @@ func (r *mockProviderRouterBudgetAware) RouteWithBudget(_ context.Context, _, _ 
 	r.mu.Lock()
 	r.capturedBudget = budget
 	r.mu.Unlock()
-	if budget != nil && budget.MaxSessionTokens > 0 && budget.UsedSessionTokens >= budget.MaxSessionTokens {
+	if budget != nil && budget.MaxSessionTokens() > 0 && budget.UsedSessionTokens() >= budget.MaxSessionTokens() {
 		return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded")
 	}
 	return r.provider, "mock-model", nil
@@ -834,4 +834,35 @@ func cosineDistance(a, b []float32) float64 {
 		return 1.0
 	}
 	return 1.0 - dot/(math.Sqrt(normA)*math.Sqrt(normB))
+}
+
+// mockProviderStreamUsageThenError emits a text delta, usage event, then error event.
+// Used to test that token accounting survives stream failures.
+type mockProviderStreamUsageThenError struct{}
+
+func (p *mockProviderStreamUsageThenError) Name() string                     { return "mock-usage-error" }
+func (p *mockProviderStreamUsageThenError) Available(_ context.Context) bool { return true }
+
+func (p *mockProviderStreamUsageThenError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderStreamUsageThenError) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 4)
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Partial "}
+	ch <- provider.ChatEvent{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 30, OutputTokens: 20}}
+	ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: "stream interrupted"}
+	close(ch)
+	return ch, nil
+}
+
+func (p *mockProviderStreamUsageThenError) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-usage-error"}, nil
+}
+
+func (p *mockProviderStreamUsageThenError) Close() error { return nil }
+
+// newMockProviderRouterStreamUsageThenError returns a Router with a provider that emits usage then error.
+func newMockProviderRouterStreamUsageThenError() *mockProviderRouter {
+	return &mockProviderRouter{provider: &mockProviderStreamUsageThenError{}}
 }

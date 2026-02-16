@@ -648,8 +648,8 @@ func TestAgentLoop_BudgetWiredThroughSessionTokens(t *testing.T) {
 	// Verify the router received the session's budget.
 	captured := budgetRouter.getCapturedBudget()
 	require.NotNil(t, captured, "RouteWithBudget should have been called with a budget")
-	assert.Equal(t, 10000, captured.MaxSessionTokens)
-	assert.Equal(t, 500, captured.UsedSessionTokens)
+	assert.Equal(t, 10000, captured.MaxSessionTokens())
+	assert.Equal(t, 500, captured.UsedSessionTokens())
 }
 
 func TestAgentLoop_BudgetWiredEnforcesLimit(t *testing.T) {
@@ -1111,6 +1111,47 @@ func TestAgentLoop_UsageAccountedInToolLoop(t *testing.T) {
 	updated, err := ss.GetSession(ctx, session.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 40, updated.TokenBudget.UsedSession, "UsedSession should accumulate across tool loop iterations")
+}
+
+func TestAgentLoop_PartialUsageAccountingSurvivesStreamError(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Set initial budget.
+	session.TokenBudget.MaxPerSession = 100000
+	session.TokenBudget.UsedSession = 0
+	require.NoError(t, ss.UpdateSession(ctx, session))
+
+	loop := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouterStreamUsageThenError(), // emits text_delta, usage (30+20=50), then error
+		AuditStore:     newMockAuditStore(),
+	})
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err, "ProcessMessage should return error when stream emits error event")
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+		"expected CodeProviderUpstreamFailure, got %s", sigilerr.CodeOf(err))
+
+	// Verify token budget was incremented despite the stream failure.
+	// The provider emitted a usage event (30 input + 20 output = 50 tokens) before the error.
+	updated, err := ss.GetSession(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 50, updated.TokenBudget.UsedSession,
+		"UsedSession should be incremented by usage event even when stream fails")
+	assert.Equal(t, 50, updated.TokenBudget.UsedHour,
+		"UsedHour should be incremented by usage event even when stream fails")
+	assert.Equal(t, 50, updated.TokenBudget.UsedDay,
+		"UsedDay should be incremented by usage event even when stream fails")
 }
 
 // ---------------------------------------------------------------------------

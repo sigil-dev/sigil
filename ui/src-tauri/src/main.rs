@@ -9,6 +9,7 @@ use tauri::{
 };
 
 use log::{error, info, warn};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,31 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Poll interval when waiting for process to exit after SIGTERM.
 const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Sidecar lifecycle states for the atomic state machine.
+///
+/// Transitions:
+///   Stopped  -> Starting -> Running
+///   Running  -> Stopping -> Stopped
+///
+/// `Starting` and `Stopping` are transient -- they prevent concurrent
+/// start/stop races by acting as "locked" states.
+mod sidecar_phase {
+    pub const STOPPED: u8 = 0;
+    pub const STARTING: u8 = 1;
+    pub const RUNNING: u8 = 2;
+    pub const STOPPING: u8 = 3;
+
+    pub fn name(v: u8) -> &'static str {
+        match v {
+            STOPPED => "Stopped",
+            STARTING => "Starting",
+            RUNNING => "Running",
+            STOPPING => "Stopping",
+            _ => "Unknown",
+        }
+    }
+}
+
 /// Errors that can occur during sidecar lifecycle management
 #[derive(Debug, thiserror::Error)]
 enum SidecarError {
@@ -34,17 +60,27 @@ enum SidecarError {
     SpawnFailed(tauri_plugin_shell::Error),
     #[error("sidecar process kill failed: {0}")]
     KillFailed(tauri_plugin_shell::Error),
+    #[error("invalid sidecar state transition: cannot {action} while {phase}")]
+    InvalidState {
+        action: &'static str,
+        phase: &'static str,
+    },
 }
 
-/// Sidecar process handle stored in app state
+/// Sidecar process handle stored in app state.
+///
+/// `phase` is an atomic state machine that prevents concurrent start/stop
+/// races without holding the mutex across long-running operations.
 struct SidecarState {
     process: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
+    phase: AtomicU8,
 }
 
 impl SidecarState {
     fn new() -> Self {
         Self {
             process: Mutex::new(None),
+            phase: AtomicU8::new(sidecar_phase::STOPPED),
         }
     }
 }
@@ -52,40 +88,69 @@ impl SidecarState {
 /// Start the Sigil gateway sidecar process
 fn start_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
     let state = app.state::<SidecarState>();
-    let mut process_lock = state
-        .process
-        .lock()
-        .map_err(|e| SidecarError::LockPoisoned(e.to_string()))?;
 
-    // Don't start if already running
-    if process_lock.is_some() {
-        return Ok(());
+    // Atomically transition Stopped -> Starting. Any other current phase
+    // means a start or stop is already in progress (or it's already running).
+    match state.phase.compare_exchange(
+        sidecar_phase::STOPPED,
+        sidecar_phase::STARTING,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    ) {
+        Ok(_) => {} // Successfully claimed Starting
+        Err(current) if current == sidecar_phase::RUNNING => {
+            // Already running -- idempotent success
+            return Ok(());
+        }
+        Err(current) => {
+            return Err(SidecarError::InvalidState {
+                action: "start",
+                phase: sidecar_phase::name(current),
+            });
+        }
     }
 
-    // Get config path from app data directory
-    let config_path = app
-        .path()
-        .app_data_dir()
-        .map_err(SidecarError::AppDataDir)?
-        .join("sigil.yaml");
-    let config_path_str = config_path.to_str().ok_or_else(|| {
-        SidecarError::SpawnFailed(tauri_plugin_shell::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "config path contains non-UTF8 characters",
-        )))
-    })?;
+    // From here on, phase == Starting. If we fail, revert to Stopped.
+    let result = (|| -> Result<(), SidecarError> {
+        let mut process_lock = state
+            .process
+            .lock()
+            .map_err(|e| SidecarError::LockPoisoned(e.to_string()))?;
 
-    // Start sidecar with shell plugin
-    let sidecar = tauri_plugin_shell::ShellExt::shell(app)
-        .sidecar("sigil")
-        .map_err(SidecarError::SpawnFailed)?
-        .args(&["start", "--config", config_path_str])
-        .spawn()
-        .map_err(SidecarError::SpawnFailed)?;
+        // Get config path from app data directory
+        let config_path = app
+            .path()
+            .app_data_dir()
+            .map_err(SidecarError::AppDataDir)?
+            .join("sigil.yaml");
+        let config_path_str = config_path.to_str().ok_or_else(|| {
+            SidecarError::SpawnFailed(tauri_plugin_shell::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "config path contains non-UTF8 characters",
+            )))
+        })?;
 
-    *process_lock = Some(sidecar);
+        // Start sidecar with shell plugin
+        let sidecar = tauri_plugin_shell::ShellExt::shell(app)
+            .sidecar("sigil")
+            .map_err(SidecarError::SpawnFailed)?
+            .args(&["start", "--config", config_path_str])
+            .spawn()
+            .map_err(SidecarError::SpawnFailed)?;
 
-    info!("Sigil gateway started with config: {}", config_path_str);
+        *process_lock = Some(sidecar);
+
+        info!("Sigil gateway started with config: {}", config_path_str);
+        Ok(())
+    })();
+
+    if result.is_err() {
+        state.phase.store(sidecar_phase::STOPPED, Ordering::SeqCst);
+        return result;
+    }
+
+    // Transition Starting -> Running
+    state.phase.store(sidecar_phase::RUNNING, Ordering::SeqCst);
 
     // Health check: verify the gateway is running with 3 attempts (sleeps of 1s, 2s, 4s; total ~7s)
     let app_handle = app.clone();
@@ -279,81 +344,119 @@ fn send_sigterm(pid: u32) -> Result<(), std::io::Error> {
 /// Stop the Sigil gateway sidecar process with graceful shutdown.
 ///
 /// Shutdown sequence:
-/// 1. (Unix) Send SIGTERM, giving the gateway time to flush SQLite WAL
+/// 1. Atomically transition Running -> Stopping (prevents concurrent starts).
+/// 2. (Unix) Send SIGTERM, giving the gateway time to flush SQLite WAL
 ///    and close connections cleanly.
-/// 2. Poll for process exit up to `GRACEFUL_SHUTDOWN_TIMEOUT`.
-/// 3. If the process is still alive, escalate to SIGKILL.
+/// 3. Poll for process exit up to `GRACEFUL_SHUTDOWN_TIMEOUT`.
+/// 4. If the process is still alive, escalate to SIGKILL.
+/// 5. Transition Stopping -> Stopped.
 ///
 /// On Windows, `CommandChild::kill()` calls `TerminateProcess` directly
 /// since Windows lacks SIGTERM semantics.
+///
+/// The mutex is held for the entire shutdown sequence to prevent another
+/// thread from observing an empty `process` slot and spawning a new sidecar
+/// while the old one is still terminating.
 fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
     let state = app.state::<SidecarState>();
-    let mut process_lock = state
-        .process
-        .lock()
-        .map_err(|e| SidecarError::LockPoisoned(e.to_string()))?;
 
-    if let Some(process) = process_lock.take() {
-        let pid = process.pid();
-        // Log PID at Error level before kill attempt to ensure it's available for manual cleanup if kill fails
-        error!("Attempting to terminate Sigil gateway process with PID {}", pid);
-
-        // Drop the lock before entering the potentially long polling loop.
-        // We've already taken ownership of the process via take().
-        drop(process_lock);
-
-        // Phase 1: Attempt graceful shutdown with SIGTERM (Unix only)
-        #[cfg(unix)]
-        {
-            match send_sigterm(pid) {
-                Ok(()) => {
-                    info!(
-                        "Sent SIGTERM to gateway (pid {}), waiting for graceful exit",
-                        pid
-                    );
-
-                    let deadline = Instant::now() + GRACEFUL_SHUTDOWN_TIMEOUT;
-                    while Instant::now() < deadline {
-                        if !is_process_alive(pid) {
-                            info!("Gateway (pid {}) exited gracefully after SIGTERM", pid);
-                            return Ok(());
-                        }
-                        std::thread::sleep(SHUTDOWN_POLL_INTERVAL);
-                    }
-
-                    warn!(
-                        "Gateway (pid {}) did not exit within {}s after SIGTERM, sending SIGKILL",
-                        pid,
-                        GRACEFUL_SHUTDOWN_TIMEOUT.as_secs()
-                    );
-                }
-                Err(e) => {
-                    // ESRCH (no such process) means it already exited
-                    if e.raw_os_error() == Some(libc::ESRCH) {
-                        info!("Gateway (pid {}) already exited", pid);
-                        return Ok(());
-                    }
-                    warn!(
-                        "Failed to send SIGTERM to gateway (pid {}): {}, falling back to SIGKILL",
-                        pid, e
-                    );
-                }
-            }
+    // Atomically transition Running -> Stopping.
+    match state.phase.compare_exchange(
+        sidecar_phase::RUNNING,
+        sidecar_phase::STOPPING,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    ) {
+        Ok(_) => {} // Successfully claimed Stopping
+        Err(current) if current == sidecar_phase::STOPPED => {
+            // Already stopped -- idempotent success
+            return Ok(());
         }
-
-        // Phase 2: Forceful shutdown (SIGKILL on Unix, TerminateProcess on Windows)
-        if let Err(kill_err) = process.kill() {
-            // Log the error with PID at Error level so users can manually kill the process
-            error!(
-                "Failed to kill Sigil gateway process (PID {}): {}. Process may be orphaned. Manual cleanup required: kill {}",
-                pid, kill_err, pid
-            );
-            return Err(SidecarError::KillFailed(kill_err));
+        Err(current) => {
+            return Err(SidecarError::InvalidState {
+                action: "stop",
+                phase: sidecar_phase::name(current),
+            });
         }
-        info!("Sigil gateway (pid {}) terminated", pid);
     }
 
-    Ok(())
+    // From here on, phase == Stopping. Always transition to Stopped on exit.
+    let result = (|| -> Result<(), SidecarError> {
+        let mut process_lock = state
+            .process
+            .lock()
+            .map_err(|e| SidecarError::LockPoisoned(e.to_string()))?;
+
+        if let Some(process) = process_lock.take() {
+            let pid = process.pid();
+            // Log PID at Error level before kill attempt to ensure it's available for manual cleanup if kill fails
+            error!("Attempting to terminate Sigil gateway process with PID {}", pid);
+
+            // NOTE: We intentionally hold process_lock for the entire shutdown
+            // sequence. The atomic phase prevents new starts, and the lock
+            // prevents any other code from seeing an empty process slot until
+            // we are fully done.
+
+            // Phase 1: Attempt graceful shutdown with SIGTERM (Unix only)
+            #[cfg(unix)]
+            {
+                match send_sigterm(pid) {
+                    Ok(()) => {
+                        info!(
+                            "Sent SIGTERM to gateway (pid {}), waiting for graceful exit",
+                            pid
+                        );
+
+                        let deadline = Instant::now() + GRACEFUL_SHUTDOWN_TIMEOUT;
+                        while Instant::now() < deadline {
+                            if !is_process_alive(pid) {
+                                info!("Gateway (pid {}) exited gracefully after SIGTERM", pid);
+                                return Ok(());
+                            }
+                            std::thread::sleep(SHUTDOWN_POLL_INTERVAL);
+                        }
+
+                        warn!(
+                            "Gateway (pid {}) did not exit within {}s after SIGTERM, sending SIGKILL",
+                            pid,
+                            GRACEFUL_SHUTDOWN_TIMEOUT.as_secs()
+                        );
+                    }
+                    Err(e) => {
+                        // ESRCH (no such process) means it already exited
+                        if e.raw_os_error() == Some(libc::ESRCH) {
+                            info!("Gateway (pid {}) already exited", pid);
+                            return Ok(());
+                        }
+                        warn!(
+                            "Failed to send SIGTERM to gateway (pid {}): {}, falling back to SIGKILL",
+                            pid, e
+                        );
+                    }
+                }
+            }
+
+            // Phase 2: Forceful shutdown (SIGKILL on Unix, TerminateProcess on Windows)
+            if let Err(kill_err) = process.kill() {
+                // Log the error with PID at Error level so users can manually kill the process
+                error!(
+                    "Failed to kill Sigil gateway process (PID {}): {}. Process may be orphaned. Manual cleanup required: kill {}",
+                    pid, kill_err, pid
+                );
+                return Err(SidecarError::KillFailed(kill_err));
+            }
+            info!("Sigil gateway (pid {}) terminated", pid);
+        }
+
+        Ok(())
+    })();
+
+    // Always transition to Stopped, even on error. A failed kill leaves
+    // the process potentially orphaned, but the slot is empty and we must
+    // allow future start attempts.
+    state.phase.store(sidecar_phase::STOPPED, Ordering::SeqCst);
+
+    result
 }
 
 /// Restart the Sigil gateway sidecar process
