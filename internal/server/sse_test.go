@@ -1426,3 +1426,79 @@ func TestSSE_DrainRaceCondition_BurstyPattern(t *testing.T) {
 	}
 }
 
+// TestSSEStream_EventAccumulationOverflow verifies that the maxSSEEvents limit
+// prevents unbounded memory growth from malicious or buggy StreamHandlers (sigil-kqd.124).
+// This is a critical DoS protection: a malicious plugin could send millions of events
+// to exhaust server memory.
+func TestSSEStream_EventAccumulationOverflow(t *testing.T) {
+	// Create a handler that sends exactly maxSSEEvents + 1 events.
+	// This should trigger the overflow protection.
+	const maxSSEEvents = 10000
+	excessEvents := maxSSEEvents + 1
+
+	events := make([]server.SSEEvent, excessEvents)
+	for i := range events {
+		events[i] = server.SSEEvent{
+			Event: "text_delta",
+			Data:  fmt.Sprintf(`{"text":"event %d"}`, i),
+		}
+	}
+
+	handler := &mockStreamHandler{events: events}
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content": "overflow test", "workspace_id": "test", "session_id": "sess-overflow"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No Accept: text/event-stream — use JSON response with overflow protection.
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Parse the JSON response.
+	type jsonEvent struct {
+		Event string          `json:"event"`
+		Data  json.RawMessage `json:"data"`
+	}
+	var resp struct {
+		Events []jsonEvent `json:"events"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err, "response must be valid JSON")
+
+	// Count data events vs error events.
+	var dataEventCount int
+	var errorEventCount int
+
+	for _, event := range resp.Events {
+		if event.Event == "error" {
+			errorEventCount++
+
+			// Verify the error event contains the correct error message.
+			var errPayload struct {
+				Error   string `json:"error"`
+				Message string `json:"message"`
+			}
+			unmarshalErr := json.Unmarshal(event.Data, &errPayload)
+			require.NoError(t, unmarshalErr, "error event payload should be valid JSON")
+
+			assert.Equal(t, "stream_overflow", errPayload.Error, "error type should be stream_overflow")
+			assert.Contains(t, errPayload.Message, "maximum limit", "error message should mention maximum limit")
+		} else {
+			dataEventCount++
+		}
+	}
+
+	// Verify exactly maxSSEEvents data events were sent (the limit).
+	assert.Equal(t, maxSSEEvents, dataEventCount, "should cap at maxSSEEvents data events")
+
+	// Verify exactly 1 error event was emitted.
+	assert.Equal(t, 1, errorEventCount, "should emit exactly one overflow error event")
+
+	// Total events should be maxSSEEvents (data) + 1 (error) = 10,001.
+	assert.Equal(t, maxSSEEvents+1, len(resp.Events), "total events should be maxSSEEvents + 1 error event")
+}
