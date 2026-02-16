@@ -358,6 +358,30 @@ func TestGateway_CloseDoesNotPanic(t *testing.T) {
 	// This test confirms Close does not panic on a properly initialized Gateway.
 }
 
+// Test that Gateway.Close properly closes the ProviderRegistry
+func TestGateway_CloseClosesProviderRegistry(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {APIKey: "test-key"},
+	}
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+
+	// Verify the provider is registered before close.
+	_, err = gw.ProviderRegistry.Get("anthropic")
+	require.NoError(t, err, "provider should be registered before close")
+
+	// Close the gateway, which should close the ProviderRegistry.
+	err = gw.Close()
+	assert.NoError(t, err, "gateway.Close should not error")
+
+	// After close, the ProviderRegistry should still contain the provider
+	// (Close doesn't unregister providers, it just cleans up their resources).
+	// The key indicator is that no panic occurs during the close operation.
+}
+
 func TestWireGateway_RateLimitConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()

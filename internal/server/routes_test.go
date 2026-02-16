@@ -1077,3 +1077,57 @@ func TestRoutes_AdminEndpoints_AuthEnabled_NoToken_Returns401(t *testing.T) {
 		})
 	}
 }
+
+func TestRoutes_SendMessage_ErrorEvent_Truncated(t *testing.T) {
+	// This test verifies that unbounded error messages are truncated to 200 chars.
+	// A malicious/buggy stream handler could produce multi-MB error responses.
+	longMessage := strings.Repeat("x", 500) // 500 chars, exceeds 200-char limit
+	events := []server.SSEEvent{
+		{Event: "error", Data: `{"error":"provider_error","message":"` + longMessage + `"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	// Should produce a 502 error due to the error event.
+	assert.GreaterOrEqual(t, w.Code, 500, "error event must produce a server error status")
+
+	// Response body should contain truncated error message (200 chars + "...")
+	responseBody := w.Body.String()
+	assert.True(t, len(responseBody) < 500, "response should not contain unbounded data (len=%d)", len(responseBody))
+
+	// Verify the message is truncated with "..." suffix
+	assert.Contains(t, responseBody, "...")
+}
+
+func TestRoutes_SendMessage_UnparsableErrorEvent_Truncated(t *testing.T) {
+	// This test verifies that when JSON parsing fails in extractErrorMessage,
+	// the raw data is truncated to 200 chars before returning.
+	longInvalidData := strings.Repeat("y", 500) // 500 chars of invalid JSON
+	events := []server.SSEEvent{
+		{Event: "error", Data: longInvalidData},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	// Should produce a 502 error due to the error event.
+	assert.GreaterOrEqual(t, w.Code, 500, "error event must produce a server error status")
+
+	// Response body should be bounded (not contain the full 500-char payload)
+	responseBody := w.Body.String()
+	assert.True(t, len(responseBody) < 500, "response should not contain unbounded data from invalid JSON (len=%d)", len(responseBody))
+
+	// Verify the message is truncated with "..." suffix
+	assert.Contains(t, responseBody, "...")
+}

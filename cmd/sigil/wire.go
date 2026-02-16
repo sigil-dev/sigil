@@ -150,6 +150,11 @@ func (gw *Gateway) Start(ctx context.Context) error {
 // Close releases all resources held by the gateway.
 func (gw *Gateway) Close() error {
 	var errs []error
+	if gw.ProviderRegistry != nil {
+		if err := gw.ProviderRegistry.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if gw.WorkspaceManager != nil {
 		if err := gw.WorkspaceManager.Close(); err != nil {
 			errs = append(errs, err)

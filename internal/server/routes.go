@@ -424,6 +424,8 @@ func extractSessionID(data string, fallback string) string {
 }
 
 // extractErrorMessage parses an error event payload and returns a human-readable message.
+// The returned message is bounded to 200 characters to prevent unbounded data leaks
+// from malicious/buggy stream handlers.
 func extractErrorMessage(data string) string {
 	var payload struct {
 		Error   string `json:"error"`
@@ -435,13 +437,14 @@ func extractErrorMessage(data string) string {
 			"raw_data", truncated,
 			"error", err,
 		)
-		return data
+		// Return raw data truncated to 200 characters
+		return truncateForLogging(data, 200)
 	}
 	if payload.Message != "" {
-		return payload.Message
+		return truncateForLogging(payload.Message, 200)
 	}
 	if payload.Error != "" {
-		return payload.Error
+		return truncateForLogging(payload.Error, 200)
 	}
 	return "unknown stream error"
 }

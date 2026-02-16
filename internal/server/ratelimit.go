@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -84,14 +85,16 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 					for ip, v := range visitors {
 						entries = append(entries, entry{ip: ip, lastSeen: v.lastSeen})
 					}
-					// Sort by lastSeen ascending (oldest first)
-					for i := 0; i < len(entries)-1; i++ {
-						for j := i + 1; j < len(entries); j++ {
-							if entries[i].lastSeen.After(entries[j].lastSeen) {
-								entries[i], entries[j] = entries[j], entries[i]
-							}
+					// Sort by lastSeen ascending (oldest first) using slices.SortFunc
+					slices.SortFunc(entries, func(a, b entry) int {
+						if a.lastSeen.Before(b.lastSeen) {
+							return -1
 						}
-					}
+						if a.lastSeen.After(b.lastSeen) {
+							return 1
+						}
+						return 0
+					})
 					// Evict oldest entries until we're under the cap
 					toEvict := len(visitors) - cfg.MaxVisitors
 					for i := 0; i < toEvict && i < len(entries); i++ {
