@@ -82,7 +82,12 @@ func TestServer_OpenAPISpecIncludesChatStream(t *testing.T) {
 }
 
 func TestServer_CORSHeaders(t *testing.T) {
-	srv := newTestServer(t)
+	srv, err := server.New(server.Config{
+		ListenAddr:  "127.0.0.1:0",
+		CORSOrigins: []string{"http://localhost:5173"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
@@ -146,8 +151,8 @@ func TestServer_CORSOrigins_FromConfig(t *testing.T) {
 	assert.Equal(t, "https://app.example.com", w.Header().Get("Access-Control-Allow-Origin"))
 }
 
-func TestServer_CORSOrigins_DefaultsToLocalhost(t *testing.T) {
-	srv := newTestServer(t)
+func TestServer_CORSOrigins_NoDefault_RejectsAll(t *testing.T) {
+	srv := newTestServer(t) // no CORSOrigins configured
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
@@ -155,7 +160,7 @@ func TestServer_CORSOrigins_DefaultsToLocalhost(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	assert.Equal(t, "http://localhost:5173", w.Header().Get("Access-Control-Allow-Origin"))
+	assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"))
 }
 
 func TestServer_CORSOrigins_WildcardRejected(t *testing.T) {

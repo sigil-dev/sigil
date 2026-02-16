@@ -43,13 +43,12 @@ func main() {
 func generateSpec() ([]byte, error) {
 	srv, err := server.New(server.Config{
 		ListenAddr: "127.0.0.1:0",
+		// Register routes with nil services — we only need the spec, not working handlers.
+		Services: &server.Services{},
 	})
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
-
-	// Register routes with nil services — we only need the spec, not working handlers.
-	srv.RegisterServices(&server.Services{})
 
 	return json.MarshalIndent(srv.API().OpenAPI(), "", "  ")
 }

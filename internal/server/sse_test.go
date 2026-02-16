@@ -35,11 +35,10 @@ func (m *mockStreamHandler) HandleStream(_ context.Context, _ server.ChatStreamR
 func newTestSSEServer(t *testing.T, events []server.SSEEvent) *server.Server {
 	t.Helper()
 	srv, err := server.New(server.Config{
-		ListenAddr: "127.0.0.1:0",
+		ListenAddr:    "127.0.0.1:0",
+		StreamHandler: &mockStreamHandler{events: events},
 	})
 	require.NoError(t, err)
-
-	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
 	return srv
 }
 
@@ -240,9 +239,8 @@ func TestSSE_DrainOnWriteError(t *testing.T) {
 		eventCount: 50, // well above the 16-capacity channel buffer
 		done:       make(chan struct{}),
 	}
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
-	srv.RegisterStreamHandler(handler)
 
 	body := `{"content":"hello","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -364,15 +362,17 @@ func TestSSE_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(t *testing.T) {
 		{Event: "text_delta", Data: `{"text":"Hello"}`},
 		{Event: "done", Data: `{}`},
 	}
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
+	srv, err := server.New(server.Config{
+		ListenAddr:    "127.0.0.1:0",
+		Services:      server.NewServicesForTest(
 		&mockWorkspaceService{},
 		&mockPluginService{},
 		&mockSessionService{},
 		&mockUserService{},
-	))
-	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+	),
+		StreamHandler: &mockStreamHandler{events: events},
+	})
+	require.NoError(t, err)
 
 	body := `{"content": "Hello", "workspace_id": "any-workspace-id"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -399,15 +399,15 @@ func TestSSE_WorkspaceMembership_ValidMember_Succeeds(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-	})
-	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
+		Services:       server.NewServicesForTest(
 		&mockWorkspaceService{},
 		&mockPluginService{},
 		&mockSessionService{},
 		&mockUserService{},
-	))
-	srv.RegisterStreamHandler(&mockStreamHandler{events: events})
+	),
+		StreamHandler:  &mockStreamHandler{events: events},
+	})
+	require.NoError(t, err)
 
 	// workspace "homelab" has member "user-1" (see mockWorkspaceService.Get)
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
@@ -432,15 +432,15 @@ func TestSSE_WorkspaceMembership_NonMember_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-	})
-	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
+		Services:       server.NewServicesForTest(
 		&mockWorkspaceService{},
 		&mockPluginService{},
 		&mockSessionService{},
 		&mockUserService{},
-	))
-	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
+	),
+		StreamHandler:  &mockStreamHandler{events: []server.SSEEvent{}},
+	})
+	require.NoError(t, err)
 
 	// workspace "homelab" has member "user-1", not "user-2"
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
@@ -465,15 +465,15 @@ func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-	})
-	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
+		Services:       server.NewServicesForTest(
 		&mockWorkspaceService{},
 		&mockPluginService{},
 		&mockSessionService{},
 		&mockUserService{},
-	))
-	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
+	),
+		StreamHandler:  &mockStreamHandler{events: []server.SSEEvent{}},
+	})
+	require.NoError(t, err)
 
 	body := `{"content": "Hello", "workspace_id": "nonexistent"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -497,15 +497,15 @@ func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Returns422(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-	})
-	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
+		Services:       server.NewServicesForTest(
 		&mockWorkspaceService{},
 		&mockPluginService{},
 		&mockSessionService{},
 		&mockUserService{},
-	))
-	srv.RegisterStreamHandler(&mockStreamHandler{events: []server.SSEEvent{}})
+	),
+		StreamHandler:  &mockStreamHandler{events: []server.SSEEvent{}},
+	})
+	require.NoError(t, err)
 
 	body := `{"content": "Hello", "workspace_id": ""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -530,9 +530,8 @@ func TestSSE_DrainRaceCondition(t *testing.T) {
 				eventCount: 100,
 				done:       make(chan struct{}),
 			}
-			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-			require.NoError(t, err)
-			srv.RegisterStreamHandler(handler)
+			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
+	require.NoError(t, err)
 
 			body := `{"content":"race","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -583,9 +582,8 @@ func TestSSE_DrainRaceCondition_CancelDuringRapidWrites(t *testing.T) {
 		done:       make(chan struct{}),
 	}
 
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
-	srv.RegisterStreamHandler(handler)
 
 	body := `{"content":"test rapid cancellation","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -703,9 +701,8 @@ func TestSSE_ConcurrentWriteAndDrain(t *testing.T) {
 		done:       make(chan struct{}),
 	}
 
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
-	srv.RegisterStreamHandler(handler)
 
 	body := `{"content":"concurrent race test","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -781,9 +778,8 @@ func TestSSE_DrainRaceCondition_ComprehensiveStressTest(t *testing.T) {
 				done:       make(chan struct{}),
 			}
 
-			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-			require.NoError(t, err)
-			srv.RegisterStreamHandler(handler)
+			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
+	require.NoError(t, err)
 
 			body := `{"content":"race stress test","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -816,9 +812,8 @@ func TestSSE_DrainRaceCondition_MultipleConsumers(t *testing.T) {
 				done:       make(chan struct{}),
 			}
 
-			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-			require.NoError(t, err)
-			srv.RegisterStreamHandler(handler)
+			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
+	require.NoError(t, err)
 
 			body := `{"content":"multi-consumer race","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -873,9 +868,8 @@ func TestSSE_DrainRaceCondition_BurstyPattern(t *testing.T) {
 		done:      make(chan struct{}),
 	}
 
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
-	srv.RegisterStreamHandler(handler)
 
 	body := `{"content":"bursty pattern race test","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -897,9 +891,8 @@ func TestSSE_DrainOnContextCancellation(t *testing.T) {
 		done:       make(chan struct{}),
 	}
 
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
-	srv.RegisterStreamHandler(handler)
 
 	body := `{"content":"test context cancellation","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))

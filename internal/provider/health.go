@@ -4,6 +4,7 @@
 package provider
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -25,7 +26,15 @@ type HealthTracker struct {
 const DefaultHealthCooldown = 30 * time.Second
 
 // NewHealthTracker creates a HealthTracker that starts healthy.
+// If cooldown is zero or negative, it defaults to DefaultHealthCooldown (30s).
 func NewHealthTracker(cooldown time.Duration) *HealthTracker {
+	if cooldown <= 0 {
+		slog.Warn("health tracker created with invalid cooldown, using default",
+			"provided", cooldown,
+			"default", DefaultHealthCooldown,
+		)
+		cooldown = DefaultHealthCooldown
+	}
 	return &HealthTracker{
 		healthy:  true,
 		cooldown: cooldown,

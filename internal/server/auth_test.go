@@ -73,14 +73,14 @@ func TestAuthMiddleware_MissingAuthHeader_Returns401(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: newValidatorWithToken("valid-token", "admin", "Admin", []string{"*"}),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	w := httptest.NewRecorder()
@@ -99,14 +99,14 @@ func TestAuthMiddleware_InvalidBearerFormat_Returns401(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: newValidatorWithToken("valid-token", "admin", "Admin", []string{"*"}),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	))
 
 	tests := []struct {
 		name  string
@@ -134,14 +134,14 @@ func TestAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: newValidatorWithToken("valid-token", "admin", "Admin", []string{"*"}),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
@@ -155,14 +155,14 @@ func TestAuthMiddleware_ValidToken_InjectsUser(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: newValidatorWithToken("sk-test-123", "user-1", "Sean", []string{"*"}),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	req.Header.Set("Authorization", "Bearer sk-test-123")
@@ -207,14 +207,14 @@ func TestAuthMiddleware_Disabled_WhenValidatorNil(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr: "127.0.0.1:0",
 		// No TokenValidator — auth disabled.
-	})
-	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
+		Services: server.NewServicesForTest(
 		&mockWorkspaceService{},
 		&mockPluginService{},
 		&mockSessionService{},
 		&mockUserService{},
-	))
+	),
+	})
+	require.NoError(t, err)
 
 	// Request WITHOUT auth header should pass through.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
@@ -230,14 +230,14 @@ func TestAuthMiddleware_ForbiddenToken_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: forbiddenValidator,
-	})
-	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
+		Services: server.NewServicesForTest(
 		&mockWorkspaceService{},
 		&mockPluginService{},
 		&mockSessionService{},
 		&mockUserService{},
-	))
+	),
+	})
+	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	req.Header.Set("Authorization", "Bearer revoked-token")
@@ -393,14 +393,14 @@ func TestAuthMiddleware_MalformedTokenEdgeCases(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: newValidatorWithToken("sk-valid-token-abc123", "admin", "Admin", []string{"*"}),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	))
 
 	tests := []struct {
 		name  string
@@ -443,14 +443,14 @@ func TestAuthMiddleware_MalformedBearerTokens(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: newValidatorWithToken("sk-valid-token", "admin", "Admin", []string{"*"}),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	))
 
 	tests := []struct {
 		name  string
@@ -503,14 +503,14 @@ func TestAuthMiddleware_EmptyAuthorizationHeaderValue(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: newValidatorWithToken("sk-valid-token", "admin", "Admin", []string{"*"}),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
-	srv.RegisterServices(server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	))
 
 	tests := []struct {
 		name  string

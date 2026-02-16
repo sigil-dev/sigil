@@ -988,13 +988,15 @@ func TestToolDispatcher_ResolvesPluginFromRegistry(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
+		Enforcer:       newMockEnforcer(),
 		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
 		AuditStore:     newMockAuditStore(),
 		ToolDispatcher: dispatcher,
 		ToolRegistry:   registry,
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,
@@ -1046,13 +1048,15 @@ func TestToolDispatcher_FallsBackToBuiltin(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
+		Enforcer:       newMockEnforcer(),
 		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
 		AuditStore:     newMockAuditStore(),
 		ToolDispatcher: dispatcher,
 		ToolRegistry:   registry,
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,

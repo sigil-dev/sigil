@@ -690,3 +690,59 @@ func TestAuditStore_ConcurrentAppends(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, entries, numGoroutines*numEntriesPerGoroutine)
 }
+
+// TestPairingStore_CreateIdempotency verifies INSERT OR IGNORE prevents duplicate pairings.
+// Calling Create twice with the same (channel_type, channel_id) should succeed both times
+// without creating duplicate rows, due to the UNIQUE INDEX on (channel_type, channel_id).
+func TestPairingStore_CreateIdempotency(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	gs, err := sqlite.NewGatewayStore(testDBPath(t, "gw-pairing-idempotent"))
+	require.NoError(t, err)
+	defer func() { _ = gs.Close() }()
+
+	// Create prerequisite user
+	now := time.Now().Truncate(time.Millisecond)
+	require.NoError(t, gs.Users().Create(ctx, &store.User{
+		ID: "usr-idem", Name: "IdempotentUser", Role: "user",
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	// Create first pairing
+	pairing1 := &store.Pairing{
+		ID:          "pair-idem-1",
+		UserID:      "usr-idem",
+		ChannelType: "telegram",
+		ChannelID:   "tg-idem-chan",
+		WorkspaceID: "ws-1",
+		Status:      store.PairingStatusActive,
+		CreatedAt:   now,
+	}
+	err = gs.Pairings().Create(ctx, pairing1)
+	require.NoError(t, err, "first create should succeed")
+
+	// Create second pairing with same (channel_type, channel_id) but different ID
+	// INSERT OR IGNORE should silently ignore the duplicate without error
+	pairing2 := &store.Pairing{
+		ID:          "pair-idem-2", // different ID
+		UserID:      "usr-idem",
+		ChannelType: "telegram",
+		ChannelID:   "tg-idem-chan", // same channel
+		WorkspaceID: "ws-1",
+		Status:      store.PairingStatusActive,
+		CreatedAt:   now.Add(time.Second),
+	}
+	err = gs.Pairings().Create(ctx, pairing2)
+	require.NoError(t, err, "second create with same channel should succeed (INSERT OR IGNORE)")
+
+	// Verify only ONE pairing exists
+	retrieved, err := gs.Pairings().GetByChannel(ctx, "telegram", "tg-idem-chan")
+	require.NoError(t, err)
+	assert.Equal(t, "pair-idem-1", retrieved.ID, "should retrieve the first pairing, not the second")
+
+	// Verify by listing user pairings - should only have 1
+	userPairings, err := gs.Pairings().GetByUser(ctx, "usr-idem")
+	require.NoError(t, err)
+	assert.Len(t, userPairings, 1, "should have exactly 1 pairing, not 2 (no duplicate)")
+}

@@ -35,6 +35,44 @@ function safeJsonParse(data: string): { success: true; data: unknown } | { succe
 }
 
 /**
+ * Generic helper to parse JSON and validate against a Zod schema.
+ * Returns either the validated data or a parse_error event.
+ */
+function parseAndValidate<T>(
+  data: string,
+  schema: z.ZodSchema<T>,
+  eventType: string,
+): { success: true; data: T } | { success: false; error: ParsedSSEEvent } {
+  const parseResult = safeJsonParse(data);
+  if (!parseResult.success) {
+    return {
+      success: false,
+      error: {
+        type: "parse_error",
+        eventType,
+        rawData: data,
+        error: parseResult.error,
+      },
+    };
+  }
+
+  const result = schema.safeParse(parseResult.data);
+  if (!result.success) {
+    return {
+      success: false,
+      error: {
+        type: "parse_error",
+        eventType,
+        rawData: data,
+        error: result.error.message,
+      },
+    };
+  }
+
+  return { success: true, data: result.data };
+}
+
+/**
  * Parse the data payload for a single SSE event based on its type.
  * The server emits JSON-wrapped payloads for text_delta and session_id.
  * Uses Zod for runtime validation to ensure payload shape correctness.
@@ -42,88 +80,28 @@ function safeJsonParse(data: string): { success: true; data: unknown } | { succe
 export function parseSSEEventData(eventType: string, data: string): ParsedSSEEvent {
   switch (eventType) {
     case "text_delta": {
-      const parseResult = safeJsonParse(data);
-      if (!parseResult.success) {
-        return {
-          type: "parse_error",
-          eventType,
-          rawData: data,
-          error: parseResult.error,
-        };
-      }
-      const result = TextDeltaPayload.safeParse(parseResult.data);
-      if (!result.success) {
-        return {
-          type: "parse_error",
-          eventType,
-          rawData: data,
-          error: result.error.message,
-        };
-      }
-      return { type: "text_delta", text: result.data.text };
+      const result = parseAndValidate(data, TextDeltaPayload, eventType);
+      return result.success
+        ? { type: "text_delta", text: result.data.text }
+        : result.error;
     }
     case "session_id": {
-      const parseResult = safeJsonParse(data);
-      if (!parseResult.success) {
-        return {
-          type: "parse_error",
-          eventType,
-          rawData: data,
-          error: parseResult.error,
-        };
-      }
-      const result = SessionIdPayload.safeParse(parseResult.data);
-      if (!result.success) {
-        return {
-          type: "parse_error",
-          eventType,
-          rawData: data,
-          error: result.error.message,
-        };
-      }
-      return { type: "session_id", sessionId: result.data.session_id };
+      const result = parseAndValidate(data, SessionIdPayload, eventType);
+      return result.success
+        ? { type: "session_id", sessionId: result.data.session_id }
+        : result.error;
     }
     case "tool_call": {
-      const parseResult = safeJsonParse(data);
-      if (!parseResult.success) {
-        return {
-          type: "parse_error",
-          eventType,
-          rawData: data,
-          error: parseResult.error,
-        };
-      }
-      const result = ToolCallPayload.safeParse(parseResult.data);
-      if (!result.success) {
-        return {
-          type: "parse_error",
-          eventType,
-          rawData: data,
-          error: result.error.message,
-        };
-      }
-      return { type: "tool_call", name: result.data.name, input: result.data.input };
+      const result = parseAndValidate(data, ToolCallPayload, eventType);
+      return result.success
+        ? { type: "tool_call", name: result.data.name, input: result.data.input }
+        : result.error;
     }
     case "tool_result": {
-      const parseResult = safeJsonParse(data);
-      if (!parseResult.success) {
-        return {
-          type: "parse_error",
-          eventType,
-          rawData: data,
-          error: parseResult.error,
-        };
-      }
-      const result = ToolResultPayload.safeParse(parseResult.data);
-      if (!result.success) {
-        return {
-          type: "parse_error",
-          eventType,
-          rawData: data,
-          error: result.error.message,
-        };
-      }
-      return { type: "tool_result", name: result.data.name, result: result.data.result };
+      const result = parseAndValidate(data, ToolResultPayload, eventType);
+      return result.success
+        ? { type: "tool_result", name: result.data.name, result: result.data.result }
+        : result.error;
     }
     case "error": {
       // Server may send JSON payloads like {"error":"...","message":"..."}.

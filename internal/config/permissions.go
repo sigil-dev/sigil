@@ -15,8 +15,6 @@ import (
 // permissions (group- or world-readable) and logs a warning if so.
 // This is a best-effort check — it does not fail startup, but alerts the
 // operator that sensitive tokens may be exposed to other users on the system.
-//
-// On non-Unix platforms (Windows), this is a no-op.
 func WarnInsecurePermissions(path string) {
 	if path == "" {
 		// No config file loaded (using defaults only). Nothing to check.

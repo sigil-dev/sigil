@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -45,11 +46,6 @@ type ChatStreamRequest struct {
 // Implementations must close the channel when done.
 type StreamHandler interface {
 	HandleStream(ctx context.Context, req ChatStreamRequest, events chan<- SSEEvent)
-}
-
-// RegisterStreamHandler sets the handler used by the SSE endpoint.
-func (s *Server) RegisterStreamHandler(h StreamHandler) {
-	s.streamHandler = h
 }
 
 // --- Typed SSE event data for huma OpenAPI schema ---
@@ -173,10 +169,7 @@ func (s *Server) registerSSERoute() {
 	huma.Register(s.api, op, s.handleChatStream)
 }
 
-// buildSSEResponseSchema adds the SSE event schema to the operation's 200
-// response, documenting each event type as a oneOf entry. This mirrors what
-// huma's sse.Register does internally but allows us to use huma.Register
-// directly (which supports returning errors before streaming starts).
+// buildSSEResponseSchema adds the SSE event schema to the operation's 200 response.
 func buildSSEResponseSchema(api huma.API, op *huma.Operation) {
 	if op.Responses == nil {
 		op.Responses = map[string]*huma.Response{}
@@ -269,7 +262,7 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 			go s.streamHandler.HandleStream(ctx.Context(), input.Body, ch)
 
 			for event := range ch {
-				if !validateEventType(event.Event) {
+				if !isValidEventType(event.Event) {
 					slog.Warn("sse: skipping event with invalid type containing newlines", "event_type", event.Event)
 					continue
 				}
@@ -277,16 +270,12 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 				data := ensureValidJSON(event.Data)
 
 				// Write event type.
-				if _, err := fmt.Fprintf(bw, "event: %s\n", event.Event); err != nil {
-					slog.Warn("sse: write error", "error", err)
-					drainSSEChannel(ch)
+				if err := writeSSEField(bw, ch, "event: %s\n", event.Event); err != nil {
 					return
 				}
 
 				// Write data line: "data: " + JSON + "\n" (json.Encode adds \n).
-				if _, err := bw.Write([]byte("data: ")); err != nil {
-					slog.Warn("sse: write error", "error", err)
-					drainSSEChannel(ch)
+				if err := writeSSEField(bw, ch, "data: "); err != nil {
 					return
 				}
 				if err := encoder.Encode(json.RawMessage(data)); err != nil {
@@ -296,9 +285,7 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 				}
 
 				// Empty line terminates the event.
-				if _, err := bw.Write([]byte("\n")); err != nil {
-					slog.Warn("sse: write error", "error", err)
-					drainSSEChannel(ch)
+				if err := writeSSEField(bw, ch, "\n"); err != nil {
 					return
 				}
 
@@ -326,10 +313,9 @@ func ensureValidJSON(data string) json.RawMessage {
 	return wrapped
 }
 
-
-// validateEventType checks if an SSE event type contains invalid newline characters.
+// isValidEventType checks if an SSE event type is valid (no newline characters).
 // Returns true if the event type is valid (no newlines).
-func validateEventType(eventType SSEEventType) bool {
+func isValidEventType(eventType SSEEventType) bool {
 	return !strings.ContainsAny(string(eventType), "\r\n")
 }
 
@@ -341,4 +327,16 @@ func drainSSEChannel(ch <-chan SSEEvent) {
 		for range ch {
 		}
 	}()
+}
+
+// writeSSEField writes a formatted SSE field and drains the channel on error.
+// Returns the error so the caller can decide whether to continue.
+func writeSSEField(w io.Writer, ch <-chan SSEEvent, format string, args ...any) error {
+	_, err := fmt.Fprintf(w, format, args...)
+	if err != nil {
+		slog.Warn("sse: write error", "error", err)
+		drainSSEChannel(ch)
+		return err
+	}
+	return nil
 }

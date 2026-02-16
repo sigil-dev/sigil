@@ -500,15 +500,15 @@ func TestConfigTokenValidator_MalformedTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name            string
-		token           string
-		wantErr         bool
-		shouldNotPanic  bool
-		description     string
+		name           string
+		token          string
+		wantErr        bool
+		shouldNotPanic bool
+		description    string
 	}{
 		{
 			name:           "truncated token - partial base64",
-			token:          "dGVzdC10b2tlbi1hYmM=",  // valid base64 fragment
+			token:          "dGVzdC10b2tlbi1hYmM=", // valid base64 fragment
 			wantErr:        true,
 			shouldNotPanic: true,
 			description:    "Partial base64 should be rejected gracefully",
@@ -664,6 +664,61 @@ func TestConfigTokenValidator_ConstantTimeIteration(t *testing.T) {
 		timings[0], timings[len(timings)-1], firstLast, avg)
 }
 
+// Test that hash-based lookup maps tokens consistently to the correct user.
+// This verifies that the same token always produces the same hash and maps to the same user.
+func TestConfigTokenValidator_HashBasedLookupConsistency(t *testing.T) {
+	validator, err := newConfigTokenValidator([]config.TokenConfig{
+		{Token: "token-alice", UserID: "user-alice", Name: "Alice", Permissions: []string{"*"}},
+		{Token: "token-bob", UserID: "user-bob", Name: "Bob", Permissions: []string{"read.*"}},
+		{Token: "token-charlie", UserID: "user-charlie", Name: "Charlie", Permissions: []string{"write.*"}},
+	})
+	require.NoError(t, err)
+
+	// Test consistency: same token should always map to the same user
+	for i := 0; i < 10; i++ {
+		user, err := validator.ValidateToken(context.Background(), "token-alice")
+		require.NoError(t, err)
+		require.NotNil(t, user)
+		assert.Equal(t, "user-alice", user.ID(), "iteration %d: token-alice should always map to user-alice", i)
+	}
+
+	// Test that different tokens map to different users
+	userAlice, err := validator.ValidateToken(context.Background(), "token-alice")
+	require.NoError(t, err)
+	require.NotNil(t, userAlice)
+
+	userBob, err := validator.ValidateToken(context.Background(), "token-bob")
+	require.NoError(t, err)
+	require.NotNil(t, userBob)
+
+	userCharlie, err := validator.ValidateToken(context.Background(), "token-charlie")
+	require.NoError(t, err)
+	require.NotNil(t, userCharlie)
+
+	// Verify each token maps to a different user
+	assert.NotEqual(t, userAlice.ID(), userBob.ID(), "alice and bob should have different IDs")
+	assert.NotEqual(t, userAlice.ID(), userCharlie.ID(), "alice and charlie should have different IDs")
+	assert.NotEqual(t, userBob.ID(), userCharlie.ID(), "bob and charlie should have different IDs")
+
+	// Verify the correct mappings
+	assert.Equal(t, "user-alice", userAlice.ID())
+	assert.Equal(t, "user-bob", userBob.ID())
+	assert.Equal(t, "user-charlie", userCharlie.ID())
+}
+
+// Test that newConfigTokenValidator returns error when all tokens have invalid configs.
+// This is the error path where all tokens fail NewAuthenticatedUser validation.
+func TestConfigTokenValidator_AllTokensInvalidConfig_ReturnsError(t *testing.T) {
+	// All tokens have empty UserID which causes NewAuthenticatedUser to fail
+	_, err := newConfigTokenValidator([]config.TokenConfig{
+		{Token: "token-1", UserID: "", Name: "User 1", Permissions: []string{"*"}},
+		{Token: "token-2", UserID: "", Name: "User 2", Permissions: []string{"*"}},
+		{Token: "token-3", UserID: "", Name: "User 3", Permissions: []string{"*"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "all configured auth tokens failed validation")
+}
+
 // stubProvider is a minimal Provider implementation for negative test cases.
 type stubProvider struct {
 	name string
@@ -675,6 +730,7 @@ func (s *stubProvider) ListModels(_ context.Context) ([]provider.ModelInfo, erro
 func (s *stubProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	return nil, nil
 }
+
 func (s *stubProvider) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Provider: s.name, Available: true}, nil
 }

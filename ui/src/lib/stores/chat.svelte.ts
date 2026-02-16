@@ -50,6 +50,25 @@ function generateMessageId(): string {
 }
 
 /**
+ * Extract error detail from response text, handling both JSON and non-JSON responses.
+ */
+function extractErrorDetail(text: string, status: number): string {
+  try {
+    const errJson = JSON.parse(text) as { detail?: string };
+    if (errJson.detail !== undefined) return errJson.detail;
+  } catch {
+    logger.warn("Server returned non-JSON error response", {
+      status,
+      textPreview: text.substring(0, 200),
+    });
+    if (text.trim().startsWith("<")) {
+      return `Server error (HTTP ${status})`;
+    }
+  }
+  return text;
+}
+
+/**
  * Chat store using Svelte 5 runes for reactivity.
  * Manages messages, session state, SSE streaming, and sidebar data.
  */
@@ -111,6 +130,9 @@ export class ChatStore {
 
   /** Select an existing session */
   selectSession(workspaceId: string, sessionId: string): void {
+    if (!workspaceId || workspaceId.trim() === "") {
+      throw new Error("workspaceId cannot be empty");
+    }
     this.workspaceId = workspaceId;
     this.sessionId = sessionId;
     this.messages = [];
@@ -119,6 +141,9 @@ export class ChatStore {
 
   /** Start a new session in a workspace */
   newSession(workspaceId: string): void {
+    if (!workspaceId || workspaceId.trim() === "") {
+      throw new Error("workspaceId cannot be empty");
+    }
     this.workspaceId = workspaceId;
     this.sessionId = null;
     this.messages = [];
@@ -172,7 +197,8 @@ export class ChatStore {
       if (this.sessionId) body.session_id = this.sessionId;
 
       // Note: Using raw fetch for SSE streaming endpoint instead of typed client.
-      // openapi-fetch does not support ReadableStream responses; revisit when it does.
+      // openapi-fetch supports streaming via parseAs: "stream" (v0.9.4+), but raw
+      // fetch is simpler for direct SSE event parsing from response.body.
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
@@ -191,21 +217,26 @@ export class ChatStore {
 
       if (!response.ok) {
         const errText = await response.text();
-        let detail = errText;
-        try {
-          const errJson = JSON.parse(errText) as { detail?: string };
-          if (errJson.detail !== undefined) detail = errJson.detail;
-        } catch {
-          logger.warn("Server returned non-JSON error response", {
-            status: response.status,
-            contentType: response.headers.get("Content-Type"),
-            textPreview: errText.substring(0, 200),
-          });
-          if (errText.trim().startsWith("<")) {
-            detail = `Server error (HTTP ${response.status})`;
-          }
+        const detail = extractErrorDetail(errText, response.status);
+
+        // Handle specific HTTP error codes
+        switch (response.status) {
+          case 401:
+            this.error = "Authentication required — please log in";
+            this.authToken = null;
+            break;
+          case 403:
+            this.error = "Access denied — insufficient permissions for this workspace";
+            break;
+          case 429:
+            this.error = "Rate limit exceeded — please wait and try again";
+            break;
+          case 503:
+            this.error = "Gateway unavailable — please try again later";
+            break;
+          default:
+            this.error = `Request failed: ${response.status} — ${detail}`;
         }
-        this.error = `Request failed: ${response.status} — ${detail}`;
         this.removeMessage(assistantMessage.id);
         return;
       }

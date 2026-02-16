@@ -202,12 +202,11 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+			srv, err := server.New(server.Config{
+				ListenAddr: "127.0.0.1:0",
+				Services:   tt.services,
+			})
 			require.NoError(t, err)
-
-			if tt.services != nil {
-				srv.RegisterServices(tt.services)
-			}
 
 			ctx := context.Background()
 			if tt.user != nil {
@@ -244,17 +243,18 @@ func TestCheckWorkspaceMembership_ErrorObservability(t *testing.T) {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
-	require.NoError(t, err)
-
-	srv.RegisterServices(server.NewServicesForTest(
-		&stubWorkspaceService{
-			getFunc: func(_ context.Context, _ string) (*server.WorkspaceDetail, error) {
-				return nil, fmt.Errorf("database connection lost")
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0",
+		Services: server.NewServicesForTest(
+			&stubWorkspaceService{
+				getFunc: func(_ context.Context, _ string) (*server.WorkspaceDetail, error) {
+					return nil, fmt.Errorf("database connection lost")
+				},
 			},
-		},
-		&stubPluginService{}, &stubSessionService{}, &stubUserService{},
-	))
+			&stubPluginService{}, &stubSessionService{}, &stubUserService{},
+		),
+	})
+	require.NoError(t, err)
 
 	user := mustNewAuthenticatedUser("user-1", "Sean", nil)
 	ctx := server.ContextWithUser(context.Background(), user)

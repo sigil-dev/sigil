@@ -26,8 +26,8 @@ type RateLimitConfig struct {
 	MaxVisitors int
 }
 
-// Validate checks that the RateLimitConfig is valid.
-func (c RateLimitConfig) Validate() error {
+// Validate checks that the RateLimitConfig is valid and applies defaults.
+func (c *RateLimitConfig) Validate() error {
 	if c.RequestsPerSecond > 0 && c.Burst <= 0 {
 		return sigilerr.Errorf(sigilerr.CodeServerConfigInvalid,
 			"rate limit burst must be positive when rate is set (got burst=%d, rate=%g)",
@@ -42,6 +42,10 @@ func (c RateLimitConfig) Validate() error {
 		return sigilerr.Errorf(sigilerr.CodeServerConfigInvalid,
 			"rate limit max visitors must not be negative (got %d)",
 			c.MaxVisitors)
+	}
+	// Apply default MaxVisitors if not set
+	if c.MaxVisitors == 0 {
+		c.MaxVisitors = 10000
 	}
 	return nil
 }
@@ -68,24 +72,25 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 			case <-ticker.C:
 				mu.Lock()
 				now := time.Now()
-				// First pass: remove stale entries (idle > 10 minutes)
-				for ip, v := range visitors {
-					if now.Sub(v.lastSeen) > 10*time.Minute {
-						delete(visitors, ip)
-					}
+				const staleThreshold = 10 * time.Minute
+
+				// Build sorted list of entries while removing stale ones in a single pass.
+				type entry struct {
+					ip       string
+					lastSeen time.Time
 				}
-				// Second pass: enforce MaxVisitors cap by evicting oldest entries
-				if cfg.MaxVisitors > 0 && len(visitors) > cfg.MaxVisitors {
-					// Collect all entries with their lastSeen times
-					type entry struct {
-						ip       string
-						lastSeen time.Time
-					}
-					entries := make([]entry, 0, len(visitors))
-					for ip, v := range visitors {
+				entries := make([]entry, 0, len(visitors))
+				for ip, v := range visitors {
+					if now.Sub(v.lastSeen) > staleThreshold {
+						delete(visitors, ip)
+					} else {
 						entries = append(entries, entry{ip: ip, lastSeen: v.lastSeen})
 					}
-					// Sort by lastSeen ascending (oldest first) using slices.SortFunc
+				}
+
+				// Enforce MaxVisitors cap by evicting oldest remaining entries if needed.
+				if cfg.MaxVisitors > 0 && len(entries) > cfg.MaxVisitors {
+					// Sort by lastSeen ascending (oldest first)
 					slices.SortFunc(entries, func(a, b entry) int {
 						if a.lastSeen.Before(b.lastSeen) {
 							return -1
@@ -96,8 +101,8 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 						return 0
 					})
 					// Evict oldest entries until we're under the cap
-					toEvict := len(visitors) - cfg.MaxVisitors
-					for i := 0; i < toEvict && i < len(entries); i++ {
+					toEvict := len(entries) - cfg.MaxVisitors
+					for i := 0; i < toEvict; i++ {
 						delete(visitors, entries[i].ip)
 					}
 					slog.Warn("rate limiter visitor map cap enforced",

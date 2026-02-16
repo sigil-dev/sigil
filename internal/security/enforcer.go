@@ -111,7 +111,8 @@ func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
 		return e.deny(ctx, req, "user_permission_missing", pluginAllow, pluginDeny, workspaceAllow, userAllow)
 	}
 
-	// Audit logging is best-effort — allowed decisions still succeed if audit fails.
+	// Audit logging is best-effort to prevent cascading failures from a flaky audit backend.
+	// In compliance-critical environments, consider making this configurable (fail-closed).
 	if err := e.auditDecision(ctx, req, "allowed", "ok", pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
 		slog.Warn("audit log failure on allowed decision (best-effort, not blocking)",
 			"plugin", req.Plugin,
@@ -140,7 +141,8 @@ func (e *Enforcer) deny(
 		reason,
 	)
 
-	// Audit logging is best-effort — denied decisions still return the denial.
+	// Audit logging is best-effort to prevent cascading failures from a flaky audit backend.
+	// In compliance-critical environments, consider making this configurable (fail-closed).
 	if err := e.auditDecision(ctx, req, "denied", reason, pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
 		slog.Warn("audit log failure on denied decision (best-effort, not blocking)",
 			"plugin", req.Plugin,

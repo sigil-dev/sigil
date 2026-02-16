@@ -98,7 +98,18 @@ type Loop struct {
 }
 
 // NewLoop creates a Loop with the given dependencies.
-func NewLoop(cfg LoopConfig) *Loop {
+// Returns an error if required dependencies are nil.
+func NewLoop(cfg LoopConfig) (*Loop, error) {
+	if cfg.SessionManager == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "SessionManager is required")
+	}
+	if cfg.Enforcer == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Enforcer is required")
+	}
+	if cfg.ProviderRouter == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ProviderRouter is required")
+	}
+
 	maxCalls := cfg.MaxToolCallsPerTurn
 	if maxCalls <= 0 {
 		maxCalls = defaultMaxToolCallsPerTurn
@@ -113,7 +124,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		toolRegistry:        cfg.ToolRegistry,
 		maxToolCallsPerTurn: maxCalls,
 		hooks:               cfg.Hooks,
-	}
+	}, nil
 }
 
 // ProcessMessage executes the 6-step agent pipeline:
@@ -349,7 +360,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 	budget, err := provider.NewBudget(
 		session.TokenBudget.MaxPerSession,
 		session.TokenBudget.UsedSession,
-		0, 0, 0, 0, // USD budgets not yet tracked
+		0, 0, 0, 0, // cents budgets not yet tracked
 	)
 	if err != nil {
 		return nil, sigilerr.Wrap(err, sigilerr.CodeAgentLoopInvalidInput, "invalid budget")

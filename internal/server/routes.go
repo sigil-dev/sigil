@@ -13,12 +13,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// RegisterServices sets the service dependencies and registers REST routes.
-func (s *Server) RegisterServices(svc *Services) {
-	s.services = svc
-	s.registerRoutes()
-}
-
 func (s *Server) registerRoutes() {
 	// Workspace endpoints
 	huma.Register(s.api, huma.Operation{

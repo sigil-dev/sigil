@@ -76,10 +76,16 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	// Wire default model and failover chain from config so the agent loop
 	// can route requests without "no default provider configured" errors.
 	if cfg.Models.Default != "" {
-		provReg.SetDefault(cfg.Models.Default)
+		if err := provReg.SetDefault(cfg.Models.Default); err != nil {
+			_ = gs.Close()
+			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting default provider: %s", cfg.Models.Default)
+		}
 	}
 	if len(cfg.Models.Failover) > 0 {
-		provReg.SetFailover(cfg.Models.Failover)
+		if err := provReg.SetFailover(cfg.Models.Failover); err != nil {
+			_ = gs.Close()
+			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting failover chain")
+		}
 	}
 
 	// 5. Workspace manager.
@@ -113,23 +119,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		slog.Warn("authentication disabled: no API tokens configured — all endpoints are unauthenticated")
 	}
 
-	srv, err := server.New(server.Config{
-		ListenAddr:     cfg.Networking.Listen,
-		CORSOrigins:    cfg.Networking.CORSOrigins,
-		TokenValidator: tokenValidator,
-		BehindProxy:    cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
-		TrustedProxies: cfg.Networking.TrustedProxies,
-		EnableHSTS:     cfg.Networking.EnableHSTS,
-		RateLimit: server.RateLimitConfig{
-			RequestsPerSecond: cfg.Networking.RateLimitRPS,
-			Burst:             cfg.Networking.RateLimitBurst,
-		},
-	})
-	if err != nil {
-		_ = gs.Close()
-		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
-	}
-
 	// Wire service adapters for REST endpoints.
 	services, err := server.NewServices(
 		&workspaceServiceAdapter{cfg: cfg},
@@ -141,11 +130,27 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		_ = gs.Close()
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
 	}
-	srv.RegisterServices(services)
 
-	// Register stub stream handler so chat endpoints return a helpful
-	// message instead of 503. Will be replaced by real agent loop.
-	srv.RegisterStreamHandler(&stubStreamHandler{})
+	srv, err := server.New(server.Config{
+		ListenAddr:     cfg.Networking.Listen,
+		CORSOrigins:    cfg.Networking.CORSOrigins,
+		TokenValidator: tokenValidator,
+		BehindProxy:    cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
+		TrustedProxies: cfg.Networking.TrustedProxies,
+		EnableHSTS:     cfg.Networking.EnableHSTS,
+		RateLimit: server.RateLimitConfig{
+			RequestsPerSecond: cfg.Networking.RateLimitRPS,
+			Burst:             cfg.Networking.RateLimitBurst,
+		},
+		// Stub stream handler so chat endpoints return a helpful message instead of 503.
+		// Will be replaced by real agent loop.
+		StreamHandler: &stubStreamHandler{},
+		Services:      services,
+	})
+	if err != nil {
+		_ = gs.Close()
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
+	}
 
 	return &Gateway{
 		Server:           srv,
@@ -164,25 +169,15 @@ func (gw *Gateway) Start(ctx context.Context) error {
 
 // Close releases all resources held by the gateway.
 func (gw *Gateway) Close() error {
+	type closer interface{ Close() error }
+	closers := []closer{gw.Server, gw.ProviderRegistry, gw.WorkspaceManager, gw.GatewayStore}
+
 	var errs []error
-	if gw.Server != nil {
-		if err := gw.Server.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if gw.ProviderRegistry != nil {
-		if err := gw.ProviderRegistry.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if gw.WorkspaceManager != nil {
-		if err := gw.WorkspaceManager.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if gw.GatewayStore != nil {
-		if err := gw.GatewayStore.Close(); err != nil {
-			errs = append(errs, err)
+	for _, c := range closers {
+		if c != nil {
+			if err := c.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)

@@ -6,6 +6,8 @@ package google
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 
 	"google.golang.org/genai"
 
@@ -256,6 +258,16 @@ func (p *Provider) streamChat(
 					args, err := json.Marshal(part.FunctionCall.Args)
 					if err != nil {
 						p.health.RecordFailure()
+						// Log detailed context before returning error event
+						argsStr := fmt.Sprintf("%v", part.FunctionCall.Args)
+						if len(argsStr) > 200 {
+							argsStr = argsStr[:200] + "..."
+						}
+						slog.Error("failed to marshal tool call arguments",
+							"function", part.FunctionCall.Name,
+							"args_preview", argsStr,
+							"error", err,
+						)
 						ch <- provider.ChatEvent{
 							Type:  provider.EventTypeError,
 							Error: sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "google: marshaling tool call arguments for %q: %w", part.FunctionCall.Name, err).Error(),

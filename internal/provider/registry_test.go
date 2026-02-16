@@ -38,7 +38,7 @@ func TestRegistry_RouteDefault(t *testing.T) {
 
 	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
 
 	ctx := context.Background()
 	p, model, err := reg.Route(ctx, "", "")
@@ -55,8 +55,8 @@ func TestRegistry_RouteWorkspaceOverride(t *testing.T) {
 	reg.Register("anthropic", anthropic)
 	reg.Register("openai", openai)
 
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
-	reg.SetOverride("homelab", "openai/gpt-4.1")
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
+	require.NoError(t, reg.SetOverride("homelab", "openai/gpt-4.1"))
 
 	ctx := context.Background()
 
@@ -81,8 +81,8 @@ func TestRegistry_Failover(t *testing.T) {
 	reg.Register("anthropic", anthropic)
 	reg.Register("openai", openai)
 
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
-	reg.SetFailover([]string{"openai/gpt-4.1"})
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
+	require.NoError(t, reg.SetFailover([]string{"openai/gpt-4.1"}))
 
 	ctx := context.Background()
 	p, model, err := reg.Route(ctx, "", "")
@@ -99,8 +99,8 @@ func TestRegistry_AllProvidersDown(t *testing.T) {
 	reg.Register("anthropic", anthropic)
 	reg.Register("openai", openai)
 
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
-	reg.SetFailover([]string{"openai/gpt-4.1"})
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
+	require.NoError(t, reg.SetFailover([]string{"openai/gpt-4.1"}))
 
 	ctx := context.Background()
 	_, _, err := reg.Route(ctx, "", "")
@@ -114,7 +114,7 @@ func TestRegistry_BudgetEnforcement(t *testing.T) {
 
 	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
 
 	// Route with a budget at the limit (should fail during routing).
 	budget, err := provider.NewBudget(1000, 1000, 0, 0, 0, 0)
@@ -157,16 +157,21 @@ func TestRegistry_MaxAttempts(t *testing.T) {
 	// Empty failover chain → 1 attempt (primary only).
 	assert.Equal(t, 1, reg.MaxAttempts())
 
+	// Register providers so SetFailover validation passes.
+	reg.Register("a", &mockRegistryProvider{mockProviderBase: newMockProviderBase("a", true)})
+	reg.Register("b", &mockRegistryProvider{mockProviderBase: newMockProviderBase("b", true)})
+	reg.Register("c", &mockRegistryProvider{mockProviderBase: newMockProviderBase("c", true)})
+
 	// Set failover chain with 3 entries → 4 attempts total.
-	reg.SetFailover([]string{"a/model", "b/model", "c/model"})
+	require.NoError(t, reg.SetFailover([]string{"a/model", "b/model", "c/model"}))
 	assert.Equal(t, 4, reg.MaxAttempts())
 }
 
-func TestRegistry_BudgetEnforcement_HourlyUSD(t *testing.T) {
+func TestRegistry_BudgetEnforcement_HourlyCents(t *testing.T) {
 	reg := provider.NewRegistry()
 	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
 
 	ctx := context.Background()
 
@@ -179,7 +184,7 @@ func TestRegistry_BudgetEnforcement_HourlyUSD(t *testing.T) {
 		{
 			name: "hourly budget not exceeded",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(0, 0, 5.00, 3.00, 0, 0)
+				b, _ := provider.NewBudget(0, 0, 500, 300, 0, 0)
 				return b
 			}(),
 			wantErr: false,
@@ -187,18 +192,16 @@ func TestRegistry_BudgetEnforcement_HourlyUSD(t *testing.T) {
 		{
 			name: "hourly budget exactly met",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(0, 0, 5.00, 5.00, 0, 0)
+				b, _ := provider.NewBudget(0, 0, 500, 500, 0, 0)
 				return b
 			}(),
 			wantErr: true,
 			errCode: sigilerr.CodeProviderBudgetExceeded,
 		},
 		{
-			name: "hourly budget slightly over limit",
+			name: "hourly budget slightly under limit",
 			budget: func() *provider.Budget {
-				// Used (5.01) > Max (5.00) - fails validation, can't test routing
-				// Use a value just at limit instead to test routing behavior
-				b, _ := provider.NewBudget(0, 0, 5.00, 4.99, 0, 0)
+				b, _ := provider.NewBudget(0, 0, 500, 499, 0, 0)
 				return b
 			}(),
 			wantErr: false, // Under limit, should succeed
@@ -206,7 +209,7 @@ func TestRegistry_BudgetEnforcement_HourlyUSD(t *testing.T) {
 		{
 			name: "hourly budget zero means unlimited",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(0, 0, 0, 999.99, 0, 0)
+				b, _ := provider.NewBudget(0, 0, 0, 99999, 0, 0)
 				return b
 			}(),
 			wantErr: false,
@@ -227,11 +230,11 @@ func TestRegistry_BudgetEnforcement_HourlyUSD(t *testing.T) {
 	}
 }
 
-func TestRegistry_BudgetEnforcement_DailyUSD(t *testing.T) {
+func TestRegistry_BudgetEnforcement_DailyCents(t *testing.T) {
 	reg := provider.NewRegistry()
 	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
 
 	ctx := context.Background()
 
@@ -244,7 +247,7 @@ func TestRegistry_BudgetEnforcement_DailyUSD(t *testing.T) {
 		{
 			name: "daily budget not exceeded",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(0, 0, 0, 0, 50.00, 25.00)
+				b, _ := provider.NewBudget(0, 0, 0, 0, 5000, 2500)
 				return b
 			}(),
 			wantErr: false,
@@ -252,7 +255,7 @@ func TestRegistry_BudgetEnforcement_DailyUSD(t *testing.T) {
 		{
 			name: "daily budget exactly met",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(0, 0, 0, 0, 50.00, 50.00)
+				b, _ := provider.NewBudget(0, 0, 0, 0, 5000, 5000)
 				return b
 			}(),
 			wantErr: true,
@@ -261,7 +264,7 @@ func TestRegistry_BudgetEnforcement_DailyUSD(t *testing.T) {
 		{
 			name: "daily budget zero means unlimited",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(0, 0, 0, 0, 0, 999.99)
+				b, _ := provider.NewBudget(0, 0, 0, 0, 0, 99999)
 				return b
 			}(),
 			wantErr: false,
@@ -286,7 +289,7 @@ func TestRegistry_BudgetEnforcement_CombinedLimits(t *testing.T) {
 	reg := provider.NewRegistry()
 	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
 
 	ctx := context.Background()
 
@@ -298,7 +301,7 @@ func TestRegistry_BudgetEnforcement_CombinedLimits(t *testing.T) {
 		{
 			name: "all limits within bounds",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(100000, 5000, 5.00, 1.00, 50.00, 10.00)
+				b, _ := provider.NewBudget(100000, 5000, 500, 100, 5000, 1000)
 				return b
 			}(),
 			wantErr: false,
@@ -314,7 +317,7 @@ func TestRegistry_BudgetEnforcement_CombinedLimits(t *testing.T) {
 		{
 			name: "hourly at limit triggers routing rejection",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(0, 0, 5.00, 5.00, 0, 0)
+				b, _ := provider.NewBudget(0, 0, 500, 500, 0, 0)
 				return b
 			}(),
 			wantErr: true,
@@ -322,7 +325,7 @@ func TestRegistry_BudgetEnforcement_CombinedLimits(t *testing.T) {
 		{
 			name: "daily at limit triggers routing rejection",
 			budget: func() *provider.Budget {
-				b, _ := provider.NewBudget(0, 0, 0, 0, 50.00, 50.00)
+				b, _ := provider.NewBudget(0, 0, 0, 0, 5000, 5000)
 				return b
 			}(),
 			wantErr: true,
@@ -347,11 +350,11 @@ func TestRegistry_BudgetEnforcement_CombinedLimits(t *testing.T) {
 	}
 }
 
-func TestBudget_USDFieldsExist(t *testing.T) {
-	b, err := provider.NewBudget(100000, 0, 5.00, 0, 50.00, 0)
+func TestBudget_CentsFieldsExist(t *testing.T) {
+	b, err := provider.NewBudget(100000, 0, 500, 0, 5000, 0)
 	require.NoError(t, err)
-	assert.Equal(t, 5.00, b.MaxHourUSD())
-	assert.Equal(t, 50.00, b.MaxDayUSD())
+	assert.Equal(t, int64(500), b.MaxHourCents())
+	assert.Equal(t, int64(5000), b.MaxDayCents())
 }
 
 func TestNewBudget_Validation(t *testing.T) {
@@ -359,10 +362,10 @@ func TestNewBudget_Validation(t *testing.T) {
 		name              string
 		maxSessionTokens  int
 		usedSessionTokens int
-		maxHourUSD        float64
-		usedHourUSD       float64
-		maxDayUSD         float64
-		usedDayUSD        float64
+		maxHourCents      int64
+		usedHourCents     int64
+		maxDayCents       int64
+		usedDayCents      int64
 		wantErr           bool
 		errContains       string
 	}{
@@ -370,30 +373,30 @@ func TestNewBudget_Validation(t *testing.T) {
 			name:              "valid budget with all positive values",
 			maxSessionTokens:  10000,
 			usedSessionTokens: 5000,
-			maxHourUSD:        5.00,
-			usedHourUSD:       2.50,
-			maxDayUSD:         50.00,
-			usedDayUSD:        25.00,
+			maxHourCents:      500,
+			usedHourCents:     250,
+			maxDayCents:       5000,
+			usedDayCents:      2500,
 			wantErr:           false,
 		},
 		{
 			name:              "zero budget (all zeros - unlimited)",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           false,
 		},
 		{
 			name:              "negative MaxSessionTokens",
 			maxSessionTokens:  -100,
 			usedSessionTokens: 0,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           true,
 			errContains:       "MaxSessionTokens must be non-negative",
 		},
@@ -401,148 +404,148 @@ func TestNewBudget_Validation(t *testing.T) {
 			name:              "negative UsedSessionTokens",
 			maxSessionTokens:  100,
 			usedSessionTokens: -50,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           true,
 			errContains:       "UsedSessionTokens must be non-negative",
 		},
 		{
-			name:              "negative MaxHourUSD",
+			name:              "negative MaxHourCents",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        -5.00,
-			usedHourUSD:       0,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      -500,
+			usedHourCents:     0,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           true,
-			errContains:       "MaxHourUSD must be non-negative",
+			errContains:       "MaxHourCents must be non-negative",
 		},
 		{
-			name:              "negative UsedHourUSD",
+			name:              "negative UsedHourCents",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        5.00,
-			usedHourUSD:       -2.50,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      500,
+			usedHourCents:     -250,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           true,
-			errContains:       "UsedHourUSD must be non-negative",
+			errContains:       "UsedHourCents must be non-negative",
 		},
 		{
-			name:              "negative MaxDayUSD",
+			name:              "negative MaxDayCents",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         -50.00,
-			usedDayUSD:        0,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       -5000,
+			usedDayCents:      0,
 			wantErr:           true,
-			errContains:       "MaxDayUSD must be non-negative",
+			errContains:       "MaxDayCents must be non-negative",
 		},
 		{
-			name:              "negative UsedDayUSD",
+			name:              "negative UsedDayCents",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         50.00,
-			usedDayUSD:        -25.00,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       5000,
+			usedDayCents:      -2500,
 			wantErr:           true,
-			errContains:       "UsedDayUSD must be non-negative",
+			errContains:       "UsedDayCents must be non-negative",
 		},
 		{
 			name:              "UsedSessionTokens exceeds MaxSessionTokens",
 			maxSessionTokens:  1000,
 			usedSessionTokens: 1500,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           true,
 			errContains:       "UsedSessionTokens (1500) exceeds MaxSessionTokens (1000)",
 		},
 		{
-			name:              "UsedHourUSD exceeds MaxHourUSD",
+			name:              "UsedHourCents exceeds MaxHourCents",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        5.00,
-			usedHourUSD:       7.50,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      500,
+			usedHourCents:     750,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           true,
-			errContains:       "UsedHourUSD (7.50) exceeds MaxHourUSD (5.00)",
+			errContains:       "UsedHourCents (750) exceeds MaxHourCents (500)",
 		},
 		{
-			name:              "UsedDayUSD exceeds MaxDayUSD",
+			name:              "UsedDayCents exceeds MaxDayCents",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         50.00,
-			usedDayUSD:        75.00,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       5000,
+			usedDayCents:      7500,
 			wantErr:           true,
-			errContains:       "UsedDayUSD (75.00) exceeds MaxDayUSD (50.00)",
+			errContains:       "UsedDayCents (7500) exceeds MaxDayCents (5000)",
 		},
 		{
 			name:              "UsedSessionTokens equals MaxSessionTokens (valid)",
 			maxSessionTokens:  1000,
 			usedSessionTokens: 1000,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           false,
 		},
 		{
-			name:              "UsedHourUSD equals MaxHourUSD (valid)",
+			name:              "UsedHourCents equals MaxHourCents (valid)",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        5.00,
-			usedHourUSD:       5.00,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      500,
+			usedHourCents:     500,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           false,
 		},
 		{
-			name:              "UsedDayUSD equals MaxDayUSD (valid)",
+			name:              "UsedDayCents equals MaxDayCents (valid)",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         50.00,
-			usedDayUSD:        50.00,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       5000,
+			usedDayCents:      5000,
 			wantErr:           false,
 		},
 		{
 			name:              "MaxSessionTokens zero allows any UsedSessionTokens",
 			maxSessionTokens:  0,
 			usedSessionTokens: 999999,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           false,
 		},
 		{
-			name:              "MaxHourUSD zero allows any UsedHourUSD",
+			name:              "MaxHourCents zero allows any UsedHourCents",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        0,
-			usedHourUSD:       999.99,
-			maxDayUSD:         0,
-			usedDayUSD:        0,
+			maxHourCents:      0,
+			usedHourCents:     99999,
+			maxDayCents:       0,
+			usedDayCents:      0,
 			wantErr:           false,
 		},
 		{
-			name:              "MaxDayUSD zero allows any UsedDayUSD",
+			name:              "MaxDayCents zero allows any UsedDayCents",
 			maxSessionTokens:  0,
 			usedSessionTokens: 0,
-			maxHourUSD:        0,
-			usedHourUSD:       0,
-			maxDayUSD:         0,
-			usedDayUSD:        999.99,
+			maxHourCents:      0,
+			usedHourCents:     0,
+			maxDayCents:       0,
+			usedDayCents:      99999,
 			wantErr:           false,
 		},
 	}
@@ -552,10 +555,10 @@ func TestNewBudget_Validation(t *testing.T) {
 			b, err := provider.NewBudget(
 				tt.maxSessionTokens,
 				tt.usedSessionTokens,
-				tt.maxHourUSD,
-				tt.usedHourUSD,
-				tt.maxDayUSD,
-				tt.usedDayUSD,
+				tt.maxHourCents,
+				tt.usedHourCents,
+				tt.maxDayCents,
+				tt.usedDayCents,
 			)
 
 			if tt.wantErr {
@@ -570,10 +573,10 @@ func TestNewBudget_Validation(t *testing.T) {
 				require.NotNil(t, b)
 				assert.Equal(t, tt.maxSessionTokens, b.MaxSessionTokens())
 				assert.Equal(t, tt.usedSessionTokens, b.UsedSessionTokens())
-				assert.Equal(t, tt.maxHourUSD, b.MaxHourUSD())
-				assert.Equal(t, tt.usedHourUSD, b.UsedHourUSD())
-				assert.Equal(t, tt.maxDayUSD, b.MaxDayUSD())
-				assert.Equal(t, tt.usedDayUSD, b.UsedDayUSD())
+				assert.Equal(t, tt.maxHourCents, b.MaxHourCents())
+				assert.Equal(t, tt.usedHourCents, b.UsedHourCents())
+				assert.Equal(t, tt.maxDayCents, b.MaxDayCents())
+				assert.Equal(t, tt.usedDayCents, b.UsedDayCents())
 			}
 		})
 	}
@@ -588,7 +591,7 @@ func TestRegistry_BudgetMidSessionExhaustion(t *testing.T) {
 	reg := provider.NewRegistry()
 	anthropic := &mockRegistryProvider{mockProviderBase: newMockProviderBase("anthropic", true)}
 	reg.Register("anthropic", anthropic)
-	reg.SetDefault("anthropic/claude-sonnet-4-5")
+	require.NoError(t, reg.SetDefault("anthropic/claude-sonnet-4-5"))
 
 	ctx := context.Background()
 
@@ -607,4 +610,42 @@ func TestRegistry_BudgetMidSessionExhaustion(t *testing.T) {
 	// after the fact, not prevented at routing time.
 	// This test documents the current design: routing checks budget at entry,
 	// caller tracks actual usage and may exceed budget mid-turn.
+}
+
+func TestRegistry_SetDefault_UnregisteredProvider(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	err := reg.SetDefault("nonexistent/model")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderNotFound))
+	assert.Contains(t, err.Error(), "nonexistent")
+}
+
+func TestRegistry_SetOverride_UnregisteredProvider(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	err := reg.SetOverride("ws-1", "nonexistent/model")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderNotFound))
+	assert.Contains(t, err.Error(), "nonexistent")
+}
+
+func TestRegistry_SetFailover_UnregisteredProvider(t *testing.T) {
+	reg := provider.NewRegistry()
+	reg.Register("openai", &mockRegistryProvider{mockProviderBase: newMockProviderBase("openai", true)})
+
+	// First ref is valid, second is not.
+	err := reg.SetFailover([]string{"openai/gpt-4.1", "nonexistent/model"})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderNotFound))
+	assert.Contains(t, err.Error(), "nonexistent")
+}
+
+func TestRegistry_SetFailover_AllRegistered(t *testing.T) {
+	reg := provider.NewRegistry()
+	reg.Register("openai", &mockRegistryProvider{mockProviderBase: newMockProviderBase("openai", true)})
+	reg.Register("google", &mockRegistryProvider{mockProviderBase: newMockProviderBase("google", true)})
+
+	err := reg.SetFailover([]string{"openai/gpt-4.1", "google/gemini-2.5-pro"})
+	require.NoError(t, err)
 }

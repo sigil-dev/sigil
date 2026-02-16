@@ -27,11 +27,13 @@ func TestAgentLoop_ProcessMessage(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -67,10 +69,11 @@ func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
 		}
 	}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
 		Hooks: &agent.LoopHooks{
 			OnReceive: record("receive"),
 			OnPrepare: record("prepare"),
@@ -80,6 +83,7 @@ func TestAgentLoop_StepsExecuteInOrder(t *testing.T) {
 			OnAudit:   record("audit"),
 		},
 	})
+	require.NoError(t, err)
 
 	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -140,11 +144,13 @@ func TestAgentLoop_SessionBoundaryValidation(t *testing.T) {
 			session, err := sm.Create(ctx, tt.sessionWS, tt.sessionUser)
 			require.NoError(t, err)
 
-			loop := agent.NewLoop(agent.LoopConfig{
+			loop, err := agent.NewLoop(agent.LoopConfig{
 				SessionManager: sm,
 				ProviderRouter: newMockProviderRouter(),
 				AuditStore:     newMockAuditStore(),
+			Enforcer:       newMockEnforcer(),
 			})
+			require.NoError(t, err)
 
 			out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 				SessionID:   session.ID,
@@ -193,11 +199,13 @@ func TestAgentLoop_SessionStatusValidation(t *testing.T) {
 			// Mutate the session status directly in the backing store.
 			ss.setSessionStatus(session.ID, tt.status)
 
-			loop := agent.NewLoop(agent.LoopConfig{
+			loop, err := agent.NewLoop(agent.LoopConfig{
 				SessionManager: sm,
 				ProviderRouter: newMockProviderRouter(),
 				AuditStore:     newMockAuditStore(),
+			Enforcer:       newMockEnforcer(),
 			})
+			require.NoError(t, err)
 
 			out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 				SessionID:   session.ID,
@@ -224,11 +232,13 @@ func TestAgentLoop_SessionBoundaryCheckedBeforeStoreWrite(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-owner", "user-1")
 	require.NoError(t, err)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -247,11 +257,13 @@ func TestAgentLoop_BudgetEnforcement(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouterWithBudgetExceeded(),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -271,11 +283,13 @@ func TestAgentLoop_ProviderStreamErrorOnly(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouterStreamError(),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -305,11 +319,13 @@ func TestAgentLoop_ProviderStreamPartialTextThenError(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouterStreamPartialThenError(),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -342,11 +358,13 @@ func TestAgentLoop_NoDuplicateUserMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	capturer := &mockProviderCapturing{}
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouterCapturing(capturer),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -451,11 +469,13 @@ func TestAgentLoop_InvalidInputCombinations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loop := agent.NewLoop(agent.LoopConfig{
+			loop, err := agent.NewLoop(agent.LoopConfig{
 				SessionManager: newMockSessionManager(),
 				ProviderRouter: newMockProviderRouter(),
 				AuditStore:     newMockAuditStore(),
+			Enforcer:       newMockEnforcer(),
 			})
+			require.NoError(t, err)
 
 			out, err := loop.ProcessMessage(context.Background(), tt.msg)
 			require.Error(t, err)
@@ -471,11 +491,13 @@ func TestAgentLoop_SessionNotFound(t *testing.T) {
 	sm := newMockSessionManager()
 	ctx := context.Background()
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   "nonexistent-session",
@@ -507,11 +529,13 @@ func TestAgentLoop_AppendMessageFailure(t *testing.T) {
 	}
 	sm = agent.NewSessionManager(failingStore)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -539,11 +563,13 @@ func TestAgentLoop_GetActiveWindowFailure(t *testing.T) {
 	}
 	sm = agent.NewSessionManager(failingStore)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -569,11 +595,13 @@ func TestAgentLoop_ProviderChatFailure(t *testing.T) {
 		provider: &mockProviderChatError{},
 	}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -597,11 +625,13 @@ func TestAgentLoop_RouterNonBudgetFailure(t *testing.T) {
 	// Router that returns a generic error (not budget-exceeded).
 	router := &mockProviderRouterGenericError{}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -630,11 +660,13 @@ func TestAgentLoop_BudgetWiredThroughSessionTokens(t *testing.T) {
 
 	budgetRouter := &mockProviderRouterBudgetAware{provider: &mockProvider{}}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: budgetRouter,
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -666,11 +698,13 @@ func TestAgentLoop_BudgetWiredEnforcesLimit(t *testing.T) {
 
 	budgetRouter := &mockProviderRouterBudgetAware{provider: &mockProvider{}}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: budgetRouter,
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -691,11 +725,13 @@ func TestAgentLoop_InvalidModelRefNotMasked(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouterInvalidModelRef{},
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -793,12 +829,14 @@ func TestAgentLoop_ToolCallDispatch(t *testing.T) {
 		DefaultTimeout: 5 * time.Second,
 	})
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
 		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
 		ToolDispatcher: dispatcher,
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,
@@ -849,12 +887,14 @@ func TestAgentLoop_ToolCallDenied(t *testing.T) {
 		DefaultTimeout: 5 * time.Second,
 	})
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
 		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
 		ToolDispatcher: dispatcher,
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,
@@ -895,12 +935,14 @@ func TestAgentLoop_ToolCallNilDispatcher(t *testing.T) {
 		textContent: "I wanted to use a tool but will answer directly.",
 	}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: toolCallProviderWithText},
 		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
 		ToolDispatcher: nil, // explicitly nil
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -1036,11 +1078,13 @@ func TestAgentLoop_UsageAccountedAfterLLMCall(t *testing.T) {
 	session.TokenBudget.UsedSession = 0
 	require.NoError(t, ss.UpdateSession(ctx, session))
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
+		Enforcer:       newMockEnforcer(),
 		ProviderRouter: newMockProviderRouter(), // returns Usage{InputTokens:10, OutputTokens:5}
 		AuditStore:     newMockAuditStore(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -1089,12 +1133,14 @@ func TestAgentLoop_UsageAccountedInToolLoop(t *testing.T) {
 		DefaultTimeout: 5 * time.Second,
 	})
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
 		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
 		ToolDispatcher: dispatcher,
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,
@@ -1125,11 +1171,13 @@ func TestAgentLoop_PartialUsageAccountingSurvivesStreamError(t *testing.T) {
 	session.TokenBudget.UsedSession = 0
 	require.NoError(t, ss.UpdateSession(ctx, session))
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
+		Enforcer:       newMockEnforcer(),
 		ProviderRouter: newMockProviderRouterStreamUsageThenError(), // emits text_delta, usage (30+20=50), then error
 		AuditStore:     newMockAuditStore(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -1168,11 +1216,13 @@ func TestAgentLoop_FailoverCapMatchesRouterChainLength(t *testing.T) {
 	// Router that returns MaxAttempts=3 but always fails routing.
 	router := &mockProviderRouterWithAttempts{maxAttempts: 3}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -1269,11 +1319,13 @@ func TestAgentLoop_ChatFailureCallsRecordFailure(t *testing.T) {
 	healthProv := &mockProviderChatErrorWithHealth{}
 	router := &mockProviderRouter{provider: healthProv}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -1323,11 +1375,13 @@ func TestAgentLoop_EmptyStreamCallsRecordFailure(t *testing.T) {
 	healthProv := &mockProviderEmptyStreamWithHealth{}
 	router := &mockProviderRouter{provider: healthProv}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -1381,11 +1435,13 @@ func TestAgentLoop_FirstEventErrorCallsRecordFailure(t *testing.T) {
 	healthProv := &mockProviderFirstEventErrorWithHealth{}
 	router := &mockProviderRouter{provider: healthProv}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -1469,12 +1525,14 @@ func TestAgentLoop_ToolLoopIterationCapEnforced(t *testing.T) {
 		DefaultTimeout: 5 * time.Second,
 	})
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: alwaysToolProvider},
 		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
 		ToolDispatcher: dispatcher,
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,
@@ -1523,12 +1581,14 @@ func TestAgentLoop_ToolRuntimeFailureRecovery(t *testing.T) {
 		DefaultTimeout: 5 * time.Second,
 	})
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
 		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
 		ToolDispatcher: dispatcher,
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,
@@ -1638,12 +1698,14 @@ func TestAgentLoop_BudgetCumulativeAcrossMultipleToolIterations(t *testing.T) {
 		DefaultTimeout: 5 * time.Second,
 	})
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: multiToolProvider},
 		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
 		ToolDispatcher: dispatcher,
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,
@@ -1725,11 +1787,13 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 		chatCall: make(chan struct{}, 1),
 	}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: blockingProv},
 		AuditStore:     newMockAuditStore(),
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	// Create a cancellable context
 	ctx, cancel := context.WithCancel(bgCtx)
@@ -1783,11 +1847,13 @@ func TestAgentLoop_AuditFailureDoesNotFailTurn(t *testing.T) {
 	// Audit store that always returns an error.
 	failingAuditStore := &mockAuditStoreError{err: assert.AnError}
 
-	loop := agent.NewLoop(agent.LoopConfig{
+	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     failingAuditStore,
+	Enforcer:       newMockEnforcer(),
 	})
+	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:   session.ID,
@@ -1840,11 +1906,13 @@ func TestAgentLoop_AuditStoreConsecutiveFailures(t *testing.T) {
 				failUntilCallCount: tt.failuresBeforeSuccess,
 			}
 
-			loop := agent.NewLoop(agent.LoopConfig{
+			loop, err := agent.NewLoop(agent.LoopConfig{
 				SessionManager: sm,
 				ProviderRouter: newMockProviderRouter(),
 				AuditStore:     auditStore,
+			Enforcer:       newMockEnforcer(),
 			})
+			require.NoError(t, err)
 
 			// Process N failing messages (if configured).
 			for i := 0; i < tt.failuresBeforeSuccess; i++ {
@@ -1989,11 +2057,13 @@ func TestAgentLoop_MidStreamFailureCallsRecordFailure(t *testing.T) {
 			healthProv := &mockProviderMidStreamFailureWithHealth{}
 			router := &mockProviderRouter{provider: healthProv}
 
-			loop := agent.NewLoop(agent.LoopConfig{
+			loop, err := agent.NewLoop(agent.LoopConfig{
 				SessionManager: sm,
 				ProviderRouter: router,
 				AuditStore:     newMockAuditStore(),
+			Enforcer:       newMockEnforcer(),
 			})
+			require.NoError(t, err)
 
 			out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 				SessionID:   session.ID,
@@ -2048,6 +2118,80 @@ func TestAgentLoop_MidStreamFailureCallsRecordFailure(t *testing.T) {
 			for _, msg := range history {
 				assert.NotEqual(t, "assistant", msg.Role,
 					"assistant message should not be persisted after mid-stream error")
+			}
+		})
+	}
+}
+
+func TestNewLoop_ValidatesDependencies(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     agent.LoopConfig
+		wantErr bool
+		wantMsg string
+	}{
+		{
+			name: "missing SessionManager",
+			cfg: agent.LoopConfig{
+				Enforcer:       &security.Enforcer{},
+				ProviderRouter: newMockProviderRouter(),
+			},
+			wantErr: true,
+			wantMsg: "SessionManager is required",
+		},
+		{
+			name: "missing Enforcer",
+			cfg: agent.LoopConfig{
+				SessionManager: newMockSessionManager(),
+				ProviderRouter: newMockProviderRouter(),
+			},
+			wantErr: true,
+			wantMsg: "Enforcer is required",
+		},
+		{
+			name: "missing ProviderRouter",
+			cfg: agent.LoopConfig{
+				SessionManager: newMockSessionManager(),
+				Enforcer:       &security.Enforcer{},
+			},
+			wantErr: true,
+			wantMsg: "ProviderRouter is required",
+		},
+		{
+			name: "all required dependencies present",
+			cfg: agent.LoopConfig{
+				SessionManager: newMockSessionManager(),
+				Enforcer:       &security.Enforcer{},
+				ProviderRouter: newMockProviderRouter(),
+			},
+			wantErr: false,
+		},
+		{
+			name: "optional dependencies can be nil",
+			cfg: agent.LoopConfig{
+				SessionManager: newMockSessionManager(),
+				Enforcer:       &security.Enforcer{},
+				ProviderRouter: newMockProviderRouter(),
+				AuditStore:     nil,
+				ToolDispatcher: nil,
+				ToolRegistry:   nil,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loop, err := agent.NewLoop(tt.cfg)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, loop)
+				assert.Contains(t, err.Error(), tt.wantMsg)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopInvalidInput))
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, loop)
 			}
 		})
 	}
