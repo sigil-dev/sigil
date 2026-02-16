@@ -490,14 +490,87 @@ func TestGateway_CloseCallsServerClose(t *testing.T) {
 	}, "Server.Close should be idempotent, proving Gateway.Close called it")
 }
 
+// Test that token validation timing is constant regardless of token position in the map.
+// This test verifies that the implementation iterates through ALL tokens before returning,
+// preventing timing attacks that could reveal which token position matched.
+func TestConfigTokenValidator_ConstantTimeIteration(t *testing.T) {
+	// Create validator with many tokens to make timing differences more measurable
+	tokens := make([]config.TokenConfig, 10)
+	for i := 0; i < 10; i++ {
+		tokens[i] = config.TokenConfig{
+			Token:       fmt.Sprintf("token-%d", i),
+			UserID:      fmt.Sprintf("user-%d", i),
+			Name:        fmt.Sprintf("User %d", i),
+			Permissions: []string{"*"},
+		}
+	}
+
+	validator, err := newConfigTokenValidator(tokens)
+	require.NoError(t, err)
+
+	// Test each token position and measure timing
+	timings := make([]time.Duration, len(tokens))
+	iterations := 100 // Multiple iterations to reduce noise
+
+	for tokenIdx := 0; tokenIdx < len(tokens); tokenIdx++ {
+		token := fmt.Sprintf("token-%d", tokenIdx)
+		start := time.Now()
+		for i := 0; i < iterations; i++ {
+			_, err := validator.ValidateToken(context.Background(), token)
+			require.NoError(t, err)
+		}
+		timings[tokenIdx] = time.Since(start)
+	}
+
+	// Verify all tokens were validated successfully
+	for i := 0; i < len(tokens); i++ {
+		assert.Greater(t, timings[i], time.Duration(0), "timing for token-%d should be non-zero", i)
+	}
+
+	// Calculate timing variance - constant-time should have low variance
+	// Early return would show first token much faster than last token
+	var sum time.Duration
+	for _, t := range timings {
+		sum += t
+	}
+	avg := sum / time.Duration(len(timings))
+
+	// Check that no timing is significantly different from average
+	// Allow 20% variance (should be much lower with constant-time)
+	maxAllowedDeviation := avg / 5 // 20%
+	for i, timing := range timings {
+		deviation := timing - avg
+		if deviation < 0 {
+			deviation = -deviation
+		}
+		assert.LessOrEqual(t, deviation, maxAllowedDeviation,
+			"token-%d timing deviation %v exceeds 20%% of average %v - suggests early return on match",
+			i, deviation, avg)
+	}
+
+	// Additionally verify that first token isn't significantly faster than last
+	// (this is the smoking gun for early return)
+	firstLast := timings[0] - timings[len(timings)-1]
+	if firstLast < 0 {
+		firstLast = -firstLast
+	}
+	assert.LessOrEqual(t, firstLast, avg/5,
+		"first token timing %v vs last token %v differs by %v, exceeds 20%% of avg %v - suggests position leak",
+		timings[0], timings[len(timings)-1], firstLast, avg)
+}
+
 // stubProvider is a minimal Provider implementation for negative test cases.
 type stubProvider struct {
 	name string
 }
 
-func (s *stubProvider) Name() string                                                          { return s.name }
-func (s *stubProvider) Available(_ context.Context) bool                                      { return true }
-func (s *stubProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error)             { return nil, nil }
-func (s *stubProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) { return nil, nil }
-func (s *stubProvider) Status(_ context.Context) (provider.ProviderStatus, error)             { return provider.ProviderStatus{Provider: s.name, Available: true}, nil }
-func (s *stubProvider) Close() error                                                          { return nil }
+func (s *stubProvider) Name() string                                               { return s.name }
+func (s *stubProvider) Available(_ context.Context) bool                           { return true }
+func (s *stubProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) { return nil, nil }
+func (s *stubProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	return nil, nil
+}
+func (s *stubProvider) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Provider: s.name, Available: true}, nil
+}
+func (s *stubProvider) Close() error { return nil }

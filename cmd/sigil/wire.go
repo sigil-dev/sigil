@@ -420,14 +420,22 @@ func newConfigTokenValidator(tokens []config.TokenConfig) (*configTokenValidator
 
 func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {
 	candidateHash := sha256.Sum256([]byte(token))
-	// Use constant-time comparison to avoid timing attacks that could leak valid token hashes.
-	// We iterate over all tokens and use subtle.ConstantTimeCompare to compare hashes.
+	// Iterate through ALL tokens to prevent timing attacks that leak token count/position.
+	// Even after finding a match, we continue iterating to ensure constant-time behavior
+	// regardless of which token matches or where it appears in the iteration order.
 	var matched *server.AuthenticatedUser
+
 	for hash, user := range v.tokens {
+		// subtle.ConstantTimeCompare ensures the hash comparison takes the same time
+		// whether hashes match or not, preventing timing attacks on the hash value itself.
 		if subtle.ConstantTimeCompare(hash[:], candidateHash[:]) == 1 {
 			matched = user
+			// CRITICAL: Do NOT return here. Continue iterating through remaining tokens
+			// to prevent timing attacks that could reveal token position/count by measuring
+			// how many iterations were performed.
 		}
 	}
+
 	if matched != nil {
 		return matched, nil
 	}

@@ -99,6 +99,50 @@ describe("ChatStore", () => {
       expect(store.error).toContain("Internal Server Error");
     });
 
+    it("handles 401 Unauthorized error", async () => {
+      const errorResponse = new Response(
+        JSON.stringify({ status: 401, detail: "Unauthorized" }),
+        { status: 401 },
+      );
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(errorResponse));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.error).toContain("401");
+      expect(store.error).toContain("Unauthorized");
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0].role).toBe("user");
+    });
+
+    it("handles 403 Forbidden error", async () => {
+      const errorResponse = new Response(
+        JSON.stringify({ status: 403, detail: "Forbidden" }),
+        { status: 403 },
+      );
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(errorResponse));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.error).toContain("403");
+      expect(store.error).toContain("Forbidden");
+    });
+
+    it("handles 429 Rate Limit error", async () => {
+      const errorResponse = new Response(
+        JSON.stringify({ status: 429, detail: "Rate limit exceeded" }),
+        { status: 429 },
+      );
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(errorResponse));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.error).toContain("429");
+      expect(store.error).toContain("Rate limit exceeded");
+    });
+
     it("ignores empty or whitespace-only messages", async () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
@@ -243,6 +287,180 @@ describe("ChatStore", () => {
       expect(store.messages[0].role).toBe("user");
       expect(store.messages[1].role).toBe("assistant");
       expect(store.messages[1].content).toBe("partial response");
+    });
+
+    it("handles SSE_STREAM_TIMEOUT_MS timeout (5 minutes)", async () => {
+      // Create a stream that delays before sending data
+      const encoder = new TextEncoder();
+      let timeoutOccurred = false;
+
+      const hangingStream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          // Wait for timeout to be signaled
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              if (!timeoutOccurred) {
+                timeoutOccurred = true;
+                // Signal timeout by erroring the stream
+                controller.error(new DOMException("Signal timed out.", "TimeoutError"));
+              }
+              resolve();
+            }, 10);
+          });
+        },
+      });
+
+      const response = new Response(hangingStream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.loading).toBe(false);
+      expect(store.error).toContain("timed out");
+      expect(store.error).toContain("too long to respond");
+      // Empty assistant message should be removed after timeout
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0].role).toBe("user");
+    });
+
+    it("removes empty assistant message after user cancellation", async () => {
+      // Stream that hasn't sent any content yet
+      let abortCallback: (() => void) | null = null;
+      const stream = new ReadableStream({
+        async pull(controller) {
+          await new Promise<void>((resolve) => {
+            abortCallback = () => {
+              controller.error(new DOMException("Aborted", "AbortError"));
+              resolve();
+            };
+          });
+        },
+      });
+
+      const response = new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+      store.newSession("ws-1");
+      const sendPromise = store.sendMessage("test");
+
+      await new Promise((r) => setTimeout(r, 10));
+      expect(store.loading).toBe(true);
+
+      // Cancel before any content is received
+      store.cancel();
+      if (abortCallback) abortCallback();
+      await sendPromise;
+
+      // Empty assistant message should be removed
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0].role).toBe("user");
+      expect(store.error).toBeNull();
+    });
+
+    it("keeps assistant message with content after user cancellation", async () => {
+      const encoder = new TextEncoder();
+      const partialSSE = "event: text_delta\ndata: {\"text\":\"partial\"}\n\n";
+
+      let abortCallback: (() => void) | null = null;
+      let readCount = 0;
+
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          readCount++;
+          if (readCount === 1) {
+            controller.enqueue(encoder.encode(partialSSE));
+          } else {
+            await new Promise<void>((resolve) => {
+              abortCallback = () => {
+                controller.error(new DOMException("Aborted", "AbortError"));
+                resolve();
+              };
+            });
+          }
+        },
+      });
+
+      const response = new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+      store.newSession("ws-1");
+      const sendPromise = store.sendMessage("test");
+
+      await new Promise((r) => setTimeout(r, 20));
+
+      // Cancel after content is received
+      store.cancel();
+      if (abortCallback) abortCallback();
+      await sendPromise;
+
+      // Assistant message with content should be kept
+      expect(store.messages).toHaveLength(2);
+      expect(store.messages[1].role).toBe("assistant");
+      expect(store.messages[1].content).toBe("partial");
+      expect(store.error).toBeNull();
+    });
+
+    it("handles fetch failure (network error) before stream starts", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockRejectedValue(new TypeError("Failed to fetch")),
+      );
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.loading).toBe(false);
+      expect(store.error).toContain("Network error");
+      expect(store.error).toContain("could not reach the gateway");
+      // Empty assistant message should be removed
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0].role).toBe("user");
+    });
+
+    it("handles missing response body", async () => {
+      const response = new Response(null, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.error).toBe("No response body");
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0].role).toBe("user");
+    });
+
+    it("handles HTML error response (500 server error page)", async () => {
+      const htmlError = "<html><body>Internal Server Error</body></html>";
+      const errorResponse = new Response(htmlError, {
+        status: 500,
+        headers: { "Content-Type": "text/html" },
+      });
+
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(errorResponse));
+
+      store.newSession("ws-1");
+      await store.sendMessage("test");
+
+      expect(store.error).toContain("Server error");
+      expect(store.error).toContain("HTTP 500");
+      expect(store.messages).toHaveLength(1);
     });
   });
 

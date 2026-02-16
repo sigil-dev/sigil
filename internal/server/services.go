@@ -6,8 +6,8 @@ package server
 import (
 	"context"
 
-	"github.com/sigil-dev/sigil/pkg/plugin"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/plugin"
 )
 
 // IsNotFound reports whether err carries the server.entity.not_found code.
@@ -128,10 +128,10 @@ type WorkspaceDetail struct {
 
 // PluginSummary is the REST representation of a plugin in list results.
 type PluginSummary struct {
-	Name    string           `json:"name" doc:"Plugin name"`
+	Name    string            `json:"name" doc:"Plugin name"`
 	Type    plugin.PluginType `json:"type" doc:"Plugin type (provider, channel, tool, skill)"`
-	Version string           `json:"version" doc:"Plugin version"`
-	Status  PluginStatus     `json:"status" doc:"Plugin status (running, stopped, error)"`
+	Version string            `json:"version" doc:"Plugin version"`
+	Status  PluginStatus      `json:"status" doc:"Plugin status (running, stopped, error)"`
 }
 
 // PluginDetail is the full REST representation of a plugin.

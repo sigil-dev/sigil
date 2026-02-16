@@ -1113,8 +1113,8 @@ func TestSSE_ConcurrentWriteAndDrain(t *testing.T) {
 	// Run with: go test -race -run TestSSE_ConcurrentWriteAndDrain ./internal/server/
 
 	handler := &concurrentStreamHandler{
-		goroutines: 10,                 // 10 concurrent writers
-		eventsEach: 50,                 // 50 events each = 500 total events
+		goroutines: 10, // 10 concurrent writers
+		eventsEach: 50, // 50 events each = 500 total events
 		started:    make(chan struct{}),
 		done:       make(chan struct{}),
 	}
@@ -1238,4 +1238,190 @@ func TestSSE_ConcurrentWriteAndDrain_JSON(t *testing.T) {
 	// Should have received all events from all concurrent writers.
 	expectedTotal := handler.goroutines * handler.eventsEach
 	assert.Equal(t, expectedTotal, len(resp.Events), "should receive all events from concurrent writers")
+}
+
+// aggressiveStreamHandler produces events very rapidly to stress-test race conditions.
+// It sends events continuously with minimal select overhead, maximizing contention
+// on the channel during concurrent drain operations.
+type aggressiveStreamHandler struct {
+	eventCount int
+	done       chan struct{}
+}
+
+func (h *aggressiveStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	defer close(ch)
+	defer close(h.done)
+
+	// Send events in a tight loop without buffering or throttling.
+	// This maximizes the chance of concurrent writes + drain contention.
+	for i := range h.eventCount {
+		select {
+		case ch <- server.SSEEvent{
+			Event: "text_delta",
+			Data:  fmt.Sprintf(`{"id":%d}`, i),
+		}:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// TestSSE_DrainRaceCondition_ComprehensiveStressTest is the most comprehensive race test.
+// It specifically targets the scenario where:
+// 1. Producer (HandleStream) is rapidly sending events to the channel
+// 2. Consumer (writeSSE) starts reading from the channel
+// 3. Consumer hits a write error mid-stream and calls drainSSEChannel
+// 4. Drain goroutine starts consuming from the same channel concurrently
+// 5. Producer is still sending events during the drain
+//
+// This test MUST be run with `go test -race` to detect data races.
+// Run with: go test -race -run TestSSE_DrainRaceCondition_ComprehensiveStressTest ./internal/server/
+func TestSSE_DrainRaceCondition_ComprehensiveStressTest(t *testing.T) {
+	// Run multiple iterations to increase the chance of catching race conditions.
+	const iterations = 20
+
+	for i := range iterations {
+		t.Run(fmt.Sprintf("iteration-%d", i), func(t *testing.T) {
+			t.Parallel()
+
+			handler := &aggressiveStreamHandler{
+				eventCount: 500, // Large enough to exceed channel buffer many times
+				done:       make(chan struct{}),
+			}
+
+			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+			require.NoError(t, err)
+			srv.RegisterStreamHandler(handler)
+
+			body := `{"content":"race stress test","workspace_id":"test"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "text/event-stream")
+
+			// Use errResponseWriter that fails after a random small number of writes.
+			// This ensures the drain path is triggered while the producer is still active.
+			// Using 1-3 writes ensures we hit drain very early in the stream.
+			maxWrites := (i % 3) + 1
+			w := newErrResponseWriter(maxWrites)
+
+			// Run the handler.
+			srv.Handler().ServeHTTP(w, req)
+
+			// Verify the producer goroutine finished (channel fully drained).
+			select {
+			case <-handler.done:
+				// success — no goroutine leak, drain worked without races
+			case <-time.After(5 * time.Second):
+				t.Fatal("HandleStream goroutine did not exit; channel not drained (possible race or deadlock)")
+			}
+
+			// At least one write should have succeeded before the error.
+			assert.GreaterOrEqual(t, w.writes, 1, "should have written at least once before error")
+		})
+	}
+}
+
+// TestSSE_DrainRaceCondition_MultipleConsumers tests the edge case where
+// multiple writeSSE calls might race on the same underlying resources.
+// This is a more pathological scenario than normal, but worth testing for robustness.
+func TestSSE_DrainRaceCondition_MultipleConsumers(t *testing.T) {
+	// This test simulates multiple concurrent SSE consumers reading from
+	// different channels but all hitting write errors and draining simultaneously.
+
+	const consumers = 5
+
+	for i := range consumers {
+		t.Run(fmt.Sprintf("consumer-%d", i), func(t *testing.T) {
+			t.Parallel()
+
+			handler := &aggressiveStreamHandler{
+				eventCount: 200,
+				done:       make(chan struct{}),
+			}
+
+			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+			require.NoError(t, err)
+			srv.RegisterStreamHandler(handler)
+
+			body := `{"content":"multi-consumer race","workspace_id":"test"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "text/event-stream")
+
+			// Fail writes quickly to trigger drain path.
+			w := newErrResponseWriter(2)
+			srv.Handler().ServeHTTP(w, req)
+
+			// Verify clean shutdown.
+			select {
+			case <-handler.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("HandleStream did not exit; drain failed")
+			}
+		})
+	}
+}
+
+// oscillatingStreamHandler alternates between sending bursts and pausing,
+// creating timing variations that can expose race conditions.
+type oscillatingStreamHandler struct {
+	burstSize int
+	pauses    int
+	done      chan struct{}
+}
+
+func (h *oscillatingStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	defer close(ch)
+	defer close(h.done)
+
+	for pause := range h.pauses {
+		// Send a burst of events.
+		for i := range h.burstSize {
+			select {
+			case ch <- server.SSEEvent{
+				Event: "text_delta",
+				Data:  fmt.Sprintf(`{"burst":%d,"event":%d}`, pause, i),
+			}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		// Brief pause between bursts (simulates real-world chunked responses).
+		select {
+		case <-time.After(1 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// TestSSE_DrainRaceCondition_BurstyPattern tests race conditions with bursty traffic.
+// Bursty patterns can create timing windows where the channel transitions between
+// full and empty states, potentially exposing race conditions in the drain logic.
+func TestSSE_DrainRaceCondition_BurstyPattern(t *testing.T) {
+	handler := &oscillatingStreamHandler{
+		burstSize: 30,
+		pauses:    10,
+		done:      make(chan struct{}),
+	}
+
+	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0"})
+	require.NoError(t, err)
+	srv.RegisterStreamHandler(handler)
+
+	body := `{"content":"bursty pattern race test","workspace_id":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Fail after processing a few bursts.
+	w := newErrResponseWriter(50)
+	srv.Handler().ServeHTTP(w, req)
+
+	// Verify clean drain.
+	select {
+	case <-handler.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandleStream did not exit; drain failed with bursty pattern")
+	}
 }

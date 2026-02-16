@@ -91,16 +91,16 @@ The agent loop itself has security checks at every step:
 
 ### Defense Matrix
 
-| Attack Vector                     | Defense                                                                                |
-| --------------------------------- | -------------------------------------------------------------------------------------- |
-| Prompt injection via user message | Input scanning (Phase 8+, sigil-39g) + origin tagging                                 |
+| Attack Vector                     | Defense                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Prompt injection via user message | Input scanning (Phase 8+, sigil-39g) + origin tagging                                             |
 | Prompt injection via tool result  | Tool outputs tagged as `tool_output` role, scanned for instruction patterns (Phase 8+, sigil-j32) |
-| Tool escalation                   | Session-scoped tool allowlist + capability check before dispatch                       |
-| Infinite tool loops               | Per-session tool call budget (max N calls per turn, max M turns per session)           |
-| Cost explosion                    | Token budget per-session, per-hour, per-day enforced at provider level                 |
-| Plugin data exfiltration          | Plugins cannot read other plugins' KV/config. Network policy for container tier.       |
-| Session hijacking                 | Sessions bound to channel+user identity. Cross-session access requires explicit grant. |
-| Config poisoning                  | Config changes validated against schema, audit-logged, require admin capability        |
+| Tool escalation                   | Session-scoped tool allowlist + capability check before dispatch                                  |
+| Infinite tool loops               | Per-session tool call budget (max N calls per turn, max M turns per session)                      |
+| Cost explosion                    | Token budget per-session, per-hour, per-day enforced at provider level                            |
+| Plugin data exfiltration          | Plugins cannot read other plugins' KV/config. Network policy for container tier.                  |
+| Session hijacking                 | Sessions bound to channel+user identity. Cross-session access requires explicit grant.            |
+| Config poisoning                  | Config changes validated against schema, audit-logged, require admin capability                   |
 
 ## Layer 3: Plugin Isolation
 

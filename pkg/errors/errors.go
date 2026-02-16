@@ -82,7 +82,7 @@ const (
 	CodeCLIInputInvalid      Code = "cli.input.invalid"
 
 	CodeSecurityCapabilityInvalid Code = "security.capability.invalid"
-	CodeSecurityInvalidInput     Code = "security.input.invalid"
+	CodeSecurityInvalidInput      Code = "security.input.invalid"
 
 	CodeChannelPairingRequired Code = "channel.pairing.required"
 	CodeChannelPairingDenied   Code = "channel.pairing.denied"
