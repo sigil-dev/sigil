@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	content     TEXT NOT NULL DEFAULT '',
 	tool_call_id TEXT NOT NULL DEFAULT '',
 	tool_name   TEXT NOT NULL DEFAULT '',
+	threat_info TEXT NOT NULL DEFAULT '{}',
 	created_at  TEXT NOT NULL,
 	metadata    TEXT NOT NULL DEFAULT '{}',
 	FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
@@ -309,8 +310,16 @@ func (s *SessionStore) AppendMessage(ctx context.Context, sessionID string, msg 
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling message metadata: %w", err)
 	}
 
-	const q = `INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_name, created_at, metadata)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	threatInfo := []byte("{}")
+	if msg.Threat != nil {
+		threatInfo, err = json.Marshal(msg.Threat)
+		if err != nil {
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling threat info: %w", err)
+		}
+	}
+
+	const q = `INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err = s.db.ExecContext(ctx, q,
 		msg.ID,
@@ -319,6 +328,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		msg.Content,
 		msg.ToolCallID,
 		msg.ToolName,
+		string(threatInfo),
 		formatTime(msg.CreatedAt),
 		string(metadata),
 	)
@@ -330,9 +340,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 func (s *SessionStore) GetActiveWindow(ctx context.Context, sessionID string, limit int) ([]*store.Message, error) {
 	// Sub-select the N most recent, then re-order chronologically.
-	const q = `SELECT id, session_id, role, content, tool_call_id, tool_name, created_at, metadata
+	const q = `SELECT id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata
 FROM (
-	SELECT id, session_id, role, content, tool_call_id, tool_name, created_at, metadata
+	SELECT id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata
 	FROM messages WHERE session_id = ?
 	ORDER BY created_at DESC LIMIT ?
 ) ORDER BY created_at ASC`
@@ -346,7 +356,7 @@ FROM (
 	var msgs []*store.Message
 	for rows.Next() {
 		var msg store.Message
-		var createdAt, metaJSON string
+		var createdAt, threatJSON, metaJSON string
 		if err := rows.Scan(
 			&msg.ID,
 			&msg.SessionID,
@@ -354,6 +364,7 @@ FROM (
 			&msg.Content,
 			&msg.ToolCallID,
 			&msg.ToolName,
+			&threatJSON,
 			&createdAt,
 			&metaJSON,
 		); err != nil {
@@ -367,6 +378,13 @@ FROM (
 			if err := json.Unmarshal([]byte(metaJSON), &msg.Metadata); err != nil {
 				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling message metadata: %w", err)
 			}
+		}
+		if threatJSON != "" && threatJSON != "{}" {
+			var threat store.ThreatInfo
+			if err := json.Unmarshal([]byte(threatJSON), &threat); err != nil {
+				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling threat info: %w", err)
+			}
+			msg.Threat = &threat
 		}
 		msgs = append(msgs, &msg)
 	}

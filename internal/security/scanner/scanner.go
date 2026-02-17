@@ -41,6 +41,16 @@ const (
 	OriginTool   Origin = "tool_output"
 )
 
+// Valid reports whether the origin is a known content origin.
+func (o Origin) Valid() bool {
+	switch o {
+	case OriginUser, OriginSystem, OriginTool:
+		return true
+	default:
+		return false
+	}
+}
+
 // Severity indicates how critical a detection is.
 type Severity string
 
@@ -172,15 +182,6 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan stage %q", opts.Stage)
 	}
 
-	if len(content) > s.maxContentLength {
-		return ScanResult{Threat: true, Content: content, Matches: []Match{{
-			Rule:     "content_too_large",
-			Location: 0,
-			Length:   len(content),
-			Severity: SeverityHigh,
-		}}}, nil
-	}
-
 	content = normalize(content)
 
 	if len(content) > s.maxContentLength {
@@ -239,6 +240,18 @@ func InputRules() []Rule {
 			Stage:    StageInput,
 			Severity: SeverityMedium,
 		},
+		{
+			Name:     "new_task_injection",
+			Pattern:  regexp.MustCompile(`(?i)(new\s+task|from\s+now\s+on|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?)\s+(?:do\s+not|don'?t)\s+exist)`),
+			Stage:    StageInput,
+			Severity: SeverityMedium,
+		},
+		{
+			Name:     "system_block_injection",
+			Pattern:  regexp.MustCompile(`(?i)(?:<\|?system\|?>|\[system\]|<<SYS>>)`),
+			Stage:    StageInput,
+			Severity: SeverityHigh,
+		},
 	}
 }
 
@@ -253,7 +266,7 @@ func ToolRules() []Rule {
 		},
 		{
 			Name:     "role_impersonation",
-			Pattern:  regexp.MustCompile(`(?is)\[INST\].*\[/INST\]`),
+			Pattern:  regexp.MustCompile(`(?is)\[INST\].{0,1000}?\[/INST\]`),
 			Stage:    StageTool,
 			Severity: SeverityHigh,
 		},
@@ -277,9 +290,9 @@ func secretRules(stage Stage) []Rule {
 		},
 		{
 			Name:     "openai_legacy_key",
-			Pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`),
+			Pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{40,}`),
 			Stage:    stage,
-			Severity: SeverityHigh,
+			Severity: SeverityMedium,
 		},
 		{
 			Name:     "github_pat",
@@ -325,7 +338,13 @@ func secretRules(stage Stage) []Rule {
 		},
 		{
 			Name:     "database_connection_string",
-			Pattern:  regexp.MustCompile(`(?i)(postgres|mysql|mongodb|redis)://[^\s]+:[^\s]+@[^\s]+`),
+			Pattern:  regexp.MustCompile(`(?i)(postgres|mysql|mongodb|redis|jdbc:[a-z]+)://[^\s]+:[^\s]+@[^\s]+`),
+			Stage:    stage,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "mssql_connection_string",
+			Pattern:  regexp.MustCompile(`(?i)(?:Server|Data Source)\s*=\s*[^;]+;\s*(?:Password|Pwd)\s*=\s*[^;]+`),
 			Stage:    stage,
 			Severity: SeverityHigh,
 		},
@@ -379,8 +398,11 @@ func ParseMode(s string) (Mode, error) {
 
 // ApplyMode applies the detection mode to the scan result.
 // For block: returns error if threat detected.
-// For flag: returns content unchanged (threat already logged by caller).
-// For redact: replaces matched regions with [REDACTED].
+// For flag: returns the content argument as-is (threat already logged by caller).
+//
+//	Note: callers typically pass ScanResult.Content (normalized), not the original input.
+//
+// For redact: replaces matched regions with [REDACTED] using ScanResult.Content offsets.
 func ApplyMode(mode Mode, content string, result ScanResult) (string, error) {
 	if !result.Threat {
 		return content, nil
@@ -400,15 +422,11 @@ func ApplyMode(mode Mode, content string, result ScanResult) (string, error) {
 	case ModeFlag:
 		return content, nil
 	case ModeRedact:
-		// Use the normalized content from the scan result when available.
+		// Always use the normalized content from the scan result for redaction.
 		// Match offsets are computed against the normalized string; applying
 		// them to the original un-normalized content causes incorrect redaction
 		// when zero-width or NFKC-affected characters shift byte positions.
-		redactContent := content
-		if result.Content != "" {
-			redactContent = result.Content
-		}
-		return redact(redactContent, result.Matches), nil
+		return redact(result.Content, result.Matches), nil
 	default:
 		return "", sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "unknown scanner mode %q", mode)
 	}

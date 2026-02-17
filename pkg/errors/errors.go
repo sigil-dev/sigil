@@ -53,8 +53,8 @@ const (
 	CodeProviderNoDefault       Code = "provider.routing.no_default"
 	CodeProviderInvalidModelRef Code = "provider.routing.invalid_model_ref"
 	CodeProviderInvalidEvent    Code = "provider.event.invalid"
-	CodeProviderKeyInvalid     Code = "provider.key.invalid"
-	CodeProviderKeyCheckFailed Code = "provider.key.check_failed"
+	CodeProviderKeyInvalid      Code = "provider.key.invalid"
+	CodeProviderKeyCheckFailed  Code = "provider.key.check_failed"
 
 	CodeAgentLoopInvalidInput        Code = "agent.loop.invalid_input"
 	CodeAgentLoopFailure             Code = "agent.loop.failure"
@@ -85,12 +85,12 @@ const (
 	CodeCLISetupFailure      Code = "cli.setup.failure"
 	CodeCLIInputInvalid      Code = "cli.input.invalid"
 
-	CodeSecurityCapabilityInvalid    Code = "security.capability.invalid"
-	CodeSecurityInvalidInput         Code = "security.input.invalid"
-	CodeSecurityScannerInputBlocked  Code = "security.scanner.input_blocked"
-	CodeSecurityScannerFailure       Code = "security.scanner.failure"
+	CodeSecurityCapabilityInvalid   Code = "security.capability.invalid"
+	CodeSecurityInvalidInput        Code = "security.input.invalid"
+	CodeSecurityScannerInputBlocked Code = "security.scanner.input_blocked"
+	CodeSecurityScannerFailure      Code = "security.scanner.failure"
 
-	CodeChannelTokenInvalid    Code = "channel.token.invalid"
+	CodeChannelTokenInvalid     Code = "channel.token.invalid"
 	CodeChannelTokenCheckFailed Code = "channel.token.check_failed"
 
 	CodeChannelPairingRequired Code = "channel.pairing.required"
@@ -98,11 +98,11 @@ const (
 	CodeChannelPairingPending  Code = "channel.pairing.pending"
 	CodeChannelBackendFailure  Code = "channel.backend.failure"
 
-	CodeSecretStoreFailure  Code = "secret.store.failure"
-	CodeSecretNotFound      Code = "secret.get.not_found"
-	CodeSecretDeleteFailure Code = "secret.delete.failure"
-	CodeSecretListFailure   Code = "secret.list.failure"
-	CodeSecretInvalidInput  Code = "secret.input.invalid"
+	CodeSecretStoreFailure   Code = "secret.store.failure"
+	CodeSecretNotFound       Code = "secret.get.not_found"
+	CodeSecretDeleteFailure  Code = "secret.delete.failure"
+	CodeSecretListFailure    Code = "secret.list.failure"
+	CodeSecretInvalidInput   Code = "secret.input.invalid"
 	CodeSecretResolveFailure Code = "secret.resolve.failure"
 )
 

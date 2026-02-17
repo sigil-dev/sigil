@@ -111,3 +111,16 @@ func TestParseMode(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyMode_UnknownMode(t *testing.T) {
+	result := scanner.ScanResult{
+		Threat:  true,
+		Content: "some content",
+		Matches: []scanner.Match{{Rule: "test", Location: 0, Length: 4, Severity: scanner.SeverityHigh}},
+	}
+
+	_, err := scanner.ApplyMode(scanner.Mode("unknown"), "some content", result)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"expected CodeSecurityScannerFailure, got: %v", err)
+}

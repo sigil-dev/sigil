@@ -35,11 +35,11 @@ Implementation uses Go stdlib `regexp` (compiled at init). TruffleHog was consid
 
 ### Rule Categories
 
-| Category | Patterns | Default Mode |
-|----------|----------|-------------|
-| Input | Prompt injection: instruction override, role confusion, delimiter abuse | block |
-| Tool | Instruction injection in tool results: system prompt leaks, role impersonation | flag |
-| Output | Secrets: AWS keys, Google API keys, OpenAI API keys (incl. legacy), Anthropic API keys, GitHub PATs, Slack tokens, bearer tokens, PEM keys, DB connection strings, keyring:// URIs | redact |
+| Category | Patterns                                                                                                                                                                           | Default Mode |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Input    | Prompt injection: instruction override, role confusion, delimiter abuse                                                                                                            | block        |
+| Tool     | Instruction injection in tool results: system prompt leaks, role impersonation                                                                                                     | flag         |
+| Output   | Secrets: AWS keys, Google API keys, OpenAI API keys (incl. legacy), Anthropic API keys, GitHub PATs, Slack tokens, bearer tokens, PEM keys, DB connection strings, keyring:// URIs | redact       |
 
 PII detection (SSNs, emails, phones) excluded from v1 due to false-positive risk.
 
@@ -86,6 +86,7 @@ New `ScannerConfig` struct in config package with Viper mapstructure binding.
 ### Error Codes
 
 New codes in `pkg/errors/errors.go`:
+
 - `security.scanner.input_blocked` — input rejected by scanner
 - `security.scanner.failure` — scanner internal error
 

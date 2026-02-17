@@ -60,11 +60,31 @@ const (
 	MessageRoleTool      MessageRole = "tool"
 )
 
+// ScanStage identifies the pipeline stage where a security scan occurred.
+// Mirrors scanner.Stage but avoids importing internal/security/scanner from store.
+type ScanStage string
+
+const (
+	ScanStageInput  ScanStage = "input"
+	ScanStageTool   ScanStage = "tool"
+	ScanStageOutput ScanStage = "output"
+)
+
+// Valid reports whether the scan stage is a known pipeline stage.
+func (s ScanStage) Valid() bool {
+	switch s {
+	case ScanStageInput, ScanStageTool, ScanStageOutput:
+		return true
+	default:
+		return false
+	}
+}
+
 // ThreatInfo records security scanner findings for audit persistence.
 type ThreatInfo struct {
 	Detected bool
 	Rules    []string
-	Stage    string
+	Stage    ScanStage
 }
 
 // Message represents a single message in a session conversation.

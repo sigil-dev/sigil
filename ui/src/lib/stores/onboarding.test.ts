@@ -19,8 +19,8 @@ import {
   detectFirstRun,
   isOnboardingComplete,
   markOnboardingComplete,
-  OnboardingStore,
   ONBOARDING_STEPS,
+  OnboardingStore,
   resetOnboarding,
   sendTestMessage,
   STEP_LABELS,
@@ -105,11 +105,13 @@ describe("onboarding store", () => {
 
     it("returns true when no provider plugins found", async () => {
       const mockGet = vi.mocked(api.GET);
-      mockGet.mockResolvedValue({
-        data: { plugins: [] },
-        error: undefined,
-        response: new Response(),
-      } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never);
+      mockGet.mockResolvedValue(
+        {
+          data: { plugins: [] },
+          error: undefined,
+          response: new Response(),
+        } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never,
+      );
 
       const result = await detectFirstRun();
       expect(result).toBe(true);
@@ -117,15 +119,17 @@ describe("onboarding store", () => {
 
     it("returns false when a running provider plugin exists", async () => {
       const mockGet = vi.mocked(api.GET);
-      mockGet.mockResolvedValue({
-        data: {
-          plugins: [
-            { name: "anthropic", type: "provider", status: "running", version: "1.0.0" },
-          ],
-        },
-        error: undefined,
-        response: new Response(),
-      } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never);
+      mockGet.mockResolvedValue(
+        {
+          data: {
+            plugins: [
+              { name: "anthropic", type: "provider", status: "running", version: "1.0.0" },
+            ],
+          },
+          error: undefined,
+          response: new Response(),
+        } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never,
+      );
 
       const result = await detectFirstRun();
       expect(result).toBe(false);
@@ -141,15 +145,17 @@ describe("onboarding store", () => {
 
     it("returns true when only non-provider plugins exist", async () => {
       const mockGet = vi.mocked(api.GET);
-      mockGet.mockResolvedValue({
-        data: {
-          plugins: [
-            { name: "telegram", type: "channel", status: "running", version: "1.0.0" },
-          ],
-        },
-        error: undefined,
-        response: new Response(),
-      } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never);
+      mockGet.mockResolvedValue(
+        {
+          data: {
+            plugins: [
+              { name: "telegram", type: "channel", status: "running", version: "1.0.0" },
+            ],
+          },
+          error: undefined,
+          response: new Response(),
+        } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never,
+      );
 
       const result = await detectFirstRun();
       expect(result).toBe(true);
@@ -208,11 +214,13 @@ describe("onboarding store", () => {
 
     it("validates correct anthropic key via backend", async () => {
       const mockPost = vi.mocked(api.POST);
-      mockPost.mockResolvedValue({
-        data: { status: "ok", provider: "anthropic" },
-        error: undefined,
-        response: new Response(),
-      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
+      mockPost.mockResolvedValue(
+        {
+          data: { status: "ok", provider: "anthropic" },
+          error: undefined,
+          response: new Response(),
+        } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never,
+      );
 
       const result = await validateProviderKey({
         type: "anthropic",
@@ -228,11 +236,13 @@ describe("onboarding store", () => {
 
     it("returns backend error detail on invalid key", async () => {
       const mockPost = vi.mocked(api.POST);
-      mockPost.mockResolvedValue({
-        data: undefined,
-        error: { detail: "invalid anthropic API key" },
-        response: new Response(null, { status: 400 }),
-      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
+      mockPost.mockResolvedValue(
+        {
+          data: undefined,
+          error: { detail: "invalid anthropic API key" },
+          response: new Response(null, { status: 400 }),
+        } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never,
+      );
 
       const result = await validateProviderKey({
         type: "anthropic",
@@ -280,11 +290,13 @@ describe("onboarding store", () => {
 
     it("validates correct telegram token via backend", async () => {
       const mockPost = vi.mocked(api.POST);
-      mockPost.mockResolvedValue({
-        data: { status: "ok", channel: "telegram" },
-        error: undefined,
-        response: new Response(),
-      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
+      mockPost.mockResolvedValue(
+        {
+          data: { status: "ok", channel: "telegram" },
+          error: undefined,
+          response: new Response(),
+        } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never,
+      );
 
       const result = await validateChannelToken({
         type: "telegram",
@@ -390,11 +402,13 @@ describe("onboarding store", () => {
 
     it("validateProvider sets loading state", async () => {
       const mockPost = vi.mocked(api.POST);
-      mockPost.mockResolvedValue({
-        data: { status: "ok", provider: "anthropic" },
-        error: undefined,
-        response: new Response(),
-      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
+      mockPost.mockResolvedValue(
+        {
+          data: { status: "ok", provider: "anthropic" },
+          error: undefined,
+          response: new Response(),
+        } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never,
+      );
 
       store.providerType = "anthropic";
       store.providerApiKey = "sk-ant-test-key-12345";
@@ -418,11 +432,13 @@ describe("onboarding store", () => {
 
     it("validateChannel sets loading state", async () => {
       const mockPost = vi.mocked(api.POST);
-      mockPost.mockResolvedValue({
-        data: { status: "ok", channel: "telegram" },
-        error: undefined,
-        response: new Response(),
-      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
+      mockPost.mockResolvedValue(
+        {
+          data: { status: "ok", channel: "telegram" },
+          error: undefined,
+          response: new Response(),
+        } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never,
+      );
 
       store.channelBotToken = "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ_abcdefgh";
 

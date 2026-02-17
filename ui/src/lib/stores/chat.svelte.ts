@@ -8,8 +8,7 @@ import { classifyError } from "./classify-error";
 import { parseSSEEventData } from "./sse-parser";
 
 /** Request body type for the chat stream endpoint */
-type ChatStreamRequestBody =
-  paths["/api/v1/chat/stream"]["post"]["requestBody"]["content"]["application/json"];
+type ChatStreamRequestBody = paths["/api/v1/chat/stream"]["post"]["requestBody"]["content"]["application/json"];
 
 /** Maximum SSE stream duration before automatic abort (5 minutes) */
 const SSE_STREAM_TIMEOUT_MS = 5 * 60 * 1000;

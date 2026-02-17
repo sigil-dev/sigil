@@ -10,9 +10,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
-
 	"testing"
+	"time"
 
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/provider"
@@ -30,6 +29,16 @@ func newDefaultScanner(t *testing.T) *scanner.RegexScanner {
 		t.Fatalf("NewRegexScanner: %v", err)
 	}
 	return s
+}
+
+// defaultScannerModes returns the standard per-stage scanner modes used by most tests:
+// block input, flag tools, redact output.
+func defaultScannerModes() agent.ScannerModes {
+	return agent.ScannerModes{
+		Input:  scanner.ModeBlock,
+		Tool:   scanner.ModeFlag,
+		Output: scanner.ModeRedact,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -910,6 +919,7 @@ func (p *mockProviderCustomResponse) Available(_ context.Context) bool { return 
 func (p *mockProviderCustomResponse) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
+
 func (p *mockProviderCustomResponse) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	ch := make(chan provider.ChatEvent, 2)
 	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: p.response}
@@ -920,6 +930,7 @@ func (p *mockProviderCustomResponse) Chat(_ context.Context, _ provider.ChatRequ
 	close(ch)
 	return ch, nil
 }
+
 func (p *mockProviderCustomResponse) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-custom"}, nil
 }

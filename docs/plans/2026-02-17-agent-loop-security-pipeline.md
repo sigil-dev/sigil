@@ -15,6 +15,7 @@
 ## Task 1: Add Error Codes and Origin Type
 
 **Files:**
+
 - Modify: `pkg/errors/errors.go:88-89` (add new codes after existing security codes)
 - Modify: `internal/provider/provider.go:79-85` (add Origin field to Message)
 - Test: `internal/provider/provider_test.go` (existing tests still pass)
@@ -62,7 +63,7 @@ Expected: Same pass/fail as baseline (pre-existing sqlite FTS5 failures only)
 
 **Step 4: Commit**
 
-```
+```text
 feat(security): add scanner error codes and origin type
 
 Add CodeSecurityScannerInputBlocked and CodeSecurityScannerFailure
@@ -75,12 +76,13 @@ security scanning (user_input, system, tool_output).
 ## Task 2: Scanner Package — Types, Interface, and Rule Engine
 
 **Files:**
+
 - Create: `internal/security/scanner/scanner.go` (types + interface)
 - Create: `internal/security/scanner/scanner_test.go` (table-driven tests)
 
 **Step 1: Write failing tests for Scanner in `internal/security/scanner/scanner_test.go`**
 
-```go
+````go
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
@@ -259,7 +261,7 @@ func TestRegexScanner_StageFiltering(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.Threat, "secret pattern should not trigger on input stage")
 }
-```
+````
 
 **Step 2: Run tests to verify they fail**
 
@@ -268,7 +270,7 @@ Expected: FAIL — package doesn't exist yet
 
 **Step 3: Implement `internal/security/scanner/scanner.go`**
 
-```go
+````go
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
@@ -473,7 +475,7 @@ func OutputRules() []Rule {
 		},
 	}
 }
-```
+````
 
 **Step 4: Run tests to verify they pass**
 
@@ -482,7 +484,7 @@ Expected: All scanner tests PASS
 
 **Step 5: Commit**
 
-```
+```text
 feat(security): add scanner package with regex-based rule engine
 
 Introduce internal/security/scanner with Scanner interface,
@@ -496,6 +498,7 @@ Table-driven tests cover all patterns.
 ## Task 3: Detection Modes (Block, Flag, Redact)
 
 **Files:**
+
 - Modify: `internal/security/scanner/scanner.go` (add Mode type + Apply method)
 - Create: `internal/security/scanner/mode_test.go` (table-driven mode tests)
 
@@ -704,7 +707,7 @@ Expected: All mode tests PASS
 
 **Step 5: Commit**
 
-```
+```text
 feat(security): add detection modes (block, flag, redact)
 
 Add Mode type with block/flag/redact variants, ApplyMode function
@@ -717,6 +720,7 @@ Redact mode replaces matched regions with [REDACTED].
 ## Task 4: Configuration Support
 
 **Files:**
+
 - Modify: `internal/config/config.go` (add SecurityConfig + ScannerConfig)
 - Modify: `internal/config/config.go` SetDefaults (add scanner defaults)
 - Test: `internal/config/config_test.go` (add scanner config tests)
@@ -840,7 +844,7 @@ Expected: PASS
 
 **Step 4: Commit**
 
-```
+```text
 feat(config): add security scanner mode configuration
 
 Add SecurityConfig with per-hook scanner modes (input/tool/output).
@@ -853,6 +857,7 @@ allowed values.
 ## Task 5: Integrate Scanner into Agent Loop
 
 **Files:**
+
 - Modify: `internal/agent/loop.go` (add scanner field, wire three hook points)
 - Modify: `internal/agent/loop_test.go` (add scanner integration tests)
 
@@ -1028,7 +1033,7 @@ Expected: All tests PASS (including new scanner integration tests)
 
 **Step 8: Commit**
 
-```
+```text
 feat(agent): integrate security scanner into agent loop
 
 Wire input scanning (block), tool result scanning (flag), and
@@ -1041,6 +1046,7 @@ Add origin tagging to all provider.Message construction sites.
 ## Task 6: Decision Log and Design Doc Updates
 
 **Files:**
+
 - Modify: `docs/decisions/decision-log.md` (add scanner design decision)
 - Modify: `docs/design/03-security-model.md` (remove "Phase 8+" markers)
 
@@ -1051,6 +1057,7 @@ Add entry covering: shared scanner architecture, per-hook mode defaults, origin 
 **Step 2: Update 03-security-model.md**
 
 Remove "Phase 8+ (deferred)" and "sigil-39g/j32/hnh" status markers from:
+
 - Step 1 (input sanitization)
 - Step 6 (tool injection scanning)
 - Step 7 (output filtering)
@@ -1060,7 +1067,7 @@ Replace with: "Implemented — see `internal/security/scanner/`"
 
 **Step 3: Commit**
 
-```
+```text
 docs: record scanner design decisions and update security model
 
 Add D-xxx decision for shared scanner architecture, per-hook modes,

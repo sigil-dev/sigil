@@ -858,7 +858,7 @@ Existing tokens and client authentication headers MUST be reviewed after enablin
 2. **stdlib `regexp` for detection** — TruffleHog (the leading open-source secret scanner) is AGPL-3.0, incompatible with Sigil's Apache-2.0 license. stdlib regexp is zero-dependency and sufficient for pattern-based detection.
 3. **Per-hook configurable modes:**
    - Input hook: `block` — reject the message on detection (prompt injection is high-severity).
-   - Tool hook: `flag` — log a warning and continue (tool results may legitimately contain patterns). Tool outputs are scanned with the same secret detection patterns as output (ToolSecretRules) because tool results can expose credentials from external systems before they reach the output stage.
+   - Tool hook: `flag` — log a warning and continue for both injection patterns and secret detection (tool results may legitimately contain credential-shaped strings and injection-like patterns). ToolSecretRules runs at StageTool via DefaultRules(), so tool results are scanned for secrets before reaching the output stage.
    - Output hook: `redact` — replace matched content with `[REDACTED]` before sending to the user.
 4. **Origin tagging on `provider.Message`** — enables context-aware rule selection (e.g., stricter rules for user input vs. system prompts).
 5. **No PII detection in v1** — false-positive rates for regex-based PII detection (names, addresses, phone numbers) are unacceptably high without ML-based NER. Deferred until a suitable Apache-2.0-compatible library is available.

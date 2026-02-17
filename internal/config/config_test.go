@@ -194,10 +194,10 @@ func TestValidate_NetworkingListen(t *testing.T) {
 
 func TestValidate_TrustedProxies(t *testing.T) {
 	tests := []struct {
-		name            string
-		trustedProxies  []string
-		wantErr         bool
-		errMsgContains  string
+		name           string
+		trustedProxies []string
+		wantErr        bool
+		errMsgContains string
 	}{
 		{
 			name:           "empty list",

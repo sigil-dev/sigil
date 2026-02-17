@@ -123,10 +123,10 @@ type SecurityConfig struct {
 
 // ScannerConfig controls per-hook scanner detection modes.
 type ScannerConfig struct {
-	Input                string `mapstructure:"input"`
-	Tool                 string `mapstructure:"tool"`
-	Output               string `mapstructure:"output"`
-	AllowPermissiveInputMode bool `mapstructure:"allow_permissive_input_mode"`
+	Input                    string `mapstructure:"input"`
+	Tool                     string `mapstructure:"tool"`
+	Output                   string `mapstructure:"output"`
+	AllowPermissiveInputMode bool   `mapstructure:"allow_permissive_input_mode"`
 }
 
 // SetDefaults applies Sigil's default configuration values to v.
@@ -420,16 +420,19 @@ func providerFromModel(model string) string {
 	return model
 }
 
+// validScannerModes lists the accepted scanner mode strings.
+// These MUST be kept in sync with scanner.Mode constants in
+// internal/security/scanner/scanner.go. Duplicated here to avoid
+// importing scanner from config (which would invert the dependency direction).
+var validScannerModes = map[string]bool{
+	"block":  true,
+	"flag":   true,
+	"redact": true,
+}
+
 // isValidScannerMode checks if a mode string is one of the known scanner modes.
-// This is intentionally a local check to avoid importing internal/security/scanner
-// from the config package, which would invert the dependency direction.
 func isValidScannerMode(mode string) bool {
-	switch mode {
-	case "block", "flag", "redact":
-		return true
-	default:
-		return false
-	}
+	return validScannerModes[mode]
 }
 
 // validateStringInSet checks if a value is in a set of valid options.

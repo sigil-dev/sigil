@@ -78,7 +78,7 @@ The agent loop itself has security checks at every step:
    - Timeout enforced (configurable per-tool)
 
 6. **Tool result returned**
-   - Result size capped — *deferred: not yet enforced by scanner; tracked as future work*
+   - Result size capped — _deferred: not yet enforced by scanner; tracked as future work_
    - Result scanned for injection patterns — implemented in `internal/security/scanner/` (D062)
    - Result tagged as `tool_output` (not user input)
 
@@ -88,16 +88,16 @@ The agent loop itself has security checks at every step:
 
 ### Defense Matrix
 
-| Attack Vector                     | Defense                                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Prompt injection via user message | Input scanning (implemented, D062) + origin tagging                                               |
-| Prompt injection via tool result  | Tool outputs tagged as `tool_output` role, scanned for instruction patterns (implemented, D062)    |
-| Tool escalation                   | Session-scoped tool allowlist + capability check before dispatch                                  |
-| Infinite tool loops               | Per-session tool call budget (max N calls per turn, max M turns per session)                      |
-| Cost explosion                    | Token budget per-session, per-hour, per-day enforced at provider level                            |
-| Plugin data exfiltration          | Plugins cannot read other plugins' KV/config. Network policy for container tier.                  |
-| Session hijacking                 | Sessions bound to channel+user identity. Cross-session access requires explicit grant.            |
-| Config poisoning                  | Config changes validated against schema, audit-logged, require admin capability                   |
+| Attack Vector                     | Defense                                                                                         |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Prompt injection via user message | Input scanning (implemented, D062) + origin tagging                                             |
+| Prompt injection via tool result  | Tool outputs tagged as `tool_output` role, scanned for instruction patterns (implemented, D062) |
+| Tool escalation                   | Session-scoped tool allowlist + capability check before dispatch                                |
+| Infinite tool loops               | Per-session tool call budget (max N calls per turn, max M turns per session)                    |
+| Cost explosion                    | Token budget per-session, per-hour, per-day enforced at provider level                          |
+| Plugin data exfiltration          | Plugins cannot read other plugins' KV/config. Network policy for container tier.                |
+| Session hijacking                 | Sessions bound to channel+user identity. Cross-session access requires explicit grant.          |
+| Config poisoning                  | Config changes validated against schema, audit-logged, require admin capability                 |
 
 ## Layer 3: Plugin Isolation
 

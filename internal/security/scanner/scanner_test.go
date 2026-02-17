@@ -437,3 +437,78 @@ func TestSecretRules_SlackTokenDetection(t *testing.T) {
 		})
 	}
 }
+
+// Finding .123 — ToolSecretRules scan-level detection at StageTool.
+func TestToolSecretRules_ScanDetection(t *testing.T) {
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		content string
+		rule    string
+	}{
+		{
+			name:    "AWS key in tool output",
+			content: `{"credentials": "AKIAIOSFODNN7EXAMPLE"}`,
+			rule:    "aws_access_key",
+		},
+		{
+			name:    "GitHub PAT in tool output",
+			content: "Token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+			rule:    "github_pat",
+		},
+		{
+			name:    "Anthropic key in tool output",
+			content: "key=sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345678901234567890123456789-AAAAAA",
+			rule:    "anthropic_api_key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := s.Scan(ctx, tt.content, scanner.ScanContext{
+				Stage:  scanner.StageTool,
+				Origin: scanner.OriginTool,
+			})
+			require.NoError(t, err)
+			assert.True(t, result.Threat, "expected threat detection for %s in tool stage", tt.rule)
+
+			ruleFound := false
+			for _, m := range result.Matches {
+				if m.Rule == tt.rule {
+					ruleFound = true
+					break
+				}
+			}
+			assert.True(t, ruleFound, "expected rule %q to match, got matches: %v", tt.rule, result.Matches)
+		})
+	}
+}
+
+// Finding .124 — Redact uses normalized content, not original.
+func TestScan_RedactWithNormalization(t *testing.T) {
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	require.NoError(t, err)
+
+	// AWS key with zero-width space inserted: AKIA\u200bIOSFODNN7EXAMPLE.
+	// After normalization, the zero-width space is stripped and the key matches.
+	content := "key=AKIA\u200bIOSFODNN7EXAMPLE end"
+
+	result, err := s.Scan(context.Background(), content, scanner.ScanContext{
+		Stage:  scanner.StageOutput,
+		Origin: scanner.OriginSystem,
+	})
+	require.NoError(t, err)
+	require.True(t, result.Threat, "AWS key with zero-width char should be detected after normalization")
+
+	// Verify result.Content differs from original (normalization stripped the zero-width char).
+	assert.NotEqual(t, content, result.Content, "normalized content should differ from original")
+
+	// Apply redaction using the normalized content.
+	redacted, err := scanner.ApplyMode(scanner.ModeRedact, result.Content, result)
+	require.NoError(t, err)
+	assert.NotContains(t, redacted, "AKIA", "redacted output must not contain the AWS key prefix")
+	assert.Contains(t, redacted, "[REDACTED]", "redacted output must contain [REDACTED] marker")
+}

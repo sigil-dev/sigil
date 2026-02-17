@@ -439,4 +439,3 @@ func TestStoreSecretAndWriteConfig_SkipsChannelTokenWhenEmpty(t *testing.T) {
 	assert.NotContains(t, string(data), "channel: \"telegram\"")
 	assert.Contains(t, string(data), "bindings: []")
 }
-
