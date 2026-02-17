@@ -106,6 +106,14 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_
 // columnDef — never values derived from user input or runtime data.
 var safeIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
+// safeDefTokenRe matches a single token that is safe inside a column definition.
+// It accepts either a plain SQL identifier/keyword (letters, digits, underscores)
+// or a single-quoted string literal whose body contains only alphanumerics,
+// underscores, braces, brackets, commas, dots, hyphens, and spaces — covering
+// DEFAULT values like '{}' while excluding SQL metacharacters such as
+// semicolons, dashes-in-comments, and quote sequences.
+var safeDefTokenRe = regexp.MustCompile(`^(?:[a-zA-Z_][a-zA-Z0-9_]*|'[a-zA-Z0-9_{}[\]., -]*')$`)
+
 // addColumnIfMissing checks whether the named column exists in the given table
 // via PRAGMA table_info, and issues ALTER TABLE ADD COLUMN if it does not.
 //
@@ -119,11 +127,19 @@ func addColumnIfMissing(db *sql.DB, table, column, columnDef string) error {
 	if !safeIdentRe.MatchString(column) {
 		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "addColumnIfMissing: unsafe column name %q", column)
 	}
-	// columnDef is a compound expression (e.g. "TEXT NOT NULL DEFAULT '{}'") so
-	// we validate only the leading type token, which must be a safe identifier.
-	typeToken := strings.Fields(columnDef)
-	if len(typeToken) == 0 || !safeIdentRe.MatchString(typeToken[0]) {
-		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "addColumnIfMissing: unsafe column definition %q", columnDef)
+	// columnDef is a compound expression (e.g. "TEXT NOT NULL DEFAULT '{}'").
+	// Validate every whitespace-separated token against safeDefTokenRe so that
+	// no unsanitized fragment reaches the ALTER TABLE statement. Each token must
+	// be either a plain SQL keyword/identifier or a single-quoted string literal
+	// with a restricted character set.
+	defTokens := strings.Fields(columnDef)
+	if len(defTokens) == 0 {
+		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "addColumnIfMissing: empty column definition")
+	}
+	for _, tok := range defTokens {
+		if !safeDefTokenRe.MatchString(tok) {
+			return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "addColumnIfMissing: unsafe token %q in column definition %q", tok, columnDef)
+		}
 	}
 
 	rows, err := db.Query("PRAGMA table_info(" + table + ")")

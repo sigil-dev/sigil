@@ -12,10 +12,10 @@ import (
 )
 
 // defaultScannerModes is the single source of truth for scanner mode defaults.
-// Input: block (reject prompt injection), Tool: flag (log but continue), Output: redact (strip secrets).
+// Input: block (reject prompt injection), Tool: block (reject injection payloads), Output: redact (strip secrets).
 var defaultScannerModes = ScannerModes{
 	Input:  scanner.ModeBlock,
-	Tool:   scanner.ModeFlag,
+	Tool:   scanner.ModeBlock,
 	Output: scanner.ModeRedact,
 }
 
@@ -46,12 +46,7 @@ func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
 }
 
 // DefaultLoopConfig returns a LoopConfig with default scanner modes and the given required dependencies.
-func DefaultLoopConfig(sessions *SessionManager, enforcer *security.Enforcer, router provider.Router, sc scanner.Scanner) LoopConfig {
-	return LoopConfig{
-		SessionManager: sessions,
-		Enforcer:       enforcer,
-		ProviderRouter: router,
-		Scanner:        sc,
-		ScannerModes:   defaultScannerModes,
-	}
+// Returns an error if any required dependency is nil.
+func DefaultLoopConfig(sessions *SessionManager, enforcer *security.Enforcer, router provider.Router, sc scanner.Scanner) (LoopConfig, error) {
+	return NewLoopConfig(sessions, enforcer, router, sc, defaultScannerModes)
 }

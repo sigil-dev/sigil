@@ -8,3 +8,6 @@ var SanitizeToolError = sanitizeToolError
 
 // MaxToolContentScanSize exposes maxToolContentScanSize for white-box testing.
 const MaxToolContentScanSize = maxToolContentScanSize
+
+// ScannerCircuitBreakerThreshold exposes scannerCircuitBreakerThreshold for white-box testing.
+const ScannerCircuitBreakerThreshold = scannerCircuitBreakerThreshold

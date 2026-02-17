@@ -50,13 +50,11 @@ func (s Session) Validate() error {
 // NewToolBudget creates a ToolBudget with the given max limits, returning an
 // error if any max value is negative.
 func NewToolBudget(maxPerTurn, maxPerSession int) (ToolBudget, error) {
-	if maxPerTurn < 0 {
-		return ToolBudget{}, sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "tool budget: MaxCallsPerTurn must be >= 0, got %d", maxPerTurn)
+	b := ToolBudget{MaxCallsPerTurn: maxPerTurn, MaxCallsPerSession: maxPerSession}
+	if err := b.Validate(); err != nil {
+		return ToolBudget{}, err
 	}
-	if maxPerSession < 0 {
-		return ToolBudget{}, sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "tool budget: MaxCallsPerSession must be >= 0, got %d", maxPerSession)
-	}
-	return ToolBudget{MaxCallsPerTurn: maxPerTurn, MaxCallsPerSession: maxPerSession}, nil
+	return b, nil
 }
 
 // Validate checks that the ToolBudget has self-consistent values.
@@ -79,16 +77,11 @@ func (b ToolBudget) Validate() error {
 // NewTokenBudget creates a TokenBudget with the given max limits, returning an
 // error if any max value is negative.
 func NewTokenBudget(maxPerSession, maxPerHour, maxPerDay int) (TokenBudget, error) {
-	if maxPerSession < 0 {
-		return TokenBudget{}, sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "token budget: MaxPerSession must be >= 0, got %d", maxPerSession)
+	b := TokenBudget{MaxPerSession: maxPerSession, MaxPerHour: maxPerHour, MaxPerDay: maxPerDay}
+	if err := b.Validate(); err != nil {
+		return TokenBudget{}, err
 	}
-	if maxPerHour < 0 {
-		return TokenBudget{}, sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "token budget: MaxPerHour must be >= 0, got %d", maxPerHour)
-	}
-	if maxPerDay < 0 {
-		return TokenBudget{}, sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "token budget: MaxPerDay must be >= 0, got %d", maxPerDay)
-	}
-	return TokenBudget{MaxPerSession: maxPerSession, MaxPerHour: maxPerHour, MaxPerDay: maxPerDay}, nil
+	return b, nil
 }
 
 // Validate checks that the TokenBudget has self-consistent values.

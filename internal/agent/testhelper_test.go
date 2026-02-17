@@ -32,13 +32,33 @@ func newDefaultScanner(t *testing.T) *scanner.RegexScanner {
 }
 
 // defaultScannerModes returns the standard per-stage scanner modes used by most tests:
-// block input, flag tools, redact output.
+// block input, block tools, redact output.
 func defaultScannerModes() agent.ScannerModes {
 	return agent.ScannerModes{
 		Input:  scanner.ModeBlock,
-		Tool:   scanner.ModeFlag,
+		Tool:   scanner.ModeBlock,
 		Output: scanner.ModeRedact,
 	}
+}
+
+// newTestLoopConfig creates a valid LoopConfig via NewLoopConfig using standard
+// test mocks: default session manager, permissive enforcer, "Hello, world!"
+// provider router, default scanner, and default scanner modes. Callers can
+// override individual fields on the returned config before passing it to NewLoop.
+func newTestLoopConfig(t *testing.T) agent.LoopConfig {
+	t.Helper()
+	cfg, err := agent.NewLoopConfig(
+		newMockSessionManager(),
+		newMockEnforcer(),
+		newMockProviderRouter(),
+		newDefaultScanner(t),
+		defaultScannerModes(),
+	)
+	if err != nil {
+		t.Fatalf("newTestLoopConfig: %v", err)
+	}
+	cfg.AuditStore = newMockAuditStore()
+	return cfg
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,4 +1076,71 @@ func (s *mockToolContentTooLargeScanner) Scan(_ context.Context, content string,
 			)
 	}
 	return scanner.ScanResult{Content: content}, nil
+}
+
+// mockToolErrorScannerToggleable errors on tool-stage scans until succeedAfter
+// tool-stage calls have been made, then succeeds. This allows testing the
+// circuit-breaker reset behavior. Thread-safe via atomic counter.
+type mockToolErrorScannerToggleable struct {
+	toolCalls    atomic.Int64
+	succeedAfter int64 // tool-stage call number (1-indexed) at which to start succeeding
+}
+
+func (s *mockToolErrorScannerToggleable) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage != scanner.StageTool {
+		return scanner.ScanResult{Content: content}, nil
+	}
+	n := s.toolCalls.Add(1)
+	if n >= s.succeedAfter {
+		return scanner.ScanResult{Content: content}, nil
+	}
+	return scanner.ScanResult{}, fmt.Errorf("internal scanner failure (call %d)", n)
+}
+
+// mockProviderRepeatingToolCall emits a tool call on every even Chat() call
+// (0, 2, 4, ...) and a text response on every odd call (1, 3, 5, ...).
+// This allows testing scenarios that require multiple ProcessMessage calls
+// each triggering a tool dispatch (each ProcessMessage uses two Chat() calls:
+// one returning a tool call and one returning text).
+type mockProviderRepeatingToolCall struct {
+	mu       sync.Mutex
+	callNum  int
+	toolCall *provider.ToolCall
+}
+
+func (p *mockProviderRepeatingToolCall) Name() string                     { return "mock-repeating-tool" }
+func (p *mockProviderRepeatingToolCall) Available(_ context.Context) bool { return true }
+func (p *mockProviderRepeatingToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-repeating-tool"}, nil
+}
+func (p *mockProviderRepeatingToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderRepeatingToolCall) Close() error { return nil }
+
+func (p *mockProviderRepeatingToolCall) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	call := p.callNum
+	p.callNum++
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, 4)
+	if call%2 == 0 {
+		ch <- provider.ChatEvent{
+			Type:     provider.EventTypeToolCall,
+			ToolCall: p.toolCall,
+		}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 10, OutputTokens: 2},
+		}
+	} else {
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Tool result processed."}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 20, OutputTokens: 8},
+		}
+	}
+	close(ch)
+	return ch, nil
 }

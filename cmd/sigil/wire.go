@@ -158,11 +158,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 			RequestsPerSecond: cfg.Networking.RateLimitRPS,
 			Burst:             cfg.Networking.RateLimitBurst,
 		},
-		// Provide stub stream handler so chat endpoints work during initial startup
-		// (before real agent loop integration). Prevents 503 errors that would occur
-		// with nil StreamHandler.
-		StreamHandler: &stubStreamHandler{},
-		Services:      services,
+		Services: services,
 	})
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
@@ -419,22 +415,6 @@ type userServiceAdapter struct {
 	store store.UserStore
 }
 
-// stubStreamHandler implements StreamHandler by returning a placeholder message.
-// Used during initial startup until the real agent loop is integrated.
-type stubStreamHandler struct{}
-
-func (h *stubStreamHandler) HandleStream(_ context.Context, _ server.ChatStreamRequest, events chan<- server.SSEEvent) {
-	events <- server.SSEEvent{
-		Event: "text_delta",
-		Data:  `{"text":"Agent not yet configured. Please set up a provider and workspace."}`,
-	}
-	events <- server.SSEEvent{
-		Event: "done",
-		Data:  `{}`,
-	}
-	close(events)
-}
-
 func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, error) {
 	users, err := a.store.List(ctx, store.ListOpts{Limit: 100})
 	if err != nil {
@@ -516,3 +496,4 @@ func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*
 	slog.Debug("token validation failed: no configured token matched")
 	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")
 }
+

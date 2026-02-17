@@ -75,9 +75,9 @@ type ScanResult struct {
 // Match describes a single pattern match.
 // Location and Length are byte offsets into ScanResult.Content.
 // Invariant: Location >= 0 and Length >= 0. Use NewMatch for validated
-// construction. Direct struct literals are permitted (Go convention) but
-// callers must ensure non-negative offsets. redact() defensively filters
-// invalid offsets.
+// construction. Use NewMatch for all external construction. Within this
+// package, struct literals are acceptable where the caller can statically
+// guarantee non-negative values.
 type Match struct {
 	Rule     string
 	Location int // byte offset into ScanResult.Content
@@ -156,7 +156,9 @@ func WithMaxContentLength(n int) ScannerOption {
 
 // NewRegexScanner creates a scanner with the given rules and optional configuration.
 func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error) {
+	copied := make([]Rule, len(rules))
 	for i, r := range rules {
+		// Validate rules in the same loop that copies them.
 		if r.Pattern == nil {
 			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has nil pattern", i, r.Name)
 		}
@@ -169,9 +171,7 @@ func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error)
 		if !r.Severity.Valid() {
 			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid severity %q", i, r.Name, r.Severity)
 		}
-	}
-	copied := make([]Rule, len(rules))
-	for i, r := range rules {
+		// Deep-copy the rule.
 		copied[i] = Rule{
 			Stage:    r.Stage,
 			Name:     r.Name,

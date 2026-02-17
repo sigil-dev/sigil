@@ -144,7 +144,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("models.budgets.per_hour_usd", 5.00)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
 	v.SetDefault("security.scanner.input", "block")
-	v.SetDefault("security.scanner.tool", "flag")
+	v.SetDefault("security.scanner.tool", "block")
 	v.SetDefault("security.scanner.output", "redact")
 }
 
@@ -406,11 +406,24 @@ func (c *Config) validateSecurity() []error {
 		))
 	}
 
-	// AllowPermissiveInputMode must not be overridable via environment variable
-	// to prevent env injection from weakening input scanning in production.
-	if os.Getenv("SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE") != "" {
-		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"config: security.scanner.allow_permissive_input_mode cannot be set via environment variable"))
+	// Scanner mode env vars must not be overridable via environment variables
+	// to prevent env injection from weakening security scanning in production.
+	// All scanner mode fields (input, tool, output, allow_permissive_input_mode)
+	// must be configured exclusively via the config file.
+	blockedScannerEnvVars := []struct {
+		envVar string
+		field  string
+	}{
+		{"SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE", "security.scanner.allow_permissive_input_mode"},
+		{"SIGIL_SECURITY_SCANNER_INPUT", "security.scanner.input"},
+		{"SIGIL_SECURITY_SCANNER_TOOL", "security.scanner.tool"},
+		{"SIGIL_SECURITY_SCANNER_OUTPUT", "security.scanner.output"},
+	}
+	for _, blocked := range blockedScannerEnvVars {
+		if os.Getenv(blocked.envVar) != "" {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: %s cannot be set via environment variable", blocked.field))
+		}
 	}
 
 	return errs

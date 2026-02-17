@@ -14,7 +14,6 @@ import (
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
-	"github.com/sigil-dev/sigil/internal/security/scanner"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -803,16 +802,12 @@ func TestToolDispatcher_ResolvesPluginFromRegistry(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop, err := agent.NewLoop(agent.LoopConfig{
-		SessionManager: sm,
-		Enforcer:       newMockEnforcer(),
-		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
-		AuditStore:     newMockAuditStore(),
-		ToolDispatcher: dispatcher,
-		ToolRegistry:   registry,
-		Scanner:        newDefaultScanner(t),
-		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
-	})
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.ToolRegistry = registry
+	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
@@ -866,16 +861,12 @@ func TestToolDispatcher_FallsBackToBuiltin(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	loop, err := agent.NewLoop(agent.LoopConfig{
-		SessionManager: sm,
-		Enforcer:       newMockEnforcer(),
-		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
-		AuditStore:     newMockAuditStore(),
-		ToolDispatcher: dispatcher,
-		ToolRegistry:   registry,
-		Scanner:        newDefaultScanner(t),
-		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
-	})
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.ToolRegistry = registry
+	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
 	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{

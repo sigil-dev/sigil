@@ -61,7 +61,7 @@ func TestGateway_GracefulShutdown(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestWireGateway_ChatEndpointNotDisabled(t *testing.T) {
+func TestWireGateway_ChatEndpointReturns503WithoutHandler(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 
@@ -75,16 +75,12 @@ func TestWireGateway_ChatEndpointNotDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	gw.Server.Handler().ServeHTTP(w, req)
 
-	// Must NOT be 503 — a stream handler must be registered.
-	assert.NotEqual(t, http.StatusServiceUnavailable, w.Code,
-		"chat endpoint should not return 503 when gateway is wired")
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// The stub handler should return a message indicating the agent isn't configured.
-	assert.Contains(t, w.Body.String(), "not yet configured")
+	// Without a stream handler, the server fails closed with 503.
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"chat endpoint should return 503 when no stream handler is configured")
 }
 
-func TestWireGateway_ChatStreamEndpointNotDisabled(t *testing.T) {
+func TestWireGateway_ChatStreamEndpointReturns503WithoutHandler(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 
@@ -99,10 +95,9 @@ func TestWireGateway_ChatStreamEndpointNotDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	gw.Server.Handler().ServeHTTP(w, req)
 
-	assert.NotEqual(t, http.StatusServiceUnavailable, w.Code,
-		"chat/stream endpoint should not return 503 when gateway is wired")
-	assert.Contains(t, w.Body.String(), "text_delta")
-	assert.Contains(t, w.Body.String(), "not yet configured")
+	// Without a stream handler, the server fails closed with 503.
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"chat/stream endpoint should return 503 when no stream handler is configured")
 }
 
 func TestWorkspaceServiceAdapter_ListReturnsEmptyArray(t *testing.T) {

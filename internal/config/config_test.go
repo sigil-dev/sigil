@@ -118,7 +118,7 @@ func validConfig() *config.Config {
 		Security: config.SecurityConfig{
 			Scanner: config.ScannerConfig{
 				Input:  "block",
-				Tool:   "flag",
+				Tool:   "block",
 				Output: "redact",
 			},
 		},
@@ -523,7 +523,7 @@ func TestConfig_ScannerDefaults(t *testing.T) {
 	config.SetDefaults(v)
 
 	assert.Equal(t, "block", v.GetString("security.scanner.input"))
-	assert.Equal(t, "flag", v.GetString("security.scanner.tool"))
+	assert.Equal(t, "block", v.GetString("security.scanner.tool"))
 	assert.Equal(t, "redact", v.GetString("security.scanner.output"))
 }
 
@@ -535,7 +535,7 @@ func TestConfig_ScannerValidation(t *testing.T) {
 		output  string
 		wantErr bool
 	}{
-		{"valid defaults", "block", "flag", "redact", false},
+		{"valid defaults", "block", "block", "redact", false},
 		{"all block", "block", "block", "block", false},
 		{"invalid input mode", "invalid", "flag", "redact", true},
 		{"invalid tool mode", "block", "nope", "redact", true},
@@ -602,6 +602,48 @@ func TestConfig_AllowPermissiveInputModeEnvRejected(t *testing.T) {
 	_, err := config.FromViper(v)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "allow_permissive_input_mode cannot be set via environment variable")
+}
+
+func TestConfig_ScannerModeEnvVarsRejected(t *testing.T) {
+	tests := []struct {
+		name        string
+		envVar      string
+		envVal      string
+		wantErrFrag string
+	}{
+		{
+			name:        "SIGIL_SECURITY_SCANNER_INPUT rejected",
+			envVar:      "SIGIL_SECURITY_SCANNER_INPUT",
+			envVal:      "flag",
+			wantErrFrag: "security.scanner.input cannot be set via environment variable",
+		},
+		{
+			name:        "SIGIL_SECURITY_SCANNER_TOOL rejected",
+			envVar:      "SIGIL_SECURITY_SCANNER_TOOL",
+			envVal:      "flag",
+			wantErrFrag: "security.scanner.tool cannot be set via environment variable",
+		},
+		{
+			name:        "SIGIL_SECURITY_SCANNER_OUTPUT rejected",
+			envVar:      "SIGIL_SECURITY_SCANNER_OUTPUT",
+			envVal:      "flag",
+			wantErrFrag: "security.scanner.output cannot be set via environment variable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.envVar, tt.envVal)
+
+			v := viper.New()
+			config.SetDefaults(v)
+			config.SetupEnv(v)
+
+			_, err := config.FromViper(v)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErrFrag)
+		})
+	}
 }
 
 func TestValidate_RateLimitConfig(t *testing.T) {

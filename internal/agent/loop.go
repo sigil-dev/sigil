@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/sigil-dev/sigil/internal/provider"
@@ -26,27 +27,27 @@ type ScannerModes struct {
 	Output scanner.Mode
 }
 
-// Validate checks that all scanner mode fields are non-empty and valid.
-func (m ScannerModes) Validate() error {
-	if m.Input == "" {
-		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes.Input is required")
+// validateMode checks that a single ScannerModes field is non-empty and valid.
+// field is the scanner.Mode value; name is the field name used in error messages.
+func validateMode(field scanner.Mode, name string) error {
+	if field == "" {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes."+name+" is required")
 	}
-	if !m.Input.Valid() {
-		return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Input: %q", m.Input)
-	}
-	if m.Tool == "" {
-		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes.Tool is required")
-	}
-	if !m.Tool.Valid() {
-		return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Tool: %q", m.Tool)
-	}
-	if m.Output == "" {
-		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes.Output is required")
-	}
-	if !m.Output.Valid() {
-		return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Output: %q", m.Output)
+	if !field.Valid() {
+		return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.%s: %q", name, field)
 	}
 	return nil
+}
+
+// Validate checks that all scanner mode fields are non-empty and valid.
+func (m ScannerModes) Validate() error {
+	if err := validateMode(m.Input, "Input"); err != nil {
+		return err
+	}
+	if err := validateMode(m.Tool, "Tool"); err != nil {
+		return err
+	}
+	return validateMode(m.Output, "Output")
 }
 
 // defaultMaxToolCallsPerTurn is the default maximum number of tool calls
@@ -117,6 +118,50 @@ type LoopConfig struct {
 	ScannerModes        ScannerModes
 }
 
+// Validate checks that all required fields in LoopConfig are set.
+// Required: SessionManager, Enforcer, ProviderRouter, Scanner (non-nil),
+// and ScannerModes (all three stage modes must be valid).
+func (c LoopConfig) Validate() error {
+	if c.SessionManager == nil {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "SessionManager is required")
+	}
+	if c.Enforcer == nil {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Enforcer is required")
+	}
+	if c.ProviderRouter == nil {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ProviderRouter is required")
+	}
+	if c.Scanner == nil {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Scanner is required")
+	}
+	return c.ScannerModes.Validate()
+}
+
+// NewLoopConfig creates and validates a LoopConfig. Required fields:
+// SessionManager, Enforcer, ProviderRouter, Scanner (all non-nil), and
+// ScannerModes (all three stage modes must be valid). Optional fields
+// (AuditStore, ToolDispatcher, ToolRegistry, MaxToolCallsPerTurn, Hooks)
+// may be left at their zero values and set directly on the returned config.
+func NewLoopConfig(
+	sessions *SessionManager,
+	enforcer *security.Enforcer,
+	router provider.Router,
+	sc scanner.Scanner,
+	modes ScannerModes,
+) (LoopConfig, error) {
+	cfg := LoopConfig{
+		SessionManager: sessions,
+		Enforcer:       enforcer,
+		ProviderRouter: router,
+		Scanner:        sc,
+		ScannerModes:   modes,
+	}
+	if err := cfg.Validate(); err != nil {
+		return LoopConfig{}, err
+	}
+	return cfg, nil
+}
+
 // Loop is the agent's core processing pipeline.
 type Loop struct {
 	sessions            *SessionManager
@@ -138,19 +183,7 @@ type Loop struct {
 // (all three stage modes must be valid). Returns an error if any required
 // dependency is nil or invalid.
 func NewLoop(cfg LoopConfig) (*Loop, error) {
-	if cfg.SessionManager == nil {
-		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "SessionManager is required")
-	}
-	if cfg.Enforcer == nil {
-		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Enforcer is required")
-	}
-	if cfg.ProviderRouter == nil {
-		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ProviderRouter is required")
-	}
-	if cfg.Scanner == nil {
-		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Scanner is required")
-	}
-	if err := cfg.ScannerModes.Validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -874,7 +907,17 @@ func (l *Loop) auditInputBlocked(ctx context.Context, msg InboundMessage, threat
 // where prompt-injection payloads are most likely to appear.
 const maxToolContentScanSize = 512 * 1024 // 512KB
 
+// scannerCircuitBreakerThreshold is the number of consecutive tool-stage scanner
+// failures after which the best-effort path switches to fail-closed. Once this
+// threshold is reached, tool results are blocked instead of passed through
+// unscanned. The counter resets on a successful scan (see applyScannedResult).
+const scannerCircuitBreakerThreshold = 3
+
 // attrsToAny converts a []slog.Attr to []any for use with slog's variadic API.
+// Go does not allow implicit conversion between []slog.Attr and []any, so this
+// helper is required to append structured log attributes into mixed-type arg
+// slices (e.g. append([]any{"key", val}, attrsToAny(logAttrs)...)). Removing
+// it would require an inline loop at every call site.
 func attrsToAny(attrs []slog.Attr) []any {
 	result := make([]any, len(attrs))
 	for i, a := range attrs {
@@ -886,6 +929,12 @@ func attrsToAny(attrs []slog.Attr) []any {
 // scanContent scans content at the given stage and applies the configured mode.
 // Returns the (possibly redacted) content, threat info (if a threat was detected), or an error
 // if scanning fails or the mode blocks. Scanner is guaranteed non-nil by NewLoop validation.
+//
+// For StageTool, scanner internal errors are handled best-effort up to a threshold: content
+// is passed through (normalized) on each failure below the limit. Once
+// scannerCircuitBreakerThreshold consecutive failures are reached, a circuit-breaker trips
+// and tool results are blocked (fail-closed) instead of passed through unscanned. The counter
+// resets on any successful tool-stage scan. See D062 for rationale.
 func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.Stage, origin scanner.Origin, mode scanner.Mode, logAttrs []slog.Attr) (string, *store.ThreatInfo, error) {
 	scanResult, scanErr := l.scanner.Scan(ctx, content, scanner.ScanContext{
 		Stage:  stage,
@@ -903,8 +952,19 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		// passing unscanned content through, truncate to maxToolContentScanSize
 		// and re-scan the truncated content.
 		if stage == scanner.StageTool {
+			// originalErr records the first scan error when a content_too_large
+			// error triggers a truncated re-scan that also fails; nil otherwise.
+			// Used to log both errors so operators can distinguish a double-failure
+			// from a single internal scanner failure (sigil-7g5.279).
+			var originalErr error
 			if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerContentTooLarge) {
-				truncated := content[:min(len(content), maxToolContentScanSize)]
+				n := min(len(content), maxToolContentScanSize)
+				// Walk backwards to find a valid UTF-8 rune boundary so we do not
+				// split a multi-byte codepoint (sigil-7g5.273).
+				for n > 0 && n < len(content) && !utf8.RuneStart(content[n]) {
+					n--
+				}
+				truncated := content[:n]
 				slog.Warn("tool result exceeds scanner limit, truncating and re-scanning",
 					append([]any{
 						"original_size", len(content),
@@ -921,22 +981,42 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 					return l.applyScannedResult(stage, mode, reScanResult, logAttrs)
 				}
 				// Re-scan also failed: fall through to the generic best-effort path.
+				// Preserve the original content_too_large error in originalErr so both
+				// errors can be logged below.
+				originalErr = scanErr
 				scanErr = reScanErr
 			}
 			consecutive := l.scannerFailCount.Add(1)
 			logLevel := slog.LevelWarn
-			if consecutive >= 3 {
+			if consecutive >= scannerCircuitBreakerThreshold {
 				logLevel = slog.LevelError
 			}
-			slog.Log(ctx, logLevel, "scanner internal error on tool result, continuing with unscanned content",
-				append([]any{
-					"error", scanErr,
-					"stage", stage,
-					"error_code", sigilerr.CodeSecurityScannerFailure,
-					"consecutive_failures", consecutive,
-				}, attrsToAny(logAttrs)...)...,
+			logArgs := []any{
+				"error", scanErr,
+				"stage", stage,
+				"error_code", sigilerr.CodeSecurityScannerFailure,
+				"consecutive_failures", consecutive,
+			}
+			if originalErr != nil {
+				logArgs = append(logArgs, "original_error", originalErr.Error())
+			}
+			slog.Log(ctx, logLevel, "scanner internal error on tool result",
+				append(logArgs, attrsToAny(logAttrs)...)...,
 			)
-			// D062 decision: availability over security for tool results.
+
+			// Circuit breaker: after scannerCircuitBreakerThreshold consecutive
+			// failures, switch from best-effort (pass through) to fail-closed
+			// (block the content). This prevents a persistently broken scanner
+			// from silently passing all tool results unscanned.
+			if consecutive >= scannerCircuitBreakerThreshold {
+				return "", nil, sigilerr.Errorf(
+					sigilerr.CodeSecurityScannerCircuitBreakerOpen,
+					"scanner circuit breaker open: %d consecutive tool-stage failures (threshold %d)",
+					consecutive, scannerCircuitBreakerThreshold,
+				)
+			}
+
+			// D062 decision: availability over security for tool results (below threshold).
 			// Apply normalization (NFKC + zero-width stripping + HTML entity decoding)
 			// even on the best-effort path to ensure consistent unicode handling.
 			// Stage and origin are compile-time constants, so only regex engine
@@ -951,8 +1031,9 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 	return l.applyScannedResult(stage, mode, scanResult, logAttrs)
 }
 
-// applyScannedResult processes a successful ScanResult: resets failure counters, builds
-// threat info, applies the configured mode, and returns the (possibly redacted) content.
+// applyScannedResult processes a successful ScanResult: resets the tool-stage scanner
+// failure counter on success, builds threat info, applies the configured mode, and
+// returns the (possibly redacted) content.
 func (l *Loop) applyScannedResult(stage scanner.Stage, mode scanner.Mode, scanResult scanner.ScanResult, logAttrs []slog.Attr) (string, *store.ThreatInfo, error) {
 	// Reset the scanner fail counter on success for the tool stage.
 	if stage == scanner.StageTool {
