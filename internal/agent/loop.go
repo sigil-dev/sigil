@@ -433,8 +433,6 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 	maxAttempts := l.providerRouter.MaxAttempts()
 	var lastErr error
 	var triedProviders []string
-	// Accumulate provider failures for comprehensive error reporting.
-	// Each element is "providerName: error message".
 	var providerFailures []string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		prov, resolvedModel, err := l.providerRouter.RouteWithBudget(ctx, workspaceID, modelName, budget, triedProviders)
@@ -447,7 +445,6 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 				return nil, nil, err
 			}
 			lastErr = err
-			// Record routing failures so users can see which providers were skipped.
 			providerFailures = append(providerFailures, fmt.Sprintf("route attempt %d: %s", attempt+1, err.Error()))
 			continue
 		}
@@ -498,7 +495,6 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		}
 
 		// First event is valid — wrap it back with the rest of the stream.
-		// fallback provider requires buffering all events and resending messages.
 		// Mid-stream errors surface to the caller via processEvents.
 		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
 		wrappedCh <- firstEvent
@@ -511,20 +507,14 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		return wrappedCh, prov, nil
 	}
 
-	// All providers failed. Build comprehensive error message showing all failures.
+	// All providers failed. Build a combined error message for observability.
+	// For a single provider failure with a specific error code, preserve that code.
+	// For routing-only failures or multiple failures, use CodeProviderAllUnavailable.
 	if len(providerFailures) > 0 {
 		combinedMsg := fmt.Sprintf("all providers failed for workspace %s: %s", workspaceID, strings.Join(providerFailures, "; "))
-		if lastErr != nil {
-			// For single provider failure, preserve the original error code if available.
-			// For multiple failures or routing errors, use CodeProviderAllUnavailable.
-			code := sigilerr.CodeOf(lastErr)
-			if len(providerFailures) == 1 && code != "" {
-				// Single failure with a specific error code: preserve it.
-				return nil, nil, sigilerr.Errorf(code, "%s", combinedMsg)
-			}
-			// Multiple failures or non-sigilerr error: all providers unavailable.
-			// Create new error instead of wrapping to ensure correct code.
-			return nil, nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
+		code := sigilerr.CodeOf(lastErr)
+		if len(providerFailures) == 1 && code != "" {
+			return nil, nil, sigilerr.Errorf(code, "%s", combinedMsg)
 		}
 		return nil, nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
 	}
