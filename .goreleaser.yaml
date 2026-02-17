@@ -97,3 +97,13 @@ docker_manifests:
     image_templates:
       - "ghcr.io/sigil-dev/sigil:{{ .Version }}-amd64"
       - "ghcr.io/sigil-dev/sigil:{{ .Version }}-arm64"
+docker_signs:
+  - cmd: cosign
+    # Keyless (Fulcio + Rekor) signing for container images.
+    # Signs both per-arch images and multi-arch manifests.
+    artifacts: all
+    output: true
+    args:
+      - sign
+      - "--yes"
+      - "${artifact}"
