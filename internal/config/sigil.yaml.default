@@ -54,15 +54,18 @@ storage:
 # ---------------------------------------------------------------------------
 # LLM Providers
 # ---------------------------------------------------------------------------
+# API keys use the keyring:// URI scheme for secure OS keyring storage.
+# Store keys with: sigil secrets set sigil anthropic-api-key
+# Fallback: environment variables (e.g. SIGIL_PROVIDERS_ANTHROPIC_API_KEY)
 providers:
   anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
+    api_key: "keyring://sigil/anthropic-api-key"
   # openai:
-  #   api_key: "${OPENAI_API_KEY}"
+  #   api_key: "keyring://sigil/openai-api-key"
   # google:
-  #   api_key: "${GOOGLE_API_KEY}"
+  #   api_key: "keyring://sigil/google-api-key"
   # openrouter:
-  #   api_key: "${OPENROUTER_API_KEY}"
+  #   api_key: "keyring://sigil/openrouter-api-key"
   # ollama:
   #   endpoint: "http://localhost:11434"
 

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sigil-dev/sigil/internal/secrets"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/viper"
 )
@@ -155,6 +156,14 @@ func FromViper(v *viper.Viper) (*Config, error) {
 // environment variable overrides (prefix SIGIL_).
 // For CLI usage where flags are bound to a shared Viper, prefer FromViper.
 func Load(path string) (*Config, error) {
+	return LoadWithSecrets(path, nil)
+}
+
+// LoadWithSecrets reads configuration and resolves any keyring:// URI values
+// using the provided secret store. If store is nil, a default KeyringStore is
+// used. Pass a nil store to use the OS keyring, or provide a custom Store
+// implementation for testing.
+func LoadWithSecrets(path string, store secrets.Store) (*Config, error) {
 	v := viper.New()
 
 	SetDefaults(v)
@@ -166,6 +175,11 @@ func Load(path string) (*Config, error) {
 			return nil, sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config %s: %w", path, err)
 		}
 	}
+
+	if store == nil {
+		store = secrets.NewKeyringStore()
+	}
+	secrets.ResolveViperSecrets(v, store)
 
 	return FromViper(v)
 }

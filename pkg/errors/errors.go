@@ -89,6 +89,13 @@ const (
 	CodeChannelPairingDenied   Code = "channel.pairing.denied"
 	CodeChannelPairingPending  Code = "channel.pairing.pending"
 	CodeChannelBackendFailure  Code = "channel.backend.failure"
+
+	CodeSecretStoreFailure  Code = "secret.store.failure"
+	CodeSecretNotFound      Code = "secret.get.not_found"
+	CodeSecretDeleteFailure Code = "secret.delete.failure"
+	CodeSecretListFailure   Code = "secret.list.failure"
+	CodeSecretInvalidInput  Code = "secret.input.invalid"
+	CodeSecretResolveFailure Code = "secret.resolve.failure"
 )
 
 // Attr is a structured key/value context attached to an error.
