@@ -909,3 +909,22 @@ Specific consequences accepted:
 **Rationale:** Regex-based multilingual detection is a maintenance burden with high false-positive risk and no clear termination condition. The honest posture is to document the English-only coverage as a known limitation, preserve the bypass test cases as regression anchors, and plan a proper multilingual solution (LLM classification) for a future milestone. This avoids false security claims while keeping v1 scope tractable.
 
 **Ref:** `internal/security/scanner/`, `docs/design/03-security-model.md` Step 1, sigil-7g5.314
+
+## D064: Scanner Content Size Limits — Two-Tier Model
+
+**Status:** Accepted
+
+**Question:** The design doc (03-security-model.md, Step 6) describes "result size capped — scanner enforces maxToolContentScanSize (512KB)" but the actual implementation uses a two-tier model with different thresholds. What are the correct limits and how should they be documented?
+
+**Context:** The scanner implementation uses two constants:
+
+- `DefaultMaxContentLength` (1MB) — the primary scanner limit. Content up to 1MB is scanned normally by `RegexScanner.Scan()`.
+- `maxToolContentScanSize` (512KB) — the truncation target in the agent loop's `scanContent()`. When tool result content exceeds 1MB, it is truncated to 512KB and re-scanned. The truncated+scanned content is returned with a `[TRUNCATED]` marker so the LLM knows data was lost.
+
+The design doc's "512KB" reference describes only the truncation fallback, not the primary limit.
+
+**Decision:** Accept the two-tier model as implemented. The primary scanner limit is 1MB; the 512KB truncation target is a fallback for oversized tool results only.
+
+**Rationale:** 1MB accommodates typical tool results (API responses, file contents) without truncation. The 512KB fallback ensures that even oversized results get some scanning coverage rather than passing through unscanned. The truncation marker (`[TRUNCATED: tool result exceeded scan limit]`) informs the LLM that data is incomplete, preventing incorrect reasoning from partial results.
+
+**Ref:** `internal/security/scanner/scanner.go` `DefaultMaxContentLength`, `internal/agent/loop.go` `maxToolContentScanSize`, `docs/design/03-security-model.md` Step 6, sigil-7g5.329
