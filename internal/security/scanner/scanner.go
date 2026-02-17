@@ -6,6 +6,10 @@ package scanner
 import (
 	"context"
 	"regexp"
+	"sort"
+	"strings"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Stage identifies where in the pipeline scanning occurs.
@@ -205,4 +209,72 @@ func OutputRules() []Rule {
 			Severity: SeverityMedium,
 		},
 	}
+}
+
+// Mode defines how the scanner result is handled.
+type Mode string
+
+const (
+	ModeBlock  Mode = "block"
+	ModeFlag   Mode = "flag"
+	ModeRedact Mode = "redact"
+)
+
+// ParseMode parses a mode string (case-insensitive).
+func ParseMode(s string) (Mode, error) {
+	switch strings.ToLower(s) {
+	case "block":
+		return ModeBlock, nil
+	case "flag":
+		return ModeFlag, nil
+	case "redact":
+		return ModeRedact, nil
+	default:
+		return "", sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner mode: %q", s)
+	}
+}
+
+// ApplyMode applies the detection mode to the scan result.
+// For block: returns error if threat detected.
+// For flag: returns content unchanged (caller should log).
+// For redact: replaces matched regions with [REDACTED].
+func ApplyMode(mode Mode, content string, result *ScanResult) (string, error) {
+	if !result.Threat {
+		return content, nil
+	}
+
+	switch mode {
+	case ModeBlock:
+		return "", sigilerr.New(sigilerr.CodeSecurityScannerInputBlocked,
+			"content blocked by security scanner",
+			sigilerr.Field("matches", len(result.Matches)),
+			sigilerr.Field("first_rule", result.Matches[0].Rule),
+		)
+	case ModeFlag:
+		return content, nil
+	case ModeRedact:
+		return redact(content, result.Matches), nil
+	default:
+		return content, nil
+	}
+}
+
+// redact replaces matched regions in content with [REDACTED].
+// Processes matches in reverse order to preserve byte offsets.
+func redact(content string, matches []Match) string {
+	sorted := make([]Match, len(matches))
+	copy(sorted, matches)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Location > sorted[j].Location
+	})
+
+	result := content
+	for _, m := range sorted {
+		end := m.Location + m.Length
+		if end > len(result) {
+			end = len(result)
+		}
+		result = result[:m.Location] + "[REDACTED]" + result[end:]
+	}
+	return result
 }
