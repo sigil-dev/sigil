@@ -61,8 +61,10 @@ func initViper(cmd *cobra.Command) error {
 		}
 	} else {
 		// Auto-discover sigil.yaml from standard locations.
+		// Note: SetConfigType is intentionally omitted. When set, Viper
+		// falls back to trying the bare config name without extension,
+		// which collides with the ./sigil binary in the project root.
 		v.SetConfigName("sigil")
-		v.SetConfigType("yaml")
 		v.AddConfigPath(".")
 		v.AddConfigPath("$HOME/.config/sigil")
 		v.AddConfigPath("/etc/sigil")
