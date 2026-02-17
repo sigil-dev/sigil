@@ -88,6 +88,9 @@ New `ScannerConfig` struct in config package with Viper mapstructure binding.
 New codes in `pkg/errors/errors.go`:
 
 - `security.scanner.input_blocked` — input rejected by scanner
+- `security.scanner.tool_blocked` — tool result rejected by scanner
+- `security.scanner.output_blocked` — output rejected by scanner
+- `security.scanner.content_too_large` — content exceeds size limits
 - `security.scanner.failure` — scanner internal error
 
 ### Testing Strategy
