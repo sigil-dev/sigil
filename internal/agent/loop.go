@@ -498,8 +498,6 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		}
 
 		// First event is valid — wrap it back with the rest of the stream.
-		// NOTE: Failover only covers first-event failures (auth errors, rate
-		// D036: No mid-stream failover — replaying the full conversation to a
 		// fallback provider requires buffering all events and resending messages.
 		// Mid-stream errors surface to the caller via processEvents.
 		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
