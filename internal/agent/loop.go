@@ -144,7 +144,7 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	l.fireHook(l.hooks, hookPrepare)
 
 	// Step 3: CALL_LLM — route to provider and call Chat.
-	eventCh, err := l.callLLM(ctx, msg.WorkspaceID, session, messages)
+	eventCh, selectedProvider, err := l.callLLM(ctx, msg.WorkspaceID, session, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,10 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	}
 
 	// If the stream emitted a fatal error, discard partial output and fail the turn.
+	// Record the failure for health tracking so the circuit breaker can respond to
+	// persistent mid-stream failures (e.g., connection drops, malformed responses).
 	if streamErr != nil {
+		l.recordProviderFailure(selectedProvider)
 		return nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error: session %s", msg.SessionID)
 	}
 
@@ -350,7 +353,8 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 // provider requires buffering all events and resending all messages — significant
 // complexity with partial-output ambiguity. Mid-stream errors surface to the caller
 // via processEvents. See D036 in docs/decisions/decision-log.md for design rationale.
-func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.Session, messages []provider.Message) (<-chan provider.ChatEvent, error) {
+// Returns the event channel and the provider that was successfully selected (for health tracking).
+func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.Session, messages []provider.Message) (<-chan provider.ChatEvent, provider.Provider, error) {
 	modelName := session.ModelOverride
 	if modelName == "" {
 		modelName = "default"
@@ -363,7 +367,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		0, 0, 0, 0, // cents budgets not yet tracked
 	)
 	if err != nil {
-		return nil, sigilerr.Wrap(err, sigilerr.CodeAgentLoopInvalidInput, "invalid budget")
+		return nil, nil, sigilerr.Wrap(err, sigilerr.CodeAgentLoopInvalidInput, "invalid budget")
 	}
 
 	maxAttempts := l.providerRouter.MaxAttempts()
@@ -380,7 +384,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 			if sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded) ||
 				sigilerr.HasCode(err, sigilerr.CodeProviderInvalidModelRef) ||
 				sigilerr.HasCode(err, sigilerr.CodeProviderNoDefault) {
-				return nil, err
+				return nil, nil, err
 			}
 			lastErr = err
 			// Record routing failures so users can see which providers were skipped.
@@ -446,7 +450,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 				wrappedCh <- ev
 			}
 		}()
-		return wrappedCh, nil
+		return wrappedCh, prov, nil
 	}
 
 	// All providers failed. Build comprehensive error message showing all failures.
@@ -458,18 +462,15 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 			code := sigilerr.CodeOf(lastErr)
 			if len(providerFailures) == 1 && code != "" {
 				// Single failure with a specific error code: preserve it.
-				return nil, sigilerr.Errorf(code, "%s", combinedMsg)
+				return nil, nil, sigilerr.Errorf(code, "%s", combinedMsg)
 			}
 			// Multiple failures or non-sigilerr error: all providers unavailable.
 			// Create new error instead of wrapping to ensure correct code.
-			return nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
+			return nil, nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
 		}
-		return nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
+		return nil, nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
 	}
-	if lastErr != nil {
-		return nil, sigilerr.Wrapf(lastErr, sigilerr.CodeProviderAllUnavailable, "all providers failed for workspace %s", workspaceID)
-	}
-	return nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, "no providers available for workspace "+workspaceID)
+	return nil, nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, "no providers available for workspace "+workspaceID)
 }
 
 func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*provider.ToolCall, *provider.Usage, error) {
@@ -637,7 +638,7 @@ func (l *Loop) runToolLoop(
 		}
 
 		// Re-call the LLM with updated message history.
-		eventCh, err := l.callLLM(ctx, msg.WorkspaceID, session, currentMessages)
+		eventCh, toolLoopProvider, err := l.callLLM(ctx, msg.WorkspaceID, session, currentMessages)
 		if err != nil {
 			return "", nil, err
 		}
@@ -650,6 +651,7 @@ func (l *Loop) runToolLoop(
 			return "", nil, sigilerr.Wrapf(err, sigilerr.CodeStoreDatabaseFailure, "budget accounting in tool loop: session %s", msg.SessionID)
 		}
 		if streamErr != nil {
+			l.recordProviderFailure(toolLoopProvider)
 			return "", nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error in tool loop: session %s", msg.SessionID)
 		}
 

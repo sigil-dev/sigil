@@ -121,7 +121,7 @@ func New(cfg Config) (*Server, error) {
 		r.Use(trustedProxyRealIP(trustedNets))
 	}
 	r.Use(securityHeadersMiddleware(cfg.EnableHSTS))
-	r.Use(corsMiddleware(cfg.CORSOrigins))
+	r.Use(corsMiddleware(cfg.CORSOrigins, cfg.ListenAddr))
 	r.Use(rateLimitMiddleware(cfg.RateLimit, rateLimitDone))
 	r.Use(authMiddleware(cfg.TokenValidator))
 
@@ -239,12 +239,20 @@ type HealthResponse struct {
 	Body HealthBody
 }
 
-func corsMiddleware(origins []string) func(http.Handler) http.Handler {
+func corsMiddleware(origins []string, listenAddr string) func(http.Handler) http.Handler {
 	if len(origins) == 0 {
-		slog.Warn("no CORS origins configured — all cross-origin requests will be rejected")
-		// go-chi/cors treats empty AllowedOrigins as wildcard, so we return a
-		// no-op middleware that does not add any CORS headers.
-		return func(next http.Handler) http.Handler { return next }
+		// Check if running on localhost — if so, use dev-mode default
+		if isLocalhostAddr(listenAddr) {
+			devOrigin := "http://localhost:5173"
+			slog.Info("no CORS origins configured; using dev-mode default for localhost",
+				slog.String("default_origin", devOrigin))
+			origins = []string{devOrigin}
+		} else {
+			slog.Warn("no CORS origins configured — all cross-origin requests will be rejected")
+			// go-chi/cors treats empty AllowedOrigins as wildcard, so we return a
+			// no-op middleware that does not add any CORS headers.
+			return func(next http.Handler) http.Handler { return next }
+		}
 	}
 
 	return cors.Handler(cors.Options{
@@ -255,6 +263,23 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 		AllowCredentials: true,
 		MaxAge:           300,
 	})
+}
+
+// isLocalhostAddr reports whether the given listen address is a localhost address.
+// Recognizes 127.0.0.1, localhost, ::1, 0.0.0.0, and :: (with or without port).
+func isLocalhostAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// If no port, treat entire string as host
+		host = addr
+	}
+
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "0.0.0.0", "::":
+		return true
+	default:
+		return false
+	}
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses.

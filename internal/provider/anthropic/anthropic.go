@@ -42,10 +42,14 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	client := anthropicsdk.NewClient(opts...)
+	health, err := provider.NewHealthTracker(provider.DefaultHealthCooldown)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "anthropic: creating health tracker")
+	}
 	return &Provider{
 		client: client,
 		config: cfg,
-		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+		health: health,
 	}, nil
 }
 

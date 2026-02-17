@@ -147,6 +147,9 @@ type ToolDispatcher struct {
 
 	// turnBudgets tracks per-turn call counts keyed by TurnID.
 	turnBudgets sync.Map // map[string]*turnBudget
+
+	// auditFailCount tracks consecutive audit append failures for monitoring.
+	auditFailCount atomic.Int64
 }
 
 // NewToolDispatcher creates a ToolDispatcher with the given configuration.
@@ -307,12 +310,16 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 
 	// Best-effort audit; do not fail the tool execution on audit errors.
 	if err := d.auditStore.Append(ctx, entry); err != nil {
+		d.auditFailCount.Add(1)
 		slog.Warn("audit store append failed",
 			"error", err,
 			"plugin", req.PluginName,
 			"tool", req.ToolName,
 			"session_id", req.SessionID,
+			"consecutive_failures", d.auditFailCount.Load(),
 		)
+	} else {
+		d.auditFailCount.Store(0)
 	}
 }
 

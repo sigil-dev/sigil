@@ -31,7 +31,7 @@ func TestAgentLoop_ProcessMessage(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -148,7 +148,7 @@ func TestAgentLoop_SessionBoundaryValidation(t *testing.T) {
 				SessionManager: sm,
 				ProviderRouter: newMockProviderRouter(),
 				AuditStore:     newMockAuditStore(),
-			Enforcer:       newMockEnforcer(),
+				Enforcer:       newMockEnforcer(),
 			})
 			require.NoError(t, err)
 
@@ -203,7 +203,7 @@ func TestAgentLoop_SessionStatusValidation(t *testing.T) {
 				SessionManager: sm,
 				ProviderRouter: newMockProviderRouter(),
 				AuditStore:     newMockAuditStore(),
-			Enforcer:       newMockEnforcer(),
+				Enforcer:       newMockEnforcer(),
 			})
 			require.NoError(t, err)
 
@@ -236,7 +236,7 @@ func TestAgentLoop_SessionBoundaryCheckedBeforeStoreWrite(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -261,7 +261,7 @@ func TestAgentLoop_BudgetEnforcement(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouterWithBudgetExceeded(),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -287,7 +287,7 @@ func TestAgentLoop_ProviderStreamErrorOnly(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouterStreamError(),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -323,7 +323,7 @@ func TestAgentLoop_ProviderStreamPartialTextThenError(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouterStreamPartialThenError(),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -362,7 +362,7 @@ func TestAgentLoop_NoDuplicateUserMessage(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouterCapturing(capturer),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -473,7 +473,7 @@ func TestAgentLoop_InvalidInputCombinations(t *testing.T) {
 				SessionManager: newMockSessionManager(),
 				ProviderRouter: newMockProviderRouter(),
 				AuditStore:     newMockAuditStore(),
-			Enforcer:       newMockEnforcer(),
+				Enforcer:       newMockEnforcer(),
 			})
 			require.NoError(t, err)
 
@@ -495,7 +495,7 @@ func TestAgentLoop_SessionNotFound(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -533,7 +533,7 @@ func TestAgentLoop_AppendMessageFailure(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -567,7 +567,7 @@ func TestAgentLoop_GetActiveWindowFailure(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -599,7 +599,7 @@ func TestAgentLoop_ProviderChatFailure(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -629,7 +629,7 @@ func TestAgentLoop_RouterNonBudgetFailure(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -664,7 +664,7 @@ func TestAgentLoop_BudgetWiredThroughSessionTokens(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: budgetRouter,
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -702,7 +702,7 @@ func TestAgentLoop_BudgetWiredEnforcesLimit(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: budgetRouter,
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -729,7 +729,7 @@ func TestAgentLoop_InvalidModelRefNotMasked(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouterInvalidModelRef{},
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -1223,7 +1223,7 @@ func TestAgentLoop_FailoverCapMatchesRouterChainLength(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -1369,7 +1369,7 @@ func TestAgentLoop_ChatFailureCallsRecordFailure(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -1425,7 +1425,7 @@ func TestAgentLoop_EmptyStreamCallsRecordFailure(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -1485,7 +1485,7 @@ func TestAgentLoop_FirstEventErrorCallsRecordFailure(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: router,
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -1840,7 +1840,7 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: blockingProv},
 		AuditStore:     newMockAuditStore(),
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -1900,7 +1900,7 @@ func TestAgentLoop_AuditFailureDoesNotFailTurn(t *testing.T) {
 		SessionManager: sm,
 		ProviderRouter: newMockProviderRouter(),
 		AuditStore:     failingAuditStore,
-	Enforcer:       newMockEnforcer(),
+		Enforcer:       newMockEnforcer(),
 	})
 	require.NoError(t, err)
 
@@ -1959,7 +1959,7 @@ func TestAgentLoop_AuditStoreConsecutiveFailures(t *testing.T) {
 				SessionManager: sm,
 				ProviderRouter: newMockProviderRouter(),
 				AuditStore:     auditStore,
-			Enforcer:       newMockEnforcer(),
+				Enforcer:       newMockEnforcer(),
 			})
 			require.NoError(t, err)
 
@@ -2085,8 +2085,8 @@ func TestAgentLoop_MidStreamFailureCallsRecordFailure(t *testing.T) {
 			name:                 "mid-stream failure after successful first event",
 			successfulFirstEvent: true,
 			wantError:            true,
-			wantRecordFailure:    false, // Mid-stream failures do NOT call RecordFailure (design decision D036)
-			wantUsageAccounted:   true,  // Usage emitted before error should be accounted
+			wantRecordFailure:    true, // Mid-stream failures DO call RecordFailure for health tracking
+			wantUsageAccounted:   true, // Usage emitted before error should be accounted
 		},
 	}
 
@@ -2110,7 +2110,7 @@ func TestAgentLoop_MidStreamFailureCallsRecordFailure(t *testing.T) {
 				SessionManager: sm,
 				ProviderRouter: router,
 				AuditStore:     newMockAuditStore(),
-			Enforcer:       newMockEnforcer(),
+				Enforcer:       newMockEnforcer(),
 			})
 			require.NoError(t, err)
 
@@ -2134,10 +2134,10 @@ func TestAgentLoop_MidStreamFailureCallsRecordFailure(t *testing.T) {
 
 			// Verify RecordFailure behavior.
 			// According to design decision D036 (docs/decisions/decision-log.md),
-			// mid-stream failures do NOT call RecordFailure because failover is
-			// not attempted for mid-stream errors (complexity of buffering and replay).
-			// Only pre-stream failures (Chat() error, empty stream, first-event error)
-			// trigger RecordFailure to enable circuit breaker behavior.
+			// mid-stream failures do not trigger failover (complexity of buffering and replay),
+			// but they DO call RecordFailure to enable health tracking. This allows the
+			// circuit breaker to respond to persistent mid-stream failures (connection drops,
+			// malformed responses) even though failover doesn't happen for those errors.
 			failureCount := healthProv.getFailureCount()
 			if tt.wantRecordFailure {
 				assert.Equal(t, 1, failureCount,

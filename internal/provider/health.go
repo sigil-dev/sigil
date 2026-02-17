@@ -4,9 +4,10 @@
 package provider
 
 import (
-	"log/slog"
 	"sync"
 	"time"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // HealthTracker provides simple health state tracking for providers.
@@ -26,20 +27,17 @@ type HealthTracker struct {
 const DefaultHealthCooldown = 30 * time.Second
 
 // NewHealthTracker creates a HealthTracker that starts healthy.
-// If cooldown is zero or negative, it defaults to DefaultHealthCooldown (30s).
-func NewHealthTracker(cooldown time.Duration) *HealthTracker {
+// Returns an error if cooldown is zero or negative.
+func NewHealthTracker(cooldown time.Duration) (*HealthTracker, error) {
 	if cooldown <= 0 {
-		slog.Warn("health tracker created with invalid cooldown, using default",
-			"provided", cooldown,
-			"default", DefaultHealthCooldown,
-		)
-		cooldown = DefaultHealthCooldown
+		return nil, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"health tracker cooldown must be positive, got %s", cooldown)
 	}
 	return &HealthTracker{
 		healthy:  true,
 		cooldown: cooldown,
 		nowFunc:  time.Now,
-	}
+	}, nil
 }
 
 // IsHealthy returns true if the provider is healthy or the cooldown has elapsed.

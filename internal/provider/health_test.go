@@ -9,21 +9,50 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
+func TestHealthTracker_InvalidCooldown(t *testing.T) {
+	tests := []struct {
+		name     string
+		cooldown time.Duration
+	}{
+		{
+			name:     "zero cooldown",
+			cooldown: 0,
+		},
+		{
+			name:     "negative cooldown",
+			cooldown: -1 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, err := provider.NewHealthTracker(tt.cooldown)
+			require.Error(t, err)
+			assert.Nil(t, h)
+			assert.Contains(t, err.Error(), "health tracker cooldown must be positive")
+		})
+	}
+}
+
 func TestHealthTracker_StartsHealthy(t *testing.T) {
-	h := provider.NewHealthTracker(30 * time.Second)
+	h, err := provider.NewHealthTracker(30 * time.Second)
+	require.NoError(t, err)
 	assert.True(t, h.IsHealthy())
 }
 
 func TestHealthTracker_FailureMakesUnhealthy(t *testing.T) {
-	h := provider.NewHealthTracker(30 * time.Second)
+	h, err := provider.NewHealthTracker(30 * time.Second)
+	require.NoError(t, err)
 	h.RecordFailure()
 	assert.False(t, h.IsHealthy())
 }
 
 func TestHealthTracker_SuccessRestoresHealth(t *testing.T) {
-	h := provider.NewHealthTracker(30 * time.Second)
+	h, err := provider.NewHealthTracker(30 * time.Second)
+	require.NoError(t, err)
 	h.RecordFailure()
 	assert.False(t, h.IsHealthy())
 
@@ -33,7 +62,8 @@ func TestHealthTracker_SuccessRestoresHealth(t *testing.T) {
 
 func TestHealthTracker_CooldownExpiry(t *testing.T) {
 	now := time.Now()
-	h := provider.NewHealthTracker(10 * time.Second)
+	h, err := provider.NewHealthTracker(10 * time.Second)
+	require.NoError(t, err)
 	h.SetNowFunc(func() time.Time { return now })
 
 	h.RecordFailure()
@@ -72,7 +102,8 @@ func TestHealthTracker_CooldownBoundary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := provider.NewHealthTracker(cooldown)
+			h, err := provider.NewHealthTracker(cooldown)
+			require.NoError(t, err)
 			h.SetNowFunc(func() time.Time { return now })
 
 			h.RecordFailure()
@@ -88,7 +119,8 @@ func TestHealthTracker_CooldownBoundary(t *testing.T) {
 }
 
 func TestHealthTracker_MidStreamFailure(t *testing.T) {
-	h := provider.NewHealthTracker(30 * time.Second)
+	h, err := provider.NewHealthTracker(30 * time.Second)
+	require.NoError(t, err)
 
 	// Simulate successful start of streaming
 	h.RecordSuccess()
@@ -104,7 +136,8 @@ func TestHealthTracker_MidStreamFailure(t *testing.T) {
 // internals (mid-stream) concurrently. This test verifies concurrent calls
 // don't corrupt state. Run with `go test -race` to detect data races.
 func TestHealthTracker_ConcurrentRecordCalls(t *testing.T) {
-	h := provider.NewHealthTracker(30 * time.Second)
+	h, err := provider.NewHealthTracker(30 * time.Second)
+	require.NoError(t, err)
 
 	const goroutines = 10
 	const iterations = 100

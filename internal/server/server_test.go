@@ -151,8 +151,9 @@ func TestServer_CORSOrigins_FromConfig(t *testing.T) {
 	assert.Equal(t, "https://app.example.com", w.Header().Get("Access-Control-Allow-Origin"))
 }
 
-func TestServer_CORSOrigins_NoDefault_RejectsAll(t *testing.T) {
-	srv := newTestServer(t) // no CORSOrigins configured
+func TestServer_CORSOrigins_NoConfig_LocalhostUsesDevDefault(t *testing.T) {
+	// When running on localhost with no CORS origins configured, dev-mode default is used
+	srv := newTestServer(t) // no CORSOrigins configured, ListenAddr is 127.0.0.1:0
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
@@ -160,6 +161,25 @@ func TestServer_CORSOrigins_NoDefault_RejectsAll(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
+	// With dev-mode default for localhost, the origin should be allowed
+	assert.Equal(t, "http://localhost:5173", w.Header().Get("Access-Control-Allow-Origin"))
+}
+
+func TestServer_CORSOrigins_NoConfig_NonLocalhostRejectsAll(t *testing.T) {
+	// When running on non-localhost with no CORS origins configured, reject all
+	srv, err := server.New(server.Config{
+		ListenAddr: "192.168.1.100:8080", // non-localhost address
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	// Non-localhost without explicit CORS config should reject all origins
 	assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"))
 }
 
@@ -304,11 +324,11 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "valid config with all fields",
 			cfg: server.Config{
-				ListenAddr:  "127.0.0.1:8080",
-				CORSOrigins: []string{"https://example.com"},
-				ReadTimeout: 10 * time.Second,
+				ListenAddr:   "127.0.0.1:8080",
+				CORSOrigins:  []string{"https://example.com"},
+				ReadTimeout:  10 * time.Second,
 				WriteTimeout: 20 * time.Second,
-				EnableHSTS:  true,
+				EnableHSTS:   true,
 				RateLimit: server.RateLimitConfig{
 					RequestsPerSecond: 10,
 					Burst:             5,
@@ -652,4 +672,81 @@ func TestConfig_ApplyDefaults_PreservesCustomTimeouts(t *testing.T) {
 
 	assert.Equal(t, 5*time.Second, cfg.ReadTimeout, "custom ReadTimeout should not be overwritten")
 	assert.Equal(t, 10*time.Second, cfg.WriteTimeout, "custom WriteTimeout should not be overwritten")
+}
+
+func TestServer_CORSOrigins_DevDefault_LocalhostVariants(t *testing.T) {
+	tests := []struct {
+		name        string
+		listenAddr  string
+		expectCORS  bool
+		description string
+	}{
+		{
+			name:        "127.0.0.1 with port",
+			listenAddr:  "127.0.0.1:8080",
+			expectCORS:  true,
+			description: "IPv4 localhost with port should use dev default",
+		},
+		{
+			name:        "localhost with port",
+			listenAddr:  "localhost:8080",
+			expectCORS:  true,
+			description: "localhost hostname with port should use dev default",
+		},
+		{
+			name:        "::1 with port",
+			listenAddr:  "[::1]:8080",
+			expectCORS:  true,
+			description: "IPv6 localhost with port should use dev default",
+		},
+		{
+			name:        "0.0.0.0 with port",
+			listenAddr:  "0.0.0.0:8080",
+			expectCORS:  true,
+			description: "0.0.0.0 (all interfaces) should use dev default",
+		},
+		{
+			name:        ":: with port",
+			listenAddr:  "[::]:8080",
+			expectCORS:  true,
+			description: ":: (all interfaces IPv6) should use dev default",
+		},
+		{
+			name:        "192.168.1.100 with port",
+			listenAddr:  "192.168.1.100:8080",
+			expectCORS:  false,
+			description: "non-localhost IP should not use dev default",
+		},
+		{
+			name:        "example.com with port",
+			listenAddr:  "example.com:8080",
+			expectCORS:  false,
+			description: "domain name should not use dev default",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, err := server.New(server.Config{
+				ListenAddr: tt.listenAddr,
+				// No CORSOrigins configured
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = srv.Close() })
+
+			req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
+			req.Header.Set("Origin", "http://localhost:5173")
+			req.Header.Set("Access-Control-Request-Method", "GET")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			if tt.expectCORS {
+				assert.Equal(t, "http://localhost:5173", w.Header().Get("Access-Control-Allow-Origin"),
+					"%s: should allow dev-mode origin", tt.description)
+			} else {
+				assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"),
+					"%s: should reject cross-origin requests", tt.description)
+			}
+		})
+	}
 }

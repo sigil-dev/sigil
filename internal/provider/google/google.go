@@ -42,10 +42,15 @@ func New(cfg Config) (*Provider, error) {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "google: creating client")
 	}
 
+	health, err := provider.NewHealthTracker(provider.DefaultHealthCooldown)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "google: creating health tracker")
+	}
+
 	return &Provider{
 		client: client,
 		config: cfg,
-		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+		health: health,
 	}, nil
 }
 

@@ -434,10 +434,16 @@ type configTokenValidator struct {
 
 func newConfigTokenValidator(tokens []config.TokenConfig) (*configTokenValidator, error) {
 	m := make(map[[32]byte]*server.AuthenticatedUser, len(tokens))
-	for _, tc := range tokens {
+	skipped := 0
+	for i, tc := range tokens {
 		user, err := server.NewAuthenticatedUser(tc.UserID, tc.Name, tc.Permissions)
 		if err != nil {
-			slog.Warn("skipping token with invalid user config", "error", err, "user_id", tc.UserID)
+			slog.Error("skipping token with invalid user config",
+				"error", err,
+				"user_id", tc.UserID,
+				"token_index", i+1,
+				"token_count", len(tokens))
+			skipped++
 			continue
 		}
 		hash := sha256.Sum256([]byte(tc.Token))
@@ -446,6 +452,17 @@ func newConfigTokenValidator(tokens []config.TokenConfig) (*configTokenValidator
 	if len(tokens) > 0 && len(m) == 0 {
 		return nil, sigilerr.New(sigilerr.CodeCLISetupFailure,
 			"all configured auth tokens failed validation — gateway would be unusable")
+	}
+	// Log startup summary
+	if skipped > 0 {
+		slog.Warn("auth token startup summary",
+			"active_tokens", len(m),
+			"total_configured", len(tokens),
+			"skipped_due_to_errors", skipped)
+	} else if len(tokens) > 0 {
+		slog.Info("auth token startup summary",
+			"active_tokens", len(m),
+			"total_configured", len(tokens))
 	}
 	return &configTokenValidator{tokens: m}, nil
 }

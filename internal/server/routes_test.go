@@ -265,11 +265,12 @@ func TestRoutes_ReloadPlugin_NotFound(t *testing.T) {
 }
 
 func TestRoutes_ReloadPlugin_InternalError(t *testing.T) {
-	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", Services: server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&errorPluginService{},
-		&mockSessionService{},
-		&mockUserService{}),
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0", Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&errorPluginService{},
+			&mockSessionService{},
+			&mockUserService{}),
 	})
 	require.NoError(t, err)
 
@@ -469,12 +470,12 @@ func TestRoutes_Status_AuthEnabled_WithoutToken_Returns401(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -499,12 +500,12 @@ func TestRoutes_Status_AuthEnabled_WithInvalidToken_Returns401(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -526,12 +527,12 @@ func TestRoutes_Status_AuthEnabled_WithoutAdminPermission_Returns403(t *testing.
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -553,12 +554,12 @@ func TestRoutes_Status_AuthEnabled_WithAdminToken_Returns200(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -581,12 +582,12 @@ func TestRoutes_Status_AuthEnabled_WithWildcardAdminToken_Returns200(t *testing.
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -632,12 +633,12 @@ func TestRoutes_ReloadPlugin_InsufficientPermissions_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -661,12 +662,12 @@ func TestRoutes_ReloadPlugin_WithAdminWildcard_Succeeds(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -690,12 +691,12 @@ func TestRoutes_ReloadPlugin_WithExactPermission_Succeeds(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -719,12 +720,12 @@ func TestRoutes_ListUsers_InsufficientPermissions_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -748,12 +749,12 @@ func TestRoutes_ListPlugins_InsufficientPermissions_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -777,12 +778,12 @@ func TestRoutes_GetPlugin_InsufficientPermissions_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -806,12 +807,12 @@ func TestRoutes_GetWorkspace_NonMember_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -836,12 +837,12 @@ func TestRoutes_ListSessions_NonMember_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -866,12 +867,12 @@ func TestRoutes_GetSession_NonMember_Returns403(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -896,12 +897,12 @@ func TestRoutes_ListWorkspaces_FiltersByMembership(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -1021,13 +1022,13 @@ func TestRoutes_SendMessage_WorkspaceMembership_ValidMember_Succeeds(t *testing.
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
+		Services: server.NewServicesForTest(
 			&mockWorkspaceService{},
 			&mockPluginService{},
 			&mockSessionService{},
 			&mockUserService{},
 		),
-		StreamHandler:  &mockStreamHandler{events: events},
+		StreamHandler: &mockStreamHandler{events: events},
 	})
 	require.NoError(t, err)
 
@@ -1053,13 +1054,13 @@ func TestRoutes_SendMessage_WorkspaceMembership_NonMember_Returns403(t *testing.
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
+		Services: server.NewServicesForTest(
 			&mockWorkspaceService{},
 			&mockPluginService{},
 			&mockSessionService{},
 			&mockUserService{},
 		),
-		StreamHandler:  &mockStreamHandler{events: []server.SSEEvent{}},
+		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
 
@@ -1086,13 +1087,13 @@ func TestRoutes_SendMessage_WorkspaceMembership_WorkspaceNotFound_Returns403(t *
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
+		Services: server.NewServicesForTest(
 			&mockWorkspaceService{},
 			&mockPluginService{},
 			&mockSessionService{},
 			&mockUserService{},
 		),
-		StreamHandler:  &mockStreamHandler{events: []server.SSEEvent{}},
+		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
 
@@ -1118,13 +1119,13 @@ func TestRoutes_SendMessage_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *tes
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
+		Services: server.NewServicesForTest(
 			&mockWorkspaceService{},
 			&mockPluginService{},
 			&mockSessionService{},
 			&mockUserService{},
 		),
-		StreamHandler:  &mockStreamHandler{events: []server.SSEEvent{}},
+		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
 
@@ -1219,12 +1220,12 @@ func TestRoutes_AdminEndpoints_AuthEnabled_NoToken_Returns401(t *testing.T) {
 	srv, err := server.New(server.Config{
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: validator,
-		Services:       server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 

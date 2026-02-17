@@ -381,6 +381,13 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 	}
 }
 
+const (
+	// maxTextContentBytes is the maximum size for text content returned to clients
+	// when JSON parsing fails. This prevents malicious streams from leaking
+	// megabytes of data to the client.
+	maxTextContentBytes = 10240 // 10KB
+)
+
 // truncateForLogging returns s truncated to maxLen with "..." suffix if needed.
 func truncateForLogging(s string, maxLen int) string {
 	if len(s) > maxLen {
@@ -441,7 +448,7 @@ func extractErrorMessage(data string) string {
 }
 
 // extractText parses a JSON text_delta payload and returns the text field.
-// Falls back to the raw string if parsing fails.
+// Falls back to the raw string if parsing fails (truncated to maxTextContentBytes).
 func extractText(data string) string {
 	var delta struct {
 		Text string `json:"text"`
@@ -452,7 +459,8 @@ func extractText(data string) string {
 			"raw_data", truncated,
 			"error", err,
 		)
-		return data
+		// Truncate fallback to prevent data leak from malicious streams
+		return truncateForLogging(data, maxTextContentBytes)
 	}
 	return delta.Text
 }

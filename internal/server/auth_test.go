@@ -208,11 +208,11 @@ func TestAuthMiddleware_Disabled_WhenValidatorNil(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 		// No TokenValidator — auth disabled.
 		Services: server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 
@@ -231,11 +231,11 @@ func TestAuthMiddleware_ForbiddenToken_Returns403(t *testing.T) {
 		ListenAddr:     "127.0.0.1:0",
 		TokenValidator: forbiddenValidator,
 		Services: server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	),
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
 	})
 	require.NoError(t, err)
 

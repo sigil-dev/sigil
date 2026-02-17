@@ -510,9 +510,11 @@ func TestProvider_MidStreamFailure_HealthTracking(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a mock provider with custom Chat behavior.
 			base := newMockProviderBase("test-provider", true)
+			healthTracker, err := provider.NewHealthTracker(provider.DefaultHealthCooldown)
+			require.NoError(t, err)
 			p := &mockProviderWithHealth{
 				mockProviderBase: base,
-				healthTracker:    provider.NewHealthTracker(provider.DefaultHealthCooldown),
+				healthTracker:    healthTracker,
 			}
 
 			// Override Chat to emit the test's event sequence.
