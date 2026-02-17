@@ -129,6 +129,7 @@ type Loop struct {
 	scanner             scanner.Scanner
 	scannerModes        ScannerModes
 	auditFailCount      atomic.Int64
+	scannerFailCount    atomic.Int64
 }
 
 // NewLoop creates a Loop with the given dependencies.
@@ -225,14 +226,14 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	}
 
 	// Step 6: RESPOND — build outbound message, persist assistant message.
-	out, err := l.respond(ctx, msg.SessionID, text, usage)
+	out, outputThreat, err := l.respond(ctx, msg.SessionID, text, usage)
 	if err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "respond: session %s", msg.SessionID)
 	}
 	l.fireHook(l.hooks, hookRespond)
 
-	// Step 7: AUDIT — log the interaction.
-	l.audit(ctx, msg, out)
+	// Step 7: AUDIT — log the interaction, including threat metadata if detected.
+	l.audit(ctx, msg, out, outputThreat)
 	l.fireHook(l.hooks, hookAudit)
 
 	return out, nil
@@ -679,9 +680,9 @@ func (l *Loop) runToolLoop(
 
 			var resultContent string
 			if err != nil {
-				// On dispatch failure, send the error as the tool result
-				// so the LLM can see it and decide how to proceed.
-				resultContent = fmt.Sprintf("error: %s", err.Error())
+				// On dispatch failure, send a sanitized error message as the tool
+				// result so the LLM can see it without leaking internal state.
+				resultContent = sanitizeToolError(err)
 			} else {
 				resultContent = result.Content
 			}
@@ -752,14 +753,14 @@ func (l *Loop) runToolLoop(
 	)
 }
 
-func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {
+func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, *store.ThreatInfo, error) {
 	// Output scanning — filter secrets before persisting/returning.
 	scanned, outputThreat, scanErr := l.scanContent(ctx, text,
 		scanner.StageOutput, scanner.OriginSystem, l.scannerModes.Output,
 		"session_id", sessionID,
 	)
 	if scanErr != nil {
-		return nil, scanErr
+		return nil, nil, scanErr
 	}
 	text = scanned
 
@@ -773,14 +774,14 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 		CreatedAt: time.Now(),
 	}
 	if err := l.sessions.AppendMessage(ctx, sessionID, assistantMsg); err != nil {
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "persisting assistant response: session %s", sessionID)
+		return nil, nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "persisting assistant response: session %s", sessionID)
 	}
 
 	return &OutboundMessage{
 		SessionID: sessionID,
 		Content:   text,
 		Usage:     usage,
-	}, nil
+	}, outputThreat, nil
 }
 
 func originFromRole(role store.MessageRole) provider.Origin {
@@ -794,9 +795,18 @@ func originFromRole(role store.MessageRole) provider.Origin {
 	}
 }
 
-func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessage) {
+func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessage, threatInfo *store.ThreatInfo) {
 	if l.auditStore == nil {
 		return
+	}
+
+	details := map[string]any{"content_length": len(out.Content)}
+
+	// Finding 3: include threat metadata in audit details when threats were detected.
+	if threatInfo != nil && threatInfo.Detected {
+		details["threat_detected"] = true
+		details["threat_rules"] = threatInfo.Rules
+		details["threat_stage"] = string(threatInfo.Stage)
 	}
 
 	entry := &store.AuditEntry{
@@ -806,7 +816,7 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 		Actor:       msg.UserID,
 		WorkspaceID: msg.WorkspaceID,
 		SessionID:   msg.SessionID,
-		Details:     map[string]any{"content_length": len(out.Content)},
+		Details:     details,
 		Result:      "ok",
 	}
 
@@ -838,8 +848,18 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		// availability. Threat detections are handled below via ApplyMode.
 		// See D062 decision record for rationale.
 		if stage == scanner.StageTool {
-			slog.Warn("scanner internal error on tool result, continuing with unscanned content",
-				append([]any{"error", scanErr, "stage", stage}, logAttrs...)...,
+			consecutive := l.scannerFailCount.Add(1)
+			logLevel := slog.LevelWarn
+			if consecutive >= 3 {
+				logLevel = slog.LevelError
+			}
+			slog.Log(ctx, logLevel, "scanner internal error on tool result, continuing with unscanned content",
+				append([]any{
+					"error", scanErr,
+					"stage", stage,
+					"error_code", sigilerr.CodeSecurityScannerFailure,
+					"consecutive_failures", consecutive,
+				}, logAttrs...)...,
 			)
 			return content, nil, nil
 		}
@@ -848,18 +868,39 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		)
 	}
 
+	// Reset the scanner fail counter on success for the tool stage.
+	if stage == scanner.StageTool {
+		l.scannerFailCount.Store(0)
+	}
+
 	var threat *store.ThreatInfo
 	if scanResult.Threat {
 		rules := make([]string, 0, len(scanResult.Matches))
+		highestSeverity := scanner.Severity("")
 		for _, m := range scanResult.Matches {
 			rules = append(rules, m.Rule)
 			attrs := append([]any{"rule", m.Rule, "severity", m.Severity, "stage", stage}, logAttrs...)
 			slog.Warn("security scan threat detected", attrs...)
+			if highestSeverity == "" || severityRank(m.Severity) > severityRank(highestSeverity) {
+				highestSeverity = m.Severity
+			}
 		}
 		threat = &store.ThreatInfo{
 			Detected: true,
 			Rules:    rules,
 			Stage:    store.ScanStage(stage),
+		}
+
+		// Finding 2: enhanced flag-mode logging with match count, highest severity, and scanner mode.
+		if mode == scanner.ModeFlag {
+			slog.Warn("scanner flag mode: threats detected in content",
+				append([]any{
+					"match_count", len(scanResult.Matches),
+					"highest_severity", string(highestSeverity),
+					"scanner_mode", string(mode),
+					"stage", stage,
+				}, logAttrs...)...,
+			)
 		}
 	}
 
@@ -871,8 +912,51 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 	return scanned, threat, nil
 }
 
+// severityRank returns a numeric rank for a scanner.Severity so that
+// the highest severity can be determined across multiple matches.
+func severityRank(s scanner.Severity) int {
+	switch s {
+	case scanner.SeverityHigh:
+		return 3
+	case scanner.SeverityMedium:
+		return 2
+	case scanner.SeverityLow:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // AuditFailCount returns the current consecutive audit failure count.
 // Exposed for testing to verify best-effort audit semantics.
 func (l *Loop) AuditFailCount() int64 {
 	return l.auditFailCount.Load()
+}
+
+// ScannerFailCount returns the current consecutive tool-stage scanner failure count.
+// Exposed for testing to verify circuit breaker semantics (D062).
+func (l *Loop) ScannerFailCount() int64 {
+	return l.scannerFailCount.Load()
+}
+
+// sanitizeToolError returns a user-friendly error message for tool dispatch failures,
+// avoiding leakage of internal paths, stack traces, or DB details to the LLM.
+// The full error is logged at Warn level for debugging.
+func sanitizeToolError(err error) string {
+	slog.Warn("tool dispatch error", "error", err)
+
+	code := sigilerr.CodeOf(err)
+	switch {
+	case code == sigilerr.CodePluginNotFound,
+		code == sigilerr.CodeAgentToolBudgetExceeded,
+		code == sigilerr.CodeAgentToolTimeout:
+		return "tool not found"
+	case code == sigilerr.CodePluginCapabilityDenied,
+		code == sigilerr.CodeWorkspaceMembershipDenied:
+		return "capability denied"
+	case code != "":
+		return "tool execution failed"
+	default:
+		return "tool execution failed"
+	}
 }

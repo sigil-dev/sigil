@@ -2551,17 +2551,20 @@ func TestNewLoop_MaxToolCallsPerTurnDefault(t *testing.T) {
 				"expected at least %d LLM calls for MaxToolCallsPerTurn=%d",
 				tt.wantMinLLMCalls, tt.maxToolCallsPerTurn)
 
+			// sanitizeToolError converts CodeAgentToolBudgetExceeded to "tool not found"
+			// to avoid leaking internal budget state to the LLM. We verify the
+			// sanitized message is present, not the raw internal error string.
 			var foundBudgetError bool
 			for _, req := range reqs {
 				for _, msg := range req.Messages {
-					if msg.Role == store.MessageRoleTool && strings.Contains(msg.Content, "tool call budget exceeded") {
+					if msg.Role == store.MessageRoleTool && strings.Contains(msg.Content, "tool not found") {
 						foundBudgetError = true
 					}
 				}
 			}
 
 			assert.Equal(t, tt.wantToolErrorInResult, foundBudgetError,
-				"budget error in tool results should match expectation for MaxToolCallsPerTurn=%d",
+				"sanitized budget error in tool results should match expectation for MaxToolCallsPerTurn=%d",
 				tt.maxToolCallsPerTurn)
 		})
 	}
@@ -3187,4 +3190,247 @@ func TestAgentLoop_IntermediateTextScannedBeforePersist(t *testing.T) {
 		"Threat must be non-nil on intermediate message when a secret is detected")
 	assert.True(t, intermediateMsg.Threat.Detected,
 		"Threat.Detected must be true on intermediate message")
+}
+
+// ---------------------------------------------------------------------------
+// Finding 4: sanitizeToolError tests
+// ---------------------------------------------------------------------------
+
+func TestSanitizeToolError(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantMsg string
+	}{
+		{
+			name:    "plugin not found error returns tool not found",
+			err:     sigilerr.New(sigilerr.CodePluginNotFound, "plugin xyz not registered"),
+			wantMsg: "tool not found",
+		},
+		{
+			name:    "tool budget exceeded returns tool not found",
+			err:     sigilerr.New(sigilerr.CodeAgentToolBudgetExceeded, "tool call limit reached"),
+			wantMsg: "tool not found",
+		},
+		{
+			name:    "tool timeout returns tool not found",
+			err:     sigilerr.New(sigilerr.CodeAgentToolTimeout, "tool timed out"),
+			wantMsg: "tool not found",
+		},
+		{
+			name:    "capability denied returns capability denied",
+			err:     sigilerr.New(sigilerr.CodePluginCapabilityDenied, "missing channel:send"),
+			wantMsg: "capability denied",
+		},
+		{
+			name:    "workspace membership denied returns capability denied",
+			err:     sigilerr.New(sigilerr.CodeWorkspaceMembershipDenied, "not a member"),
+			wantMsg: "capability denied",
+		},
+		{
+			name:    "known sigilerr code other than above returns generic message",
+			err:     sigilerr.New(sigilerr.CodePluginRuntimeCallFailure, "internal: /var/run/sigil/plugin.sock dial failed"),
+			wantMsg: "tool execution failed",
+		},
+		{
+			name:    "non-sigilerr error returns generic message without leaking details",
+			err:     fmt.Errorf("internal: db path /var/db/sigil.db permission denied"),
+			wantMsg: "tool execution failed",
+		},
+		{
+			name:    "error with stack trace does not leak internals",
+			err:     fmt.Errorf("goroutine 47 [running]: /home/runner/work/sigil/tools.go:128"),
+			wantMsg: "tool execution failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agent.SanitizeToolError(tt.err)
+			assert.Equal(t, tt.wantMsg, got)
+			// Verify no internal details from the error are present in the output.
+			assert.NotContains(t, got, "internal:")
+			assert.NotContains(t, got, "/var/")
+			assert.NotContains(t, got, "goroutine")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Finding 1: scanner fail counter tests
+// ---------------------------------------------------------------------------
+
+func TestAgentLoop_ScannerFailCounter_IncrementAndReset(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	// Session must have a tool call so we reach the tool-stage scanning path.
+	// We use a provider that emits tool calls, a dispatcher that handles them,
+	// and a scanner that fails only on the tool stage.
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
+		Scanner:        &mockToolErrorScanner{},
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	// Counter starts at zero.
+	assert.Equal(t, int64(0), loop.ScannerFailCount())
+
+	// A message that doesn't trigger tool calls doesn't hit the tool scanner,
+	// so the counter stays at 0.
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "Hello",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), loop.ScannerFailCount(),
+		"counter must remain 0 when no tool-stage scanning occurs")
+}
+
+func TestAgentLoop_ScannerFailCounter_ResetsOnSuccess(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// After no tool scan errors, counter should be 0.
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
+		Scanner:        newDefaultScanner(t),
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "Hello",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), loop.ScannerFailCount())
+}
+
+// ---------------------------------------------------------------------------
+// Finding 3: audit threat metadata tests
+// ---------------------------------------------------------------------------
+
+func TestAgentLoop_AuditIncludesThreatMetadata(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	auditStore := newMockAuditStore()
+
+	// Use a scanner that returns a secret match on output so outputThreat is set.
+	// The real default scanner detects AWS keys, GitHub tokens, etc.
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	require.NoError(t, err)
+
+	// Use redact mode for output so the secret is detected and threat is set.
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouterWithResponse("Hello world, no secrets here."),
+		AuditStore:     auditStore,
+		Enforcer:       newMockEnforcer(),
+		Scanner:        s,
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hi",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Audit entry must always be present.
+	auditStore.mu.Lock()
+	entries := auditStore.entries
+	auditStore.mu.Unlock()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	// content_length is always present.
+	assert.Contains(t, entry.Details, "content_length")
+
+	// For clean output (no threats), threat fields must NOT be set.
+	_, hasThreatDetected := entry.Details["threat_detected"]
+	assert.False(t, hasThreatDetected,
+		"threat_detected must not be present in audit when no threat is detected")
+}
+
+func TestAgentLoop_AuditWithThreatMetadata_WhenThreatDetected(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	auditStore := newMockAuditStore()
+
+	// mockAuditCapturingScanner records scan calls and forces a threat on output stage.
+	// We use a custom scanner that injects a threat on the output scan.
+	s := &mockOutputThreatScanner{}
+
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouterWithResponse("some response"),
+		AuditStore:     auditStore,
+		Enforcer:       newMockEnforcer(),
+		Scanner:        s,
+		// Output in flag mode — allows content through but records threat.
+		ScannerModes: agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeFlag},
+	})
+	require.NoError(t, err)
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hi",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	auditStore.mu.Lock()
+	entries := auditStore.entries
+	auditStore.mu.Unlock()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, true, entry.Details["threat_detected"])
+	assert.Equal(t, []string{"test-rule"}, entry.Details["threat_rules"])
+	assert.Equal(t, "output", entry.Details["threat_stage"])
+}
+
+// mockOutputThreatScanner returns a threat match on the output stage only.
+type mockOutputThreatScanner struct{}
+
+func (s *mockOutputThreatScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage == scanner.StageOutput {
+		return scanner.ScanResult{
+			Threat: true,
+			Matches: []scanner.Match{
+				{Rule: "test-rule", Severity: scanner.SeverityHigh, Location: 0, Length: 4},
+			},
+			Content: content,
+		}, nil
+	}
+	return scanner.ScanResult{Content: content}, nil
 }
