@@ -336,6 +336,8 @@ export interface components {
       name: string;
       /** @description Plugin status (running, stopped, error) */
       status: string;
+      /** @description Execution tier (wasm, process, container) */
+      tier: string;
       /** @description Plugin type (provider, channel, tool, skill) */
       type: string;
       /** @description Plugin version */

@@ -76,7 +76,7 @@ type mockPluginService struct{}
 
 func (m *mockPluginService) List(_ context.Context) ([]server.PluginSummary, error) {
 	return []server.PluginSummary{
-		{Name: "anthropic", Type: plugin.PluginTypeProvider, Version: "1.0.0", Status: server.PluginStatusRunning},
+		{Name: "anthropic", Type: plugin.PluginTypeProvider, Version: "1.0.0", Status: server.PluginStatusRunning, Tier: plugin.ExecutionTierProcess},
 	}, nil
 }
 

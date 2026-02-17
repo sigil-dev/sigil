@@ -279,6 +279,10 @@
             "description": "Plugin status (running, stopped, error)",
             "type": "string"
           },
+          "tier": {
+            "description": "Execution tier (wasm, process, container)",
+            "type": "string"
+          },
           "type": {
             "description": "Plugin type (provider, channel, tool, skill)",
             "type": "string"
@@ -292,7 +296,8 @@
           "name",
           "type",
           "version",
-          "status"
+          "status",
+          "tier"
         ],
         "type": "object"
       },

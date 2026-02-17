@@ -153,6 +153,7 @@
 				<tr>
 					<th>Name</th>
 					<th>Type</th>
+					<th>Tier</th>
 					<th>Version</th>
 					<th>Status</th>
 					<th>Actions</th>
@@ -163,6 +164,11 @@
 					<tr>
 						<td><code>{plugin.name}</code></td>
 						<td><span class="type-badge">{plugin.type}</span></td>
+						<td>
+							<span class="tier-badge {getTierBadgeClass(plugin.tier)}">
+								{plugin.tier}
+							</span>
+						</td>
 						<td>{plugin.version}</td>
 						<td>
 							<span class="status-badge {getStatusBadgeClass(plugin.status)}">
@@ -225,6 +231,20 @@
 							</span>
 						</dd>
 					</dl>
+				</section>
+
+				<section>
+					<h3>Resource Usage</h3>
+					<dl>
+						<dt>Memory</dt>
+						<dd><span class="resource-placeholder">N/A</span></dd>
+						<dt>CPU</dt>
+						<dd><span class="resource-placeholder">N/A</span></dd>
+					</dl>
+					<!-- Resource usage requires backend runtime tracking (see sigil-14c follow-up).
+					     The plugin.Instance currently tracks lifecycle state only; no memory/CPU
+					     metrics are collected. A future endpoint (GET /api/v1/plugins/{name}/metrics)
+					     should expose runtime resource data from the process supervisor. -->
 				</section>
 
 				<section>

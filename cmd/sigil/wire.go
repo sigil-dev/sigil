@@ -357,6 +357,7 @@ func (a *pluginServiceAdapter) List(_ context.Context) ([]server.PluginSummary, 
 			Type:    pluginpkg.PluginType(inst.Type()),
 			Version: inst.Version(),
 			Status:  server.PluginStatus(inst.State().String()),
+			Tier:    pluginpkg.ExecutionTier(inst.Tier()),
 		}
 	}
 	return out, nil

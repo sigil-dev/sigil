@@ -128,10 +128,11 @@ type WorkspaceDetail struct {
 
 // PluginSummary is the REST representation of a plugin in list results.
 type PluginSummary struct {
-	Name    string            `json:"name" doc:"Plugin name"`
-	Type    plugin.PluginType `json:"type" doc:"Plugin type (provider, channel, tool, skill)"`
-	Version string            `json:"version" doc:"Plugin version"`
-	Status  PluginStatus      `json:"status" doc:"Plugin status (running, stopped, error)"`
+	Name    string               `json:"name" doc:"Plugin name"`
+	Type    plugin.PluginType    `json:"type" doc:"Plugin type (provider, channel, tool, skill)"`
+	Version string               `json:"version" doc:"Plugin version"`
+	Status  PluginStatus         `json:"status" doc:"Plugin status (running, stopped, error)"`
+	Tier    plugin.ExecutionTier `json:"tier" doc:"Execution tier (wasm, process, container)"`
 }
 
 // PluginDetail is the full REST representation of a plugin.
