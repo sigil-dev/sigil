@@ -8,29 +8,41 @@ import (
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
+// defaultScannerModes is the single source of truth for scanner mode defaults.
+// Input: block (reject prompt injection), Tool: flag (log but continue), Output: redact (strip secrets).
+var defaultScannerModes = ScannerModes{
+	Input:  scanner.ModeBlock,
+	Tool:   scanner.ModeFlag,
+	Output: scanner.ModeRedact,
+}
+
 // NewScannerModesFromConfig converts config.ScannerConfig to agent.ScannerModes.
-// Config fields are types.ScannerMode; scanner.Mode is an alias so the conversion is direct.
-// Empty fields default to the standard modes: block (input), flag (tool), redact (output).
-func NewScannerModesFromConfig(cfg config.ScannerConfig) ScannerModes {
-	input := scanner.Mode(cfg.Input)
-	if input == "" {
-		input = scanner.ModeBlock
+// Empty fields fall back to defaultScannerModes. Non-empty fields are validated.
+func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
+	modes := defaultScannerModes
+
+	if cfg.Input != "" {
+		if !cfg.Input.Valid() {
+			return ScannerModes{}, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner input mode: %q", cfg.Input)
+		}
+		modes.Input = scanner.Mode(cfg.Input)
 	}
-	tool := scanner.Mode(cfg.Tool)
-	if tool == "" {
-		tool = scanner.ModeFlag
+	if cfg.Tool != "" {
+		if !cfg.Tool.Valid() {
+			return ScannerModes{}, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner tool mode: %q", cfg.Tool)
+		}
+		modes.Tool = scanner.Mode(cfg.Tool)
 	}
-	output := scanner.Mode(cfg.Output)
-	if output == "" {
-		output = scanner.ModeRedact
+	if cfg.Output != "" {
+		if !cfg.Output.Valid() {
+			return ScannerModes{}, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner output mode: %q", cfg.Output)
+		}
+		modes.Output = scanner.Mode(cfg.Output)
 	}
-	return ScannerModes{
-		Input:  input,
-		Tool:   tool,
-		Output: output,
-	}
+	return modes, nil
 }
 
 // DefaultLoopConfig returns a LoopConfig with default scanner modes and the given required dependencies.
@@ -40,10 +52,6 @@ func DefaultLoopConfig(sessions *SessionManager, enforcer *security.Enforcer, ro
 		Enforcer:       enforcer,
 		ProviderRouter: router,
 		Scanner:        sc,
-		ScannerModes: ScannerModes{
-			Input:  scanner.ModeBlock,
-			Tool:   scanner.ModeFlag,
-			Output: scanner.ModeRedact,
-		},
+		ScannerModes:   defaultScannerModes,
 	}
 }

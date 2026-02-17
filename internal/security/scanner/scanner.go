@@ -82,8 +82,10 @@ type ScanResult struct {
 
 // Match describes a single pattern match.
 // Location and Length are byte offsets into ScanResult.Content.
-// Invariant: Location >= 0 and Length >= 0. RegexScanner guarantees
-// this; other Scanner implementations must uphold it.
+// Invariant: Location >= 0 and Length >= 0. Use NewMatch for validated
+// construction. Direct struct literals are permitted (Go convention) but
+// callers must ensure non-negative offsets. redact() defensively filters
+// invalid offsets.
 type Match struct {
 	Rule     string
 	Location int // byte offset into ScanResult.Content
@@ -118,6 +120,28 @@ type Rule struct {
 	Name     string
 	Pattern  *regexp.Regexp
 	Severity Severity
+}
+
+// NewRule creates a Rule with validated fields.
+func NewRule(name string, pattern *regexp.Regexp, stage Stage, severity Severity) (Rule, error) {
+	if name == "" {
+		return Rule{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule name must not be empty")
+	}
+	if pattern == nil {
+		return Rule{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %s has nil pattern", name)
+	}
+	if !stage.Valid() {
+		return Rule{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %s has invalid stage %q", name, stage)
+	}
+	if !severity.Valid() {
+		return Rule{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %s has invalid severity %q", name, severity)
+	}
+	return Rule{
+		Name:     name,
+		Pattern:  pattern,
+		Stage:    stage,
+		Severity: severity,
+	}, nil
 }
 
 // DefaultMaxContentLength is the default maximum content size accepted by RegexScanner (1MB).
@@ -199,6 +223,15 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 	}
 	if !opts.Origin.Valid() {
 		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan origin: %q", opts.Origin)
+	}
+
+	// Defensive copy: prevent caller mutation of shared metadata.
+	if opts.Metadata != nil {
+		copied := make(map[string]string, len(opts.Metadata))
+		for k, v := range opts.Metadata {
+			copied[k] = v
+		}
+		opts.Metadata = copied
 	}
 
 	if len(content) > s.maxContentLength {

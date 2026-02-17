@@ -74,7 +74,10 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating security scanner: %w", err)
 	}
-	scannerModes := agent.NewScannerModesFromConfig(cfg.Security.Scanner)
+	scannerModes, err := agent.NewScannerModesFromConfig(cfg.Security.Scanner)
+	if err != nil {
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "configuring scanner modes: %w", err)
+	}
 
 	// 3. Plugin manager — discover plugins in the plugins directory.
 	pluginMgr := plugin.NewManager(filepath.Join(dataDir, "plugins"), enforcer)

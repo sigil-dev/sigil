@@ -854,6 +854,111 @@ func TestToolSecretRules_IncludesNewPatterns(t *testing.T) {
 	}
 }
 
+// Finding sigil-7g5.180 — NewRule constructor validates fields.
+func TestNewRule(t *testing.T) {
+	validPattern := regexp.MustCompile(`foo`)
+
+	tests := []struct {
+		name      string
+		ruleName  string
+		pattern   *regexp.Regexp
+		stage     scanner.Stage
+		severity  scanner.Severity
+		wantErr   bool
+		errReason string
+	}{
+		{
+			name:     "valid rule succeeds",
+			ruleName: "my_rule",
+			pattern:  validPattern,
+			stage:    scanner.StageInput,
+			severity: scanner.SeverityHigh,
+			wantErr:  false,
+		},
+		{
+			name:      "empty name fails",
+			ruleName:  "",
+			pattern:   validPattern,
+			stage:     scanner.StageInput,
+			severity:  scanner.SeverityHigh,
+			wantErr:   true,
+			errReason: "empty name",
+		},
+		{
+			name:      "nil pattern fails",
+			ruleName:  "nil_pattern",
+			pattern:   nil,
+			stage:     scanner.StageInput,
+			severity:  scanner.SeverityHigh,
+			wantErr:   true,
+			errReason: "nil pattern",
+		},
+		{
+			name:      "invalid stage fails",
+			ruleName:  "bad_stage",
+			pattern:   validPattern,
+			stage:     scanner.Stage("unknown"),
+			severity:  scanner.SeverityHigh,
+			wantErr:   true,
+			errReason: "invalid stage",
+		},
+		{
+			name:      "invalid severity fails",
+			ruleName:  "bad_severity",
+			pattern:   validPattern,
+			stage:     scanner.StageInput,
+			severity:  scanner.Severity("critical"),
+			wantErr:   true,
+			errReason: "invalid severity",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule, err := scanner.NewRule(tt.ruleName, tt.pattern, tt.stage, tt.severity)
+			if tt.wantErr {
+				require.Error(t, err, "expected error for: %s", tt.errReason)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+					"expected CodeSecurityScannerFailure, got: %v", err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.ruleName, rule.Name)
+				assert.Equal(t, tt.pattern, rule.Pattern)
+				assert.Equal(t, tt.stage, rule.Stage)
+				assert.Equal(t, tt.severity, rule.Severity)
+			}
+		})
+	}
+}
+
+// Finding sigil-7g5.200 — ScanContext.Metadata defensive copy.
+func TestScanContextMetadataDefensiveCopy(t *testing.T) {
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	require.NoError(t, err)
+
+	meta := map[string]string{"key": "value"}
+	_, err = s.Scan(context.Background(), "hello world", scanner.ScanContext{
+		Stage:    scanner.StageInput,
+		Origin:   scanner.OriginUser,
+		Metadata: meta,
+	})
+	require.NoError(t, err)
+
+	// Mutate the original map after Scan returns; this must not affect any
+	// internal state (currently Metadata is unused by RegexScanner, but the
+	// defensive copy ensures future implementations are safe).
+	meta["key"] = "mutated"
+	meta["extra"] = "injected"
+
+	// Run a second scan to confirm the scanner is unaffected.
+	result, err := s.Scan(context.Background(), "hello world", scanner.ScanContext{
+		Stage:  scanner.StageInput,
+		Origin: scanner.OriginUser,
+	})
+	require.NoError(t, err)
+	assert.False(t, result.Threat, "benign content must not trigger a threat after metadata mutation")
+}
+
 // Finding sigil-7g5.206 — Database connection string detection with URL-encoded passwords and IPv6 hosts.
 func TestSecretRules_DatabaseConnectionString(t *testing.T) {
 	s, err := scanner.NewRegexScanner(scanner.OutputRules())
