@@ -14,9 +14,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
+	"github.com/sigil-dev/sigil/internal/security/scanner"
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
+
+// ScannerModes holds the per-stage detection modes.
+type ScannerModes struct {
+	Input  scanner.Mode
+	Tool   scanner.Mode
+	Output scanner.Mode
+}
 
 // defaultMaxToolCallsPerTurn is the default maximum number of tool calls
 // allowed in a single turn when MaxToolCallsPerTurn is not configured.
@@ -82,6 +90,8 @@ type LoopConfig struct {
 	ToolRegistry        ToolRegistry
 	MaxToolCallsPerTurn int
 	Hooks               *LoopHooks
+	Scanner             scanner.Scanner
+	ScannerModes        ScannerModes
 }
 
 // Loop is the agent's core processing pipeline.
@@ -94,6 +104,8 @@ type Loop struct {
 	toolRegistry        ToolRegistry
 	maxToolCallsPerTurn int
 	hooks               *LoopHooks
+	scanner             scanner.Scanner
+	scannerModes        ScannerModes
 	auditFailCount      atomic.Int64
 }
 
@@ -124,6 +136,8 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		toolRegistry:        cfg.ToolRegistry,
 		maxToolCallsPerTurn: maxCalls,
 		hooks:               cfg.Hooks,
+		scanner:             cfg.Scanner,
+		scannerModes:        cfg.ScannerModes,
 	}, nil
 }
 
@@ -310,7 +324,30 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 		return nil, nil, err
 	}
 
-	// TODO(sigil-39g): Implement input sanitization and prompt injection scanning per design/03 §Agent Integrity step 1
+	// Input scanning — check for prompt injection before persisting.
+	if l.scanner != nil {
+		scanResult, scanErr := l.scanner.Scan(ctx, msg.Content, scanner.ScanContext{
+			Stage:  scanner.StageInput,
+			Origin: scanner.OriginUser,
+		})
+		if scanErr != nil {
+			return nil, nil, sigilerr.Wrap(scanErr, sigilerr.CodeSecurityScannerFailure, "input scan failed")
+		}
+		if scanResult.Threat {
+			for _, m := range scanResult.Matches {
+				slog.Warn("input scan threat detected",
+					"rule", m.Rule,
+					"severity", m.Severity,
+					"session_id", msg.SessionID,
+				)
+			}
+		}
+		content, modeErr := scanner.ApplyMode(l.scannerModes.Input, msg.Content, scanResult)
+		if modeErr != nil {
+			return nil, nil, modeErr
+		}
+		msg.Content = content
+	}
 
 	// Append the incoming user message to the session store.
 	userMsg := &store.Message{
@@ -341,6 +378,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 			Content:    m.Content,
 			ToolCallID: m.ToolCallID,
 			ToolName:   m.ToolName,
+			Origin:     originFromRole(m.Role),
 		})
 	}
 
@@ -580,6 +618,7 @@ func (l *Loop) runToolLoop(
 			currentMessages = append(currentMessages, provider.Message{
 				Role:    store.MessageRoleAssistant,
 				Content: text,
+				Origin:  provider.OriginSystem,
 			})
 		}
 
@@ -628,12 +667,36 @@ func (l *Loop) runToolLoop(
 				return "", nil, sigilerr.Wrapf(appendErr, sigilerr.CodeAgentLoopFailure, "persisting tool result: session %s", msg.SessionID)
 			}
 
-			// TODO(sigil-j32): Implement tool result injection scanning per design/03 §Agent Integrity step 6
+			// Tool result scanning — check for instruction injection.
+			if l.scanner != nil {
+				scanResult, scanErr := l.scanner.Scan(ctx, resultContent, scanner.ScanContext{
+					Stage:  scanner.StageTool,
+					Origin: scanner.OriginTool,
+				})
+				if scanErr != nil {
+					slog.Warn("tool scan error", "error", scanErr, "tool", tc.Name)
+				} else if scanResult.Threat {
+					for _, m := range scanResult.Matches {
+						slog.Warn("tool result injection detected",
+							"rule", m.Rule,
+							"severity", m.Severity,
+							"tool", tc.Name,
+							"session_id", msg.SessionID,
+						)
+					}
+					var modeErr error
+					resultContent, modeErr = scanner.ApplyMode(l.scannerModes.Tool, resultContent, scanResult)
+					if modeErr != nil {
+						return "", nil, modeErr
+					}
+				}
+			}
 			currentMessages = append(currentMessages, provider.Message{
 				Role:       store.MessageRoleTool,
 				Content:    resultContent,
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
+				Origin:     provider.OriginTool,
 			})
 		}
 
@@ -670,7 +733,22 @@ func (l *Loop) runToolLoop(
 }
 
 func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {
-	// TODO(sigil-hnh): Implement output filtering for PII/secrets per design/03 §Defense Matrix
+	// Output scanning — filter secrets before persisting/returning.
+	if l.scanner != nil {
+		scanResult, scanErr := l.scanner.Scan(ctx, text, scanner.ScanContext{
+			Stage:  scanner.StageOutput,
+			Origin: scanner.OriginSystem,
+		})
+		if scanErr != nil {
+			slog.Warn("output scan error", "error", scanErr, "session_id", sessionID)
+		} else {
+			var modeErr error
+			text, modeErr = scanner.ApplyMode(l.scannerModes.Output, text, scanResult)
+			if modeErr != nil {
+				return nil, modeErr
+			}
+		}
+	}
 
 	// Persist the assistant response.
 	assistantMsg := &store.Message{
@@ -689,6 +767,17 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 		Content:   text,
 		Usage:     usage,
 	}, nil
+}
+
+func originFromRole(role store.MessageRole) provider.Origin {
+	switch role {
+	case store.MessageRoleUser:
+		return provider.OriginUser
+	case store.MessageRoleTool:
+		return provider.OriginTool
+	default:
+		return provider.OriginSystem
+	}
 }
 
 func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessage) {

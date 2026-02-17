@@ -886,3 +886,32 @@ func (p *mockProviderStreamUsageThenError) Close() error { return nil }
 func newMockProviderRouterStreamUsageThenError() *mockProviderRouter {
 	return &mockProviderRouter{provider: &mockProviderStreamUsageThenError{}}
 }
+
+// mockProviderCustomResponse returns a configurable text response.
+type mockProviderCustomResponse struct {
+	response string
+}
+
+func (p *mockProviderCustomResponse) Name() string                     { return "mock-custom" }
+func (p *mockProviderCustomResponse) Available(_ context.Context) bool { return true }
+func (p *mockProviderCustomResponse) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderCustomResponse) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 2)
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: p.response}
+	ch <- provider.ChatEvent{
+		Type:  provider.EventTypeDone,
+		Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5},
+	}
+	close(ch)
+	return ch, nil
+}
+func (p *mockProviderCustomResponse) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-custom"}, nil
+}
+func (p *mockProviderCustomResponse) Close() error { return nil }
+
+func newMockProviderRouterWithResponse(response string) *mockProviderRouter {
+	return &mockProviderRouter{provider: &mockProviderCustomResponse{response: response}}
+}
