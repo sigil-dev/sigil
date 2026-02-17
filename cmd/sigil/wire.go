@@ -76,13 +76,17 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	// can route requests without "no default provider configured" errors.
 	if cfg.Models.Default != "" {
 		if err := provReg.SetDefault(cfg.Models.Default); err != nil {
-			_ = gs.Close()
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
 			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting default provider: %s", cfg.Models.Default)
 		}
 	}
 	if len(cfg.Models.Failover) > 0 {
 		if err := provReg.SetFailover(cfg.Models.Failover); err != nil {
-			_ = gs.Close()
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
 			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting failover chain")
 		}
 	}
@@ -100,7 +104,9 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 			}
 		}
 		if err := wsMgr.SetConfig(wsCfg); err != nil {
-			_ = gs.Close()
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
 			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "setting workspace config: %w", err)
 		}
 	}
@@ -111,7 +117,9 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		var tvErr error
 		tokenValidator, tvErr = newConfigTokenValidator(cfg.Auth.Tokens)
 		if tvErr != nil {
-			_ = gs.Close()
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
 			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "configuring auth tokens: %w", tvErr)
 		}
 	} else {
@@ -126,7 +134,9 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		&userServiceAdapter{store: gs.Users()},
 	)
 	if err != nil {
-		_ = gs.Close()
+		if closeErr := gs.Close(); closeErr != nil {
+			slog.Warn("gateway store close error during initialization", "error", closeErr)
+		}
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
 	}
 
@@ -148,7 +158,9 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		Services:      services,
 	})
 	if err != nil {
-		_ = gs.Close()
+		if closeErr := gs.Close(); closeErr != nil {
+			slog.Warn("gateway store close error during initialization", "error", closeErr)
+		}
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
 

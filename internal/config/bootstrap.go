@@ -36,6 +36,9 @@ func BootstrapConfig() string {
 
 	if _, err := os.Stat(cfgPath); err == nil {
 		return "" // already exists
+	} else if !os.IsNotExist(err) {
+		slog.Debug("skipping config bootstrap: cannot stat config path", "path", cfgPath, "error", err)
+		return ""
 	}
 
 	dir := filepath.Dir(cfgPath)
