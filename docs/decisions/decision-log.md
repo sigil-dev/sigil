@@ -866,6 +866,15 @@ Existing tokens and client authentication headers MUST be reviewed after enablin
 
 **Rationale:** A single scanner engine with per-hook configuration is the simplest correct architecture. The three hooks share 90% of their logic (compile patterns, scan text, report findings) and differ only in what action to take on a match. Separate implementations would triple the test surface and create inconsistency risk. The stdlib regexp choice trades detection sophistication for license compatibility — an acceptable trade-off since the primary goal is catching accidental secret exposure, not adversarial obfuscation.
 
-**Scanner error handling:** Input scanning fails closed (returns error to caller) because it guards against prompt injection before any processing. Tool and output scanning also fail closed for consistency with the default-deny security principle. All three stages now treat scanner internal errors as blocking failures.
+**Scanner error handling:** The scanner distinguishes between two error categories with different handling paths:
+
+1. **Scanner internal errors** (all stages) — context cancellation, regex panic, compilation errors, etc. These are failures of the scanner itself, not threat detection results. All three stages fail closed and return the error to the caller, blocking execution. This enforces the default-deny security principle: if we cannot scan, we cannot proceed.
+
+2. **Threat detection** (per-hook behavior) — when the scanner successfully detects a pattern (prompt injection, secret, etc.):
+   - **Input hook**: `block` — reject the message and return error to caller (prompt injection is high-severity).
+   - **Tool hook**: `flag` — log a warning and continue (tool results may legitimately contain credential-shaped strings and injection-like patterns).
+   - **Output hook**: `redact` — replace matched content with `[REDACTED]` and continue to the user.
+
+These are distinct cases: scanner internal errors always fail closed (all stages), while threat detection behaviors differ per stage as described above.
 
 **Ref:** `internal/security/scanner/`, `docs/design/03-security-model.md` Steps 1/6/7
