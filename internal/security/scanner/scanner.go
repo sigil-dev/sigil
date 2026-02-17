@@ -375,7 +375,12 @@ func secretRules(stage Stage) []Rule {
 		},
 		{
 			Name:     "database_connection_string",
-			Pattern:  regexp.MustCompile(`(?i)(postgres|mysql|mongodb|redis|jdbc:[a-z]+)://[^\s]+:[^\s]+@[^\s]+`),
+			// Matches: protocol://[user[:password]@]host[:port][/path]
+			// Supports:
+			// - URL-encoded passwords (e.g., p%40ssw0rd for p@ssw0rd, p%3Aword for p:word)
+			// - IPv6 hosts in brackets (e.g., [::1], [fe80::1])
+			// - Standard hostnames and IPv4 addresses
+			Pattern:  regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb|redis|jdbc:[a-z]+)://[^\s:@]+:(?:[^@\s%]|%[0-9A-Fa-f]{2})+@(?:\[[0-9A-Fa-f:]+\]|[^\s/:]+)(?:[:/][^\s]*)?`),
 			Stage:    stage,
 			Severity: SeverityHigh,
 		},

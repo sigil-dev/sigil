@@ -597,3 +597,126 @@ func TestScan_RedactWithNormalization(t *testing.T) {
 	assert.NotContains(t, redacted, "AKIA", "redacted output must not contain the AWS key prefix")
 	assert.Contains(t, redacted, "[REDACTED]", "redacted output must contain [REDACTED] marker")
 }
+
+// Finding sigil-7g5.206 — Database connection string detection with URL-encoded passwords and IPv6 hosts.
+func TestSecretRules_DatabaseConnectionString(t *testing.T) {
+	s, err := scanner.NewRegexScanner(scanner.OutputRules())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		content string
+		shouldMatch bool
+	}{
+		// Standard formats
+		{
+			name:    "postgres with standard password",
+			content: "postgres://admin:s3cret@db.example.com:5432/mydb",
+			shouldMatch: true,
+		},
+		{
+			name:    "mysql with standard password",
+			content: "mysql://root:password@localhost:3306/database",
+			shouldMatch: true,
+		},
+		{
+			name:    "mongodb with standard password",
+			content: "mongodb://user:pass@mongo.local:27017/dbname",
+			shouldMatch: true,
+		},
+		{
+			name:    "redis with standard password",
+			content: "redis://user:secret@cache.example.com:6379",
+			shouldMatch: true,
+		},
+		{
+			name:    "jdbc connection string",
+			content: "jdbc:mysql://admin:mypass@db.server.com:3306/appdb",
+			shouldMatch: true,
+		},
+		// URL-encoded passwords
+		{
+			name:    "postgres with URL-encoded @ symbol",
+			content: "postgresql://user:p%40ssw0rd@db.example.com/mydb",
+			shouldMatch: true,
+		},
+		{
+			name:    "mysql with URL-encoded : symbol",
+			content: "mysql://admin:pass%3Aword@host.local:3306/db",
+			shouldMatch: true,
+		},
+		{
+			name:    "postgres with URL-encoded special chars",
+			content: "postgres://user:p%40ss%3Aw0rd%21@database.com/app",
+			shouldMatch: true,
+		},
+		// IPv6 hosts
+		{
+			name:    "postgres with IPv6 localhost",
+			content: "postgres://user:password@[::1]:5432/mydb",
+			shouldMatch: true,
+		},
+		{
+			name:    "mysql with IPv6 address",
+			content: "mysql://root:secret@[2001:db8::1]:3306/database",
+			shouldMatch: true,
+		},
+		{
+			name:    "mongodb with IPv6 and port",
+			content: "mongodb://admin:pass@[fe80::1]:27017/data",
+			shouldMatch: true,
+		},
+		// IPv6 with URL-encoded password
+		{
+			name:    "postgres with IPv6 and URL-encoded password",
+			content: "postgresql://user:p%40ss@[::1]:5432/db",
+			shouldMatch: true,
+		},
+		// With paths
+		{
+			name:    "postgres with path in connection string",
+			content: "postgres://admin:secret@db.example.com/myapp/schema",
+			shouldMatch: true,
+		},
+		{
+			name:    "postgres with query params",
+			content: "postgres://user:pass@localhost:5432/db?sslmode=require",
+			shouldMatch: true,
+		},
+		// Non-matches (no password)
+		{
+			name:    "postgres without password",
+			content: "postgres://user@localhost/mydb",
+			shouldMatch: false,
+		},
+		{
+			name:    "postgres in regular text",
+			content: "I use PostgreSQL database for storage",
+			shouldMatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := s.Scan(context.Background(), tt.content, scanner.ScanContext{
+				Stage:  scanner.StageOutput,
+				Origin: scanner.OriginSystem,
+			})
+			require.NoError(t, err)
+			if tt.shouldMatch {
+				assert.True(t, result.Threat, "expected database_connection_string to match: %q", tt.content)
+				// Verify it's the right rule
+				ruleFound := false
+				for _, m := range result.Matches {
+					if m.Rule == "database_connection_string" {
+						ruleFound = true
+						break
+					}
+				}
+				assert.True(t, ruleFound, "expected rule database_connection_string to match in: %q", tt.content)
+			} else {
+				assert.False(t, result.Threat, "expected no threat for: %q", tt.content)
+			}
+		})
+	}
+}
