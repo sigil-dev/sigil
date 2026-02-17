@@ -12,6 +12,7 @@ coverage.html
 *.test
 
 # Build
+build/
 .task/
 
 # Dependencies
