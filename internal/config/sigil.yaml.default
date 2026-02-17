@@ -1,0 +1,115 @@
+# Sigil configuration
+# https://github.com/sigil-dev/sigil
+#
+# Copy this file to ~/.config/sigil/sigil.yaml and edit to taste.
+# Sigil auto-bootstraps a default config on first run if none exists.
+#
+# Precedence: CLI flags > environment variables > config file > defaults
+# Environment: SIGIL_<SECTION>_<KEY> (e.g. SIGIL_NETWORKING_LISTEN)
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+# When tokens are configured, API endpoints enforce identity and permissions.
+# When no tokens are configured, all endpoints are accessible (dev mode).
+# See docs/decisions/decision-log.md (D061) for details.
+#
+# auth:
+#   tokens:
+#     - token: "secret-token-for-alice"
+#       user_id: "alice"
+#       name: "Alice"
+#       permissions: ["admin:plugins", "workspace:personal"]
+#     - token: "secret-token-for-bob"
+#       user_id: "bob"
+#       name: "Bob"
+#       permissions: ["workspace:personal"]
+
+# ---------------------------------------------------------------------------
+# Networking
+# ---------------------------------------------------------------------------
+networking:
+  mode: local                       # local | tailscale
+  listen: "127.0.0.1:18789"
+  enable_hsts: false                # Enable HTTP Strict Transport Security
+  rate_limit_rps: 0                 # Requests per second per IP (0 = disabled)
+  rate_limit_burst: 0               # Burst size for rate limiting
+  # cors_origins:                   # Allowed CORS origins (empty = dev default)
+  #   - "http://localhost:5173"
+  # trusted_proxies:                # CIDR ranges of trusted reverse proxies
+  #   - "10.0.0.0/8"               # Required when behind a reverse proxy
+  #   - "172.16.0.0/12"            # Only X-Forwarded-For from these IPs is trusted
+  # tailscale:
+  #   hostname: "my-agent"
+  #   auth_key: "${TS_AUTHKEY}"
+  #   node_auth:
+  #     required_tag: "tag:agent-node"
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+storage:
+  backend: sqlite                   # sqlite (default, only supported backend)
+
+# ---------------------------------------------------------------------------
+# LLM Providers
+# ---------------------------------------------------------------------------
+# API keys use the keyring:// URI scheme for secure OS keyring storage.
+# Store keys with: sigil secrets set sigil anthropic-api-key
+# Fallback: environment variables (e.g. SIGIL_PROVIDERS_ANTHROPIC_API_KEY)
+providers:
+  anthropic:
+    api_key: "keyring://sigil/anthropic-api-key"
+  # openai:
+  #   api_key: "keyring://sigil/openai-api-key"
+  # google:
+  #   api_key: "keyring://sigil/google-api-key"
+  # openrouter:
+  #   api_key: "keyring://sigil/openrouter-api-key"
+  # ollama:
+  #   endpoint: "http://localhost:11434"
+
+# ---------------------------------------------------------------------------
+# Model configuration
+# ---------------------------------------------------------------------------
+models:
+  default: "anthropic/claude-sonnet-4-5"
+  failover:
+    - "anthropic/claude-sonnet-4-5"
+  budgets:
+    per_session_tokens: 100000
+    per_hour_usd: 5.00
+    per_day_usd: 50.00
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+sessions:
+  memory:
+    active_window: 20
+    compaction:
+      strategy: summarize
+      summary_model: "anthropic/claude-haiku-4-5"
+      batch_size: 50
+
+# ---------------------------------------------------------------------------
+# Workspaces
+# ---------------------------------------------------------------------------
+workspaces:
+  personal:
+    description: "Default personal workspace"
+    members: []
+    tools:
+      allow: ["*"]
+      # deny: ["tool.dangerous_exec"]   # deny patterns evaluated first
+    skills: []
+  # team:
+  #   description: "Shared team workspace"
+  #   members: ["alice", "bob"]
+  #   bindings:
+  #     - channel: "slack"
+  #       channel_id: "C12345"
+  #   tools:
+  #     allow: ["tool.*"]
+  #     deny: ["tool.shell_exec"]
+  #   skills: ["summarize"]

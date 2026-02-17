@@ -38,7 +38,10 @@ func newPluginListCmd() *cobra.Command {
 }
 
 func runPluginList(cmd *cobra.Command, _ []string) error {
-	addr, _ := cmd.Flags().GetString("address")
+	addr, err := cmd.Flags().GetString("address")
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "parsing address flag: %w", err)
+	}
 	out := cmd.OutOrStdout()
 
 	gw := newGatewayClient(addr)
@@ -70,4 +73,3 @@ func runPluginList(cmd *cobra.Command, _ []string) error {
 	}
 	return tw.Flush()
 }
-

@@ -96,6 +96,7 @@ func validConfig() *config.Config {
 			Failover: []string{"anthropic/claude-sonnet-4-5"},
 			Budgets: config.BudgetsConfig{
 				PerSessionTokens: 100000,
+				PerHourUSD:       5.00,
 				PerDayUSD:        50.00,
 			},
 		},
@@ -177,6 +178,59 @@ func TestValidate_NetworkingListen(t *testing.T) {
 			} else {
 				for _, err := range errs {
 					assert.NotContains(t, err.Error(), "networking.listen")
+				}
+			}
+		})
+	}
+}
+
+func TestValidate_TrustedProxies(t *testing.T) {
+	tests := []struct {
+		name            string
+		trustedProxies  []string
+		wantErr         bool
+		errMsgContains  string
+	}{
+		{
+			name:           "empty list",
+			trustedProxies: []string{},
+			wantErr:        false,
+		},
+		{
+			name:           "valid single CIDR",
+			trustedProxies: []string{"10.0.0.0/8"},
+			wantErr:        false,
+		},
+		{
+			name:           "valid multiple CIDRs",
+			trustedProxies: []string{"10.0.0.0/8", "192.168.1.0/24", "172.16.0.0/12"},
+			wantErr:        false,
+		},
+		{
+			name:           "invalid CIDR string",
+			trustedProxies: []string{"not-a-cidr"},
+			wantErr:        true,
+			errMsgContains: "networking.trusted_proxies",
+		},
+		{
+			name:           "mixed valid and invalid entries",
+			trustedProxies: []string{"10.0.0.0/8", "bad-cidr", "192.168.0.0/16"},
+			wantErr:        true,
+			errMsgContains: "networking.trusted_proxies",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Networking.TrustedProxies = tt.trustedProxies
+			errs := cfg.Validate()
+			if tt.wantErr {
+				require.NotEmpty(t, errs)
+				assert.Contains(t, errs[0].Error(), tt.errMsgContains)
+			} else {
+				for _, err := range errs {
+					assert.NotContains(t, err.Error(), "networking.trusted_proxies")
 				}
 			}
 		})
@@ -280,20 +334,24 @@ func TestValidate_Budgets(t *testing.T) {
 	tests := []struct {
 		name             string
 		perSessionTokens int
+		perHourUSD       float64
 		perDayUSD        float64
 		wantErr          string
 	}{
-		{"valid budgets", 100000, 50.0, ""},
-		{"zero tokens", 0, 50.0, "models.budgets.per_session_tokens"},
-		{"negative tokens", -1, 50.0, "models.budgets.per_session_tokens"},
-		{"zero usd", 100000, 0, "models.budgets.per_day_usd"},
-		{"negative usd", 100000, -5.0, "models.budgets.per_day_usd"},
+		{"valid budgets", 100000, 5.0, 50.0, ""},
+		{"zero tokens", 0, 5.0, 50.0, "models.budgets.per_session_tokens"},
+		{"negative tokens", -1, 5.0, 50.0, "models.budgets.per_session_tokens"},
+		{"zero hour usd", 100000, 0, 50.0, "models.budgets.per_hour_usd"},
+		{"negative hour usd", 100000, -1.0, 50.0, "models.budgets.per_hour_usd"},
+		{"zero day usd", 100000, 5.0, 0, "models.budgets.per_day_usd"},
+		{"negative day usd", 100000, 5.0, -5.0, "models.budgets.per_day_usd"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
 			cfg.Models.Budgets.PerSessionTokens = tt.perSessionTokens
+			cfg.Models.Budgets.PerHourUSD = tt.perHourUSD
 			cfg.Models.Budgets.PerDayUSD = tt.perDayUSD
 			errs := cfg.Validate()
 			if tt.wantErr != "" {
@@ -412,6 +470,7 @@ func TestValidate_MultipleErrors(t *testing.T) {
 			Default: "",
 			Budgets: config.BudgetsConfig{
 				PerSessionTokens: -1,
+				PerHourUSD:       -1,
 				PerDayUSD:        -1,
 			},
 		},
@@ -448,4 +507,44 @@ storage:
 	_, err = config.Load(cfgPath)
 	require.Error(t, err, "Load should fail with invalid config")
 	assert.Contains(t, err.Error(), "validating config")
+}
+
+func TestValidate_RateLimitConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		rps     float64
+		burst   int
+		wantErr string
+	}{
+		{"disabled - zero rps and burst", 0, 0, ""},
+		{"valid rate limit", 10.0, 20, ""},
+		{"valid fractional rps", 0.5, 5, ""},
+		{"negative rps", -5.0, 10, "rate_limit_rps must not be negative"},
+		{"rps set but burst zero", 10.0, 0, "rate_limit_burst must be positive"},
+		{"rps set but burst negative", 10.0, -5, "rate_limit_burst must be positive"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Networking.RateLimitRPS = tt.rps
+			cfg.Networking.RateLimitBurst = tt.burst
+			errs := cfg.Validate()
+			if tt.wantErr != "" {
+				require.NotEmpty(t, errs)
+				found := false
+				for _, err := range errs {
+					if strings.Contains(err.Error(), tt.wantErr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected error containing %q, got: %v", tt.wantErr, errs)
+			} else {
+				for _, err := range errs {
+					assert.NotContains(t, err.Error(), "rate_limit")
+				}
+			}
+		})
+	}
 }

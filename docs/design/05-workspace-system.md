@@ -44,13 +44,13 @@ Message arrives from Telegram group "homelab"
 
 ## Key Properties
 
-| Property            | Detail                                                                                                |
-| ------------------- | ----------------------------------------------------------------------------------------------------- |
-| **Scoped tools**    | Each workspace has its own tool allowlist. Homelab gets k8s/terraform, family gets calendar/shopping. |
-| **Scoped sessions** | Conversation history stays within the workspace.                                                      |
-| **Scoped skills**   | Workspace-specific system prompt extensions.                                                          |
-| **Multi-member**    | Workspaces can have multiple users with shared context.                                               |
-| **Multi-binding**   | A workspace can bind to multiple channels.                                                            |
+| Property            | Detail                                                                                                                     |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Scoped tools**    | Each workspace has its own tool allowlist. Homelab gets k8s/terraform, family gets calendar/shopping.                      |
+| **Scoped sessions** | Conversation history stays within the workspace.                                                                           |
+| **Scoped skills**   | Workspace-specific system prompt extensions.                                                                               |
+| **Multi-member**    | Workspaces can have multiple users with shared context.                                                                    |
+| **Multi-binding**   | A workspace can bind to multiple channels.                                                                                 |
 | **Channel binding** | A channel (group/DM) maps to exactly one workspace. Unbound channels route to a user-scoped `personal:<userID>` workspace. |
 
 ## Configuration

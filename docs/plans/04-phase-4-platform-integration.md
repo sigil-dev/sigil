@@ -448,12 +448,10 @@ func TestRegistry_BudgetEnforcement(t *testing.T) {
 	reg.Register("anthropic", &mockProvider{name: "anthropic", available: true})
 	reg.SetDefault("anthropic/claude-sonnet-4-5")
 
-	budget := &provider.Budget{
-		MaxSessionTokens: 100,
-		UsedSessionTokens: 100, // already at limit
-	}
+	budget, err := provider.NewBudget(100, 100, 0, 0, 0, 0) // already at limit
+	require.NoError(t, err)
 
-	_, _, err := reg.Route(context.Background(), provider.RouteRequest{Budget: budget})
+	_, _, err = reg.Route(context.Background(), provider.RouteRequest{Budget: budget})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "budget")
 }

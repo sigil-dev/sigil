@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Sigil Contributors
+version: 2
+project_name: sigil
+before:
+  hooks:
+    - task generate
+builds:
+  # Main binary (CGO_ENABLED=1 for sqlite3/sqlite-vec)
+  # NOTE: CGO cross-compilation requires goreleaser-cross Docker image in CI.
+  # See: https://github.com/goreleaser/goreleaser-cross
+  - id: sigil
+    main: ./cmd/sigil
+    binary: sigil
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+archives:
+  - id: sigil
+    builds:
+      - sigil
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+sboms:
+  - artifacts: archive
+    cmd: syft
+    args:
+      - "${artifact}"
+      - "--output"
+      - "cyclonedx-json=${document}"
+    documents:
+      - "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.sbom.cdx.json"
+  - id: spdx
+    artifacts: archive
+    cmd: syft
+    args:
+      - "${artifact}"
+      - "--output"
+      - "spdx-json=${document}"
+    documents:
+      - "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.sbom.spdx.json"
+signs:
+  - cmd: cosign
+    # Keyless (Fulcio + Rekor) is the default signing mode since Cosign v2.
+    artifacts: checksum
+    output: true
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+changelog:
+  use: github-native
+brews:
+  - name: sigil
+    repository:
+      owner: sigil-dev
+      name: homebrew-tap
+    homepage: "https://github.com/sigil-dev/sigil"
+    description: "Secure, lightweight Go gateway connecting messaging platforms to AI agents"
+    license: "Apache-2.0"
+    install: |
+      bin.install "sigil"
+dockers:
+  - image_templates:
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-amd64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    goarch: amd64
+  - image_templates:
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-arm64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    goarch: arm64
+docker_manifests:
+  - name_template: "ghcr.io/sigil-dev/sigil:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-amd64"
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/sigil-dev/sigil:latest"
+    image_templates:
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-amd64"
+      - "ghcr.io/sigil-dev/sigil:{{ .Version }}-arm64"
+docker_signs:
+  - cmd: cosign
+    # Keyless (Fulcio + Rekor) signing for container images.
+    # Signs both per-arch images and multi-arch manifests.
+    artifacts: all
+    output: true
+    args:
+      - sign
+      - "--yes"
+      - "${artifact}"

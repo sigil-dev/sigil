@@ -15,9 +15,9 @@ import (
 // NewRootCmd creates the root sigil command with all subcommands registered.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "sigil",
-		Short: "Sigil — secure AI agent gateway",
-		Long:  "Sigil is a secure, lightweight gateway connecting messaging platforms to AI agents.",
+		Use:           "sigil",
+		Short:         "Sigil — secure AI agent gateway",
+		Long:          "Sigil is a secure, lightweight gateway connecting messaging platforms to AI agents.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -32,6 +32,7 @@ func NewRootCmd() *cobra.Command {
 
 	// Register subcommands
 	root.AddCommand(
+		newInitCmd(),
 		newStartCmd(),
 		newStatusCmd(),
 		newVersionCmd(),
@@ -40,6 +41,7 @@ func NewRootCmd() *cobra.Command {
 		newSessionCmd(),
 		newChatCmd(),
 		newDoctorCmd(),
+		newSecretCmd(),
 	)
 
 	return root
@@ -61,8 +63,10 @@ func initViper(cmd *cobra.Command) error {
 		}
 	} else {
 		// Auto-discover sigil.yaml from standard locations.
+		// Note: SetConfigType is intentionally omitted. When set, Viper
+		// falls back to trying the bare config name without extension,
+		// which collides with the ./sigil binary in the project root.
 		v.SetConfigName("sigil")
-		v.SetConfigType("yaml")
 		v.AddConfigPath(".")
 		v.AddConfigPath("$HOME/.config/sigil")
 		v.AddConfigPath("/etc/sigil")
@@ -73,12 +77,23 @@ func initViper(cmd *cobra.Command) error {
 			if !errors.As(err, &notFound) {
 				return sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config: %w", err)
 			}
+			// No config found anywhere — bootstrap a default to ~/.config/sigil/.
+			if path := config.BootstrapConfig(); path != "" {
+				v.SetConfigFile(path)
+				if err := v.ReadInConfig(); err != nil {
+					return sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading bootstrapped config: %w", err)
+				}
+			}
 		}
 	}
 
 	// Bind persistent flags to viper keys.
-	_ = v.BindPFlag("data_dir", cmd.Root().PersistentFlags().Lookup("data-dir"))
-	_ = v.BindPFlag("verbose", cmd.Root().PersistentFlags().Lookup("verbose"))
+	if err := v.BindPFlag("data_dir", cmd.Root().PersistentFlags().Lookup("data-dir")); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "binding data-dir flag: %w", err)
+	}
+	if err := v.BindPFlag("verbose", cmd.Root().PersistentFlags().Lookup("verbose")); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "binding verbose flag: %w", err)
+	}
 
 	return nil
 }

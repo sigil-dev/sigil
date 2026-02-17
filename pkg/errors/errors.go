@@ -29,6 +29,7 @@ const (
 	CodeConfigLoadReadFailure      Code = "config.load.read.failure"
 	CodeConfigParseInvalidFormat   Code = "config.parse.invalid_format"
 	CodeConfigValidateInvalidValue Code = "config.validate.invalid_value"
+	CodeConfigAlreadyExists        Code = "config.already_exists"
 
 	CodePluginManifestValidateInvalid    Code = "plugin.manifest.validate.invalid"
 	CodePluginCapabilityDenied           Code = "plugin.capability.denied"
@@ -49,8 +50,11 @@ const (
 	CodeProviderBudgetExceeded  Code = "provider.budget.exceeded"
 	CodeProviderNotFound        Code = "provider.registry.not_found"
 	CodeProviderAllUnavailable  Code = "provider.routing.all_unavailable"
-	CodeProviderNoDefault        Code = "provider.routing.no_default"
-	CodeProviderInvalidModelRef  Code = "provider.routing.invalid_model_ref"
+	CodeProviderNoDefault       Code = "provider.routing.no_default"
+	CodeProviderInvalidModelRef Code = "provider.routing.invalid_model_ref"
+	CodeProviderInvalidEvent    Code = "provider.event.invalid"
+	CodeProviderKeyInvalid     Code = "provider.key.invalid"
+	CodeProviderKeyCheckFailed Code = "provider.key.check_failed"
 
 	CodeAgentLoopInvalidInput        Code = "agent.loop.invalid_input"
 	CodeAgentLoopFailure             Code = "agent.loop.failure"
@@ -63,7 +67,7 @@ const (
 	CodeWorkspaceOpenFailure      Code = "workspace.open.failure"
 	CodeWorkspaceMembershipDenied Code = "workspace.membership.denied"
 	CodeWorkspaceConfigInvalid    Code = "workspace.config.invalid"
-	CodeWorkspaceCloseFailure    Code = "workspace.close.failure"
+	CodeWorkspaceCloseFailure     Code = "workspace.close.failure"
 
 	CodeServerRequestInvalid   Code = "server.request.invalid"
 	CodeServerAuthUnauthorized Code = "server.auth.unauthorized"
@@ -82,20 +86,31 @@ const (
 	CodeCLIInputInvalid      Code = "cli.input.invalid"
 
 	CodeSecurityCapabilityInvalid Code = "security.capability.invalid"
+	CodeSecurityInvalidInput      Code = "security.input.invalid"
+
+	CodeChannelTokenInvalid    Code = "channel.token.invalid"
+	CodeChannelTokenCheckFailed Code = "channel.token.check_failed"
 
 	CodeChannelPairingRequired Code = "channel.pairing.required"
 	CodeChannelPairingDenied   Code = "channel.pairing.denied"
 	CodeChannelPairingPending  Code = "channel.pairing.pending"
 	CodeChannelBackendFailure  Code = "channel.backend.failure"
+
+	CodeSecretStoreFailure  Code = "secret.store.failure"
+	CodeSecretNotFound      Code = "secret.get.not_found"
+	CodeSecretDeleteFailure Code = "secret.delete.failure"
+	CodeSecretListFailure   Code = "secret.list.failure"
+	CodeSecretInvalidInput  Code = "secret.input.invalid"
+	CodeSecretResolveFailure Code = "secret.resolve.failure"
 )
 
-// Field is a structured key/value context attached to an error.
+// Attr is a structured key/value context attached to an error.
 type Attr struct {
 	Key   string
 	Value any
 }
 
-// Field creates a structured error field.
+// FieldValue creates a structured error field.
 func FieldValue(key string, value any) Attr {
 	return Attr{Key: key, Value: value}
 }

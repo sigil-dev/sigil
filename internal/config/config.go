@@ -6,9 +6,11 @@ package config
 import (
 	"errors"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/sigil-dev/sigil/internal/secrets"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/viper"
 )
@@ -39,8 +41,13 @@ type TokenConfig struct {
 
 // NetworkingConfig controls how Sigil listens for connections.
 type NetworkingConfig struct {
-	Mode   string `mapstructure:"mode"`
-	Listen string `mapstructure:"listen"`
+	Mode           string   `mapstructure:"mode"`
+	Listen         string   `mapstructure:"listen"`
+	CORSOrigins    []string `mapstructure:"cors_origins"`
+	EnableHSTS     bool     `mapstructure:"enable_hsts"`
+	RateLimitRPS   float64  `mapstructure:"rate_limit_rps"`
+	RateLimitBurst int      `mapstructure:"rate_limit_burst"`
+	TrustedProxies []string `mapstructure:"trusted_proxies"` // CIDR ranges of trusted reverse proxies
 }
 
 // ProviderConfig holds credentials and endpoint for an LLM provider.
@@ -59,6 +66,7 @@ type ModelsConfig struct {
 // BudgetsConfig sets token and cost limits.
 type BudgetsConfig struct {
 	PerSessionTokens int     `mapstructure:"per_session_tokens"`
+	PerHourUSD       float64 `mapstructure:"per_hour_usd"`
 	PerDayUSD        float64 `mapstructure:"per_day_usd"`
 }
 
@@ -87,11 +95,11 @@ type StorageConfig struct {
 
 // WorkspaceConfig defines a single workspace.
 type WorkspaceConfig struct {
-	Description string           `mapstructure:"description"`
-	Members     []string         `mapstructure:"members"`
-	Bindings    []BindingConfig  `mapstructure:"bindings"`
-	Tools       ToolsConfig      `mapstructure:"tools"`
-	Skills      []string         `mapstructure:"skills"`
+	Description string          `mapstructure:"description"`
+	Members     []string        `mapstructure:"members"`
+	Bindings    []BindingConfig `mapstructure:"bindings"`
+	Tools       ToolsConfig     `mapstructure:"tools"`
+	Skills      []string        `mapstructure:"skills"`
 }
 
 // BindingConfig maps a channel type and ID to a workspace.
@@ -117,6 +125,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("sessions.memory.compaction.batch_size", 50)
 	v.SetDefault("models.default", "anthropic/claude-sonnet-4-5")
 	v.SetDefault("models.budgets.per_session_tokens", 100000)
+	v.SetDefault("models.budgets.per_hour_usd", 5.00)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
 }
 
@@ -147,6 +156,14 @@ func FromViper(v *viper.Viper) (*Config, error) {
 // environment variable overrides (prefix SIGIL_).
 // For CLI usage where flags are bound to a shared Viper, prefer FromViper.
 func Load(path string) (*Config, error) {
+	return LoadWithSecrets(path, nil)
+}
+
+// LoadWithSecrets reads configuration and resolves any keyring:// URI values
+// using the provided secret store. If store is nil, a default KeyringStore is
+// used. Pass a nil store to use the OS keyring, or provide a custom Store
+// implementation for testing.
+func LoadWithSecrets(path string, store secrets.Store) (*Config, error) {
 	v := viper.New()
 
 	SetDefaults(v)
@@ -158,6 +175,11 @@ func Load(path string) (*Config, error) {
 			return nil, sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config %s: %w", path, err)
 		}
 	}
+
+	if store == nil {
+		store = secrets.NewKeyringStore()
+	}
+	secrets.ResolveViperSecrets(v, store)
 
 	return FromViper(v)
 }
@@ -180,11 +202,8 @@ func (c *Config) validateNetworking() []error {
 	var errs []error
 
 	validModes := map[string]bool{"local": true, "tailscale": true}
-	if !validModes[c.Networking.Mode] {
-		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"config: networking.mode must be one of [local, tailscale], got %q",
-			c.Networking.Mode,
-		))
+	if err := validateStringInSet(c.Networking.Mode, "networking.mode", validModes); err != nil {
+		errs = append(errs, err)
 	}
 
 	if c.Networking.Listen == "" {
@@ -213,6 +232,30 @@ func (c *Config) validateNetworking() []error {
 		}
 	}
 
+	if c.Networking.RateLimitRPS < 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: networking.rate_limit_rps must not be negative, got %g",
+			c.Networking.RateLimitRPS,
+		))
+	}
+
+	if c.Networking.RateLimitRPS > 0 && c.Networking.RateLimitBurst <= 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: networking.rate_limit_burst must be positive when rate_limit_rps is set, got burst=%d, rps=%g",
+			c.Networking.RateLimitBurst, c.Networking.RateLimitRPS,
+		))
+	}
+
+	// Validate trusted proxy CIDRs if provided
+	for i, cidr := range c.Networking.TrustedProxies {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: networking.trusted_proxies[%d] is not a valid CIDR range, got %q: %v",
+				i, cidr, err,
+			))
+		}
+	}
+
 	return errs
 }
 
@@ -220,11 +263,8 @@ func (c *Config) validateStorage() []error {
 	var errs []error
 
 	validBackends := map[string]bool{"sqlite": true}
-	if !validBackends[c.Storage.Backend] {
-		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"config: storage.backend must be one of [sqlite], got %q",
-			c.Storage.Backend,
-		))
+	if err := validateStringInSet(c.Storage.Backend, "storage.backend", validBackends); err != nil {
+		errs = append(errs, err)
 	}
 
 	return errs
@@ -279,6 +319,13 @@ func (c *Config) validateModels() []error {
 		))
 	}
 
+	if c.Models.Budgets.PerHourUSD <= 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: models.budgets.per_hour_usd must be greater than 0, got %g",
+			c.Models.Budgets.PerHourUSD,
+		))
+	}
+
 	if c.Models.Budgets.PerDayUSD <= 0 {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: models.budgets.per_day_usd must be greater than 0, got %g",
@@ -300,11 +347,8 @@ func (c *Config) validateSessions() []error {
 	}
 
 	validStrategies := map[string]bool{"summarize": true, "truncate": true}
-	if !validStrategies[c.Sessions.Memory.Compaction.Strategy] {
-		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"config: sessions.memory.compaction.strategy must be one of [summarize, truncate], got %q",
-			c.Sessions.Memory.Compaction.Strategy,
-		))
+	if err := validateStringInSet(c.Sessions.Memory.Compaction.Strategy, "sessions.memory.compaction.strategy", validStrategies); err != nil {
+		errs = append(errs, err)
 	}
 
 	if c.Sessions.Memory.Compaction.BatchSize <= 0 {
@@ -323,4 +367,20 @@ func providerFromModel(model string) string {
 		return model[:idx]
 	}
 	return model
+}
+
+// validateStringInSet checks if a value is in a set of valid options.
+// Returns an error with the given field name if the value is not valid.
+func validateStringInSet(value, fieldName string, validSet map[string]bool) error {
+	if !validSet[value] {
+		validOptions := make([]string, 0, len(validSet))
+		for k := range validSet {
+			validOptions = append(validOptions, k)
+		}
+		sort.Strings(validOptions)
+		return sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: %s must be one of %v, got %q",
+			fieldName, validOptions, value)
+	}
+	return nil
 }

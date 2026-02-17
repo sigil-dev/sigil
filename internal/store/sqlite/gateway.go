@@ -360,7 +360,9 @@ type pairingStore struct {
 }
 
 func (s *pairingStore) Create(ctx context.Context, pairing *store.Pairing) error {
-	const q = `INSERT INTO pairings (id, user_id, channel_type, channel_id, workspace_id, status, created_at)
+	// INSERT OR IGNORE prevents duplicate pairings from concurrent AuthorizeInbound calls
+	// (TOCTOU race). The UNIQUE INDEX on (channel_type, channel_id) ensures idempotency.
+	const q = `INSERT OR IGNORE INTO pairings (id, user_id, channel_type, channel_id, workspace_id, status, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.ExecContext(ctx, q,

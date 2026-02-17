@@ -10,7 +10,7 @@ Instructions for Claude Code working on the Sigil codebase.
 
 1. **File issues for remaining work** - Create beads issues for anything needing follow-up
 2. **Run quality gates** (if code changed) - `task test`, `task lint`
-3. **Update issue status** - `bd close <id>` for completed work
+3. **Update issue status** - `bd close <id>` for completed work, update in-progress items
 4. **PUSH TO REMOTE** - This is MANDATORY:
 
    ```bash
@@ -22,6 +22,7 @@ Instructions for Claude Code working on the Sigil codebase.
 
 5. **Clean up** - Clear stashes, prune remote branches
 6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
 
@@ -187,14 +188,14 @@ return sigilerr.New(sigilerr.CodeProviderUpstreamFailure, "provider timeout",
     sigilerr.ProviderField("anthropic"))
 ```
 
-| Requirement | Description |
-|-------------|-------------|
-| **MUST** use `sigilerr.Errorf/New/Wrap/Wrapf` | Not `fmt.Errorf` or `errors.New` in production code |
-| **MUST** use `sigilerr.HasCode` | Not `errors.Is` with sentinel vars for error classification |
-| **MUST** assign error codes | Every error site needs a code from `pkg/errors/errors.go` |
-| **SHOULD** add new codes | When no existing code fits the error site |
-| **MAY** use `fmt.Errorf` in tests | For mock errors not participating in error classification |
-| **MUST NOT** use sentinel vars | Use `IsXxx()` helpers with `sigilerr.HasCode` instead |
+| Requirement                                   | Description                                                 |
+| --------------------------------------------- | ----------------------------------------------------------- |
+| **MUST** use `sigilerr.Errorf/New/Wrap/Wrapf` | Not `fmt.Errorf` or `errors.New` in production code         |
+| **MUST** use `sigilerr.HasCode`               | Not `errors.Is` with sentinel vars for error classification |
+| **MUST** assign error codes                   | Every error site needs a code from `pkg/errors/errors.go`   |
+| **SHOULD** add new codes                      | When no existing code fits the error site                   |
+| **MAY** use `fmt.Errorf` in tests             | For mock errors not participating in error classification   |
+| **MUST NOT** use sentinel vars                | Use `IsXxx()` helpers with `sigilerr.HasCode` instead       |
 
 ### Logging
 
@@ -335,7 +336,7 @@ Security is Sigil's primary differentiator. All code MUST follow these principle
 | ---------------------- | -------------------------------------------------------------------- |
 | Default deny           | Plugins have zero capabilities unless explicitly granted in manifest |
 | Capability enforcement | Every plugin operation checked against manifest capabilities         |
-| Agent loop integrity   | LLM outputs are validated before tool dispatch (7-step checks)       |
+| Agent loop integrity   | LLM outputs are validated before tool dispatch (7-step pipeline)     |
 | Plugin isolation       | Execution tier determines sandbox boundary                           |
 | No trust escalation    | A plugin cannot grant capabilities it doesn't have                   |
 
@@ -410,35 +411,6 @@ Three execution tiers:
 | Storage Interfaces | `docs/design/11-storage-interfaces.md`     | Store abstractions, backends |
 | Decisions          | `docs/decisions/decision-log.md`           | All architectural decisions  |
 
-## Landing the Plane (Session Completion)
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-
-   ```bash
-   git pull --rebase
-   bd sync
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-
 <!-- BEGIN BEADS INTEGRATION -->
 
 ## Issue Tracking with bd (beads)
@@ -464,20 +436,20 @@ bd ready --json
 
 ```bash
 bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
-bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
+bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:sigil-abc --json
 ```
 
 **Claim and update:**
 
 ```bash
-bd update bd-42 --status in_progress --json
-bd update bd-42 --priority 1 --json
+bd update sigil-abc --status in_progress --json
+bd update sigil-abc --priority 1 --json
 ```
 
 **Complete work:**
 
 ```bash
-bd close bd-42 --reason "Completed" --json
+bd close sigil-abc --reason "Completed" --json
 ```
 
 ### Issue Types

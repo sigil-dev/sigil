@@ -191,19 +191,19 @@ Key differences from holomush:
 
 ## Key Dependency Choices
 
-| Purpose   | Library                                   | Rationale                          |
-| --------- | ----------------------------------------- | ---------------------------------- |
-| CLI       | cobra + viper                             | Industry standard, config watching |
-| HTTP/API  | huma (on chi)                             | OpenAPI 3.1 from Go types          |
-| Proto     | buf                                       | Best proto tooling                 |
-| Plugins   | hashicorp/go-plugin                       | Proven, gRPC-based                 |
-| Wasm      | tetratelabs/wazero                        | Pure Go, no CGo, fast              |
-| Sandbox   | Custom (srt-inspired)                     | OS-native: bwrap + seatbelt        |
-| Database  | mattn/go-sqlite3                          | CGo required anyway                |
-| Vector    | asg017/sqlite-vec                         | SQLite extension                   |
-| FTS       | SQLite FTS5                               | Built-in                           |
-| Tailscale | tailscale.com/tsnet                       | Embedded Tailscale node            |
-| LLM SDKs  | anthropic-sdk-go, openai-go, Google genai | Official SDKs                      |
-| Logging   | log/slog                                  | stdlib, structured                 |
-| Errors    | samber/oops                               | Structured error context           |
-| Testing   | stdlib + testify                          | Keep it simple                     |
+| Purpose   | Library                                   | Rationale                                                               |
+| --------- | ----------------------------------------- | ----------------------------------------------------------------------- |
+| CLI       | cobra + viper                             | Industry standard, config watching                                      |
+| HTTP/API  | huma (on chi)                             | OpenAPI 3.1 from Go types                                               |
+| Proto     | buf                                       | Best proto tooling                                                      |
+| Plugins   | hashicorp/go-plugin                       | Proven, gRPC-based                                                      |
+| Wasm      | tetratelabs/wazero                        | Pure Go, no CGo, fast                                                   |
+| Sandbox   | Custom (srt-inspired)                     | OS-native: bwrap + seatbelt                                             |
+| Database  | mattn/go-sqlite3                          | CGo required anyway                                                     |
+| Vector    | asg017/sqlite-vec                         | SQLite extension                                                        |
+| FTS       | SQLite FTS5                               | Built-in                                                                |
+| Tailscale | tailscale.com/tsnet                       | Embedded Tailscale node                                                 |
+| LLM SDKs  | anthropic-sdk-go, openai-go, Google genai | Official SDKs                                                           |
+| Logging   | log/slog                                  | stdlib, structured                                                      |
+| Errors    | pkg/errors (sigilerr)                     | Structured error codes, classification, observability fields (see D056) |
+| Testing   | stdlib + testify                          | Keep it simple                                                          |

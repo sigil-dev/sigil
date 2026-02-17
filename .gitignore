@@ -12,6 +12,7 @@ coverage.html
 *.test
 
 # Build
+build/
 .task/
 
 # Dependencies
@@ -48,6 +49,7 @@ ui/build/
 
 # Tauri
 ui/src-tauri/target/
+ui/src-tauri/gen/
 
 # Documentation site
 site/build/
@@ -60,3 +62,10 @@ site/.venv/
 
 # Plugin data
 data/
+
+# bv (beads viewer) local config and caches
+.bv/
+
+# worktress
+.worktrees/
+

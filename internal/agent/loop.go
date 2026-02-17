@@ -6,7 +6,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -92,10 +94,22 @@ type Loop struct {
 	toolRegistry        ToolRegistry
 	maxToolCallsPerTurn int
 	hooks               *LoopHooks
+	auditFailCount      atomic.Int64
 }
 
 // NewLoop creates a Loop with the given dependencies.
-func NewLoop(cfg LoopConfig) *Loop {
+// Returns an error if required dependencies are nil.
+func NewLoop(cfg LoopConfig) (*Loop, error) {
+	if cfg.SessionManager == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "SessionManager is required")
+	}
+	if cfg.Enforcer == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Enforcer is required")
+	}
+	if cfg.ProviderRouter == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ProviderRouter is required")
+	}
+
 	maxCalls := cfg.MaxToolCallsPerTurn
 	if maxCalls <= 0 {
 		maxCalls = defaultMaxToolCallsPerTurn
@@ -110,7 +124,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		toolRegistry:        cfg.ToolRegistry,
 		maxToolCallsPerTurn: maxCalls,
 		hooks:               cfg.Hooks,
-	}
+	}, nil
 }
 
 // ProcessMessage executes the 6-step agent pipeline:
@@ -130,7 +144,7 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	l.fireHook(l.hooks, hookPrepare)
 
 	// Step 3: CALL_LLM — route to provider and call Chat.
-	eventCh, err := l.callLLM(ctx, msg.WorkspaceID, session, messages)
+	eventCh, selectedProvider, err := l.callLLM(ctx, msg.WorkspaceID, session, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +161,10 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	}
 
 	// If the stream emitted a fatal error, discard partial output and fail the turn.
+	// Record the failure for health tracking so the circuit breaker can respond to
+	// persistent mid-stream failures (e.g., connection drops, malformed responses).
 	if streamErr != nil {
+		l.recordProviderFailure(selectedProvider)
 		return nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error: session %s", msg.SessionID)
 	}
 
@@ -293,6 +310,8 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 		return nil, nil, err
 	}
 
+	// TODO(sigil-39g): Implement input sanitization and prompt injection scanning per design/03 §Agent Integrity step 1
+
 	// Append the incoming user message to the session store.
 	userMsg := &store.Message{
 		ID:        uuid.New().String(),
@@ -328,21 +347,35 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	return session, messages, nil
 }
 
-func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.Session, messages []provider.Message) (<-chan provider.ChatEvent, error) {
+// callLLM calls the provider route with failover support. Failover only covers
+// first-event failures (auth errors, rate limits, provider down). Mid-stream
+// failures are not retried because replaying the full conversation to a fallback
+// provider requires buffering all events and resending all messages — significant
+// complexity with partial-output ambiguity. Mid-stream errors surface to the caller
+// via processEvents. See D036 in docs/decisions/decision-log.md for design rationale.
+// Returns the event channel and the provider that was successfully selected (for health tracking).
+func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.Session, messages []provider.Message) (<-chan provider.ChatEvent, provider.Provider, error) {
 	modelName := session.ModelOverride
 	if modelName == "" {
 		modelName = "default"
 	}
 
 	// Build budget from session token limits so the router can enforce them.
-	budget := &provider.Budget{
-		MaxSessionTokens:  session.TokenBudget.MaxPerSession,
-		UsedSessionTokens: session.TokenBudget.UsedSession,
+	budget, err := provider.NewBudget(
+		session.TokenBudget.MaxPerSession,
+		session.TokenBudget.UsedSession,
+		0, 0, 0, 0, // cents budgets not yet tracked
+	)
+	if err != nil {
+		return nil, nil, sigilerr.Wrap(err, sigilerr.CodeAgentLoopInvalidInput, "invalid budget")
 	}
 
 	maxAttempts := l.providerRouter.MaxAttempts()
 	var lastErr error
 	var triedProviders []string
+	// Accumulate provider failures for comprehensive error reporting.
+	// Each element is "providerName: error message".
+	var providerFailures []string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		prov, resolvedModel, err := l.providerRouter.RouteWithBudget(ctx, workspaceID, modelName, budget, triedProviders)
 		if err != nil {
@@ -351,10 +384,12 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 			if sigilerr.HasCode(err, sigilerr.CodeProviderBudgetExceeded) ||
 				sigilerr.HasCode(err, sigilerr.CodeProviderInvalidModelRef) ||
 				sigilerr.HasCode(err, sigilerr.CodeProviderNoDefault) {
-				return nil, err
+				return nil, nil, err
 			}
 			lastErr = err
-			break
+			// Record routing failures so users can see which providers were skipped.
+			providerFailures = append(providerFailures, fmt.Sprintf("route attempt %d: %s", attempt+1, err.Error()))
+			continue
 		}
 
 		triedProviders = append(triedProviders, prov.Name())
@@ -375,38 +410,38 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 			// via the failover chain. The HealthTracker's cooldown acts
 			// as a circuit breaker, re-enabling the provider after the
 			// cooldown period for recovery.
-			if hr, ok := prov.(provider.HealthReporter); ok {
-				hr.RecordFailure()
-			}
-			lastErr = sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "chat call to %s", prov.Name())
+			l.recordProviderFailure(prov)
+			lastErr = sigilerr.Wrap(err, sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("chat call to %s", prov.Name()), sigilerr.FieldProvider(prov.Name()))
+			providerFailures = append(providerFailures, fmt.Sprintf("%s: %s", prov.Name(), err.Error()))
 			continue
 		}
 
 		// Peek at the first event to detect immediate upstream failures
-		// (auth errors, rate limits, provider down). Providers call
-		// RecordFailure() before sending the error event, so the next
-		// Route call will skip this provider via the failover chain.
+		// (auth errors, rate limits, provider down). Pre-stream failures are
+		// recorded by this caller; providers record success only on stream
+		// completion via RecordSuccess(), so the next Route call will skip
+		// this provider via the failover chain if needed.
 		firstEvent, ok := <-eventCh
 		if !ok {
-			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: stream closed without events", prov.Name())
+			l.recordProviderFailure(prov)
+			lastErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("provider %s: stream closed without events", prov.Name()), sigilerr.FieldProvider(prov.Name()))
+			providerFailures = append(providerFailures, fmt.Sprintf("%s: stream closed without events", prov.Name()))
 			continue
 		}
 
 		if firstEvent.Type == provider.EventTypeError {
-			lastErr = sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: %s", prov.Name(), firstEvent.Error)
-			// Drain remaining events so the goroutine can exit.
-			for range eventCh {
-			}
+			l.recordProviderFailure(prov)
+			lastErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("provider %s: %s", prov.Name(), firstEvent.Error), sigilerr.FieldProvider(prov.Name()))
+			providerFailures = append(providerFailures, fmt.Sprintf("%s: %s", prov.Name(), firstEvent.Error))
+			l.drainEventChannel(eventCh)
 			continue
 		}
 
 		// First event is valid — wrap it back with the rest of the stream.
 		// NOTE: Failover only covers first-event failures (auth errors, rate
-		// limits, provider down). Mid-stream failures are not retried because
-		// replaying the full conversation to a fallback provider requires
-		// buffering all events and resending all messages — significant
-		// complexity with partial-output ambiguity. Mid-stream errors surface
-		// to the caller via processEvents. See sigil-dxw for tracking.
+		// D036: No mid-stream failover — replaying the full conversation to a
+		// fallback provider requires buffering all events and resending messages.
+		// Mid-stream errors surface to the caller via processEvents.
 		wrappedCh := make(chan provider.ChatEvent, cap(eventCh)+1)
 		wrappedCh <- firstEvent
 		go func() {
@@ -415,13 +450,27 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 				wrappedCh <- ev
 			}
 		}()
-		return wrappedCh, nil
+		return wrappedCh, prov, nil
 	}
 
-	if lastErr != nil {
-		return nil, sigilerr.Wrapf(lastErr, sigilerr.CodeProviderAllUnavailable, "all providers failed for workspace %s", workspaceID)
+	// All providers failed. Build comprehensive error message showing all failures.
+	if len(providerFailures) > 0 {
+		combinedMsg := fmt.Sprintf("all providers failed for workspace %s: %s", workspaceID, strings.Join(providerFailures, "; "))
+		if lastErr != nil {
+			// For single provider failure, preserve the original error code if available.
+			// For multiple failures or routing errors, use CodeProviderAllUnavailable.
+			code := sigilerr.CodeOf(lastErr)
+			if len(providerFailures) == 1 && code != "" {
+				// Single failure with a specific error code: preserve it.
+				return nil, nil, sigilerr.Errorf(code, "%s", combinedMsg)
+			}
+			// Multiple failures or non-sigilerr error: all providers unavailable.
+			// Create new error instead of wrapping to ensure correct code.
+			return nil, nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
+		}
+		return nil, nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, combinedMsg)
 	}
-	return nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, "no providers available for workspace "+workspaceID)
+	return nil, nil, sigilerr.New(sigilerr.CodeProviderAllUnavailable, "no providers available for workspace "+workspaceID)
 }
 
 func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*provider.ToolCall, *provider.Usage, error) {
@@ -431,6 +480,11 @@ func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*prov
 	var streamErr error
 
 	for ev := range eventCh {
+		// Validate event Type/payload consistency at the consumption boundary.
+		if err := ev.Validate(); err != nil {
+			return "", nil, nil, sigilerr.Wrap(err, sigilerr.CodeProviderResponseInvalid, "invalid event from provider")
+		}
+
 		switch ev.Type {
 		case provider.EventTypeTextDelta:
 			buf.WriteString(ev.Text)
@@ -451,6 +505,22 @@ func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*prov
 	}
 
 	return buf.String(), toolCalls, usage, streamErr
+}
+
+// recordProviderFailure marks a provider as unhealthy if it implements HealthReporter.
+// Used to trigger failover to the next provider in the chain via the HealthTracker's
+// cooldown-based circuit breaker.
+func (l *Loop) recordProviderFailure(prov provider.Provider) {
+	if hr, ok := prov.(provider.HealthReporter); ok {
+		hr.RecordFailure()
+	}
+}
+
+// drainEventChannel consumes all remaining events from ch to prevent the
+// goroutine writing to ch from blocking on a full buffer. Blocks until ch is closed.
+func (l *Loop) drainEventChannel(ch <-chan provider.ChatEvent) {
+	for range ch {
+	}
 }
 
 // accountUsage increments the session's token budget counters with the
@@ -558,6 +628,7 @@ func (l *Loop) runToolLoop(
 				return "", nil, sigilerr.Wrapf(appendErr, sigilerr.CodeAgentLoopFailure, "persisting tool result: session %s", msg.SessionID)
 			}
 
+			// TODO(sigil-j32): Implement tool result injection scanning per design/03 §Agent Integrity step 6
 			currentMessages = append(currentMessages, provider.Message{
 				Role:       store.MessageRoleTool,
 				Content:    resultContent,
@@ -567,7 +638,7 @@ func (l *Loop) runToolLoop(
 		}
 
 		// Re-call the LLM with updated message history.
-		eventCh, err := l.callLLM(ctx, msg.WorkspaceID, session, currentMessages)
+		eventCh, toolLoopProvider, err := l.callLLM(ctx, msg.WorkspaceID, session, currentMessages)
 		if err != nil {
 			return "", nil, err
 		}
@@ -580,6 +651,7 @@ func (l *Loop) runToolLoop(
 			return "", nil, sigilerr.Wrapf(err, sigilerr.CodeStoreDatabaseFailure, "budget accounting in tool loop: session %s", msg.SessionID)
 		}
 		if streamErr != nil {
+			l.recordProviderFailure(toolLoopProvider)
 			return "", nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error in tool loop: session %s", msg.SessionID)
 		}
 
@@ -598,6 +670,8 @@ func (l *Loop) runToolLoop(
 }
 
 func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {
+	// TODO(sigil-hnh): Implement output filtering for PII/secrets per design/03 §Defense Matrix
+
 	// Persist the assistant response.
 	assistantMsg := &store.Message{
 		ID:        uuid.New().String(),
@@ -634,5 +708,21 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 	}
 
 	// Best-effort audit; do not fail the response on audit errors.
-	_ = l.auditStore.Append(ctx, entry)
+	if err := l.auditStore.Append(ctx, entry); err != nil {
+		l.auditFailCount.Add(1)
+		slog.Warn("audit store append failed",
+			"error", err,
+			"workspace_id", msg.WorkspaceID,
+			"session_id", msg.SessionID,
+			"consecutive_failures", l.auditFailCount.Load(),
+		)
+	} else {
+		l.auditFailCount.Store(0)
+	}
+}
+
+// AuditFailCount returns the current consecutive audit failure count.
+// Exposed for testing to verify best-effort audit semantics.
+func (l *Loop) AuditFailCount() int64 {
+	return l.auditFailCount.Load()
 }

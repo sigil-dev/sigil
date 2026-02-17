@@ -740,7 +740,7 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 
 **Decision:** Plugin discovery errors and provider registration failures (empty API keys, unknown provider names, constructor errors) are logged as warnings and skipped. Neither is fatal. The gateway starts with whatever plugins and providers succeed.
 
-**Rationale:** The gateway should be resilient to partial misconfiguration. An operator who configures three providers but has one typo should still get the other two working. The structured slog warnings provide clear diagnostics without blocking the entire startup. This is consistent with D033 (config validation fails fast) — config *structure* is validated strictly at load time, but *runtime initialization* of optional subsystems degrades gracefully.
+**Rationale:** The gateway should be resilient to partial misconfiguration. An operator who configures three providers but has one typo should still get the other two working. The structured slog warnings provide clear diagnostics without blocking the entire startup. This is consistent with D033 (config validation fails fast) — config _structure_ is validated strictly at load time, but _runtime initialization_ of optional subsystems degrades gracefully.
 
 **Ref:** PR #14, `cmd/sigil/wire.go`
 
@@ -779,3 +779,62 @@ The interface-first approach means we can adopt either when their Go SDKs stabil
 **Rationale:** The `TokenValidator` interface keeps the middleware decoupled from the token storage backend. Config-backed static tokens are sufficient for the current phase. When ABAC is implemented, the interface extends naturally without changing the middleware wiring. The 9 auth tests provide confidence in the security boundary.
 
 **Ref:** PR #15, D049, `sigil-9s6`, `internal/server/auth.go`, `internal/server/auth_test.go`
+
+---
+
+## D060: Phase 7 API Behavioral Changes
+
+**Question:** Two API behavioral changes were made during Phase 7 UI development. Should these be documented?
+
+**Changes:**
+
+1. **Anthropic stream-end-without-`message_stop` error emission**: Previously, if an Anthropic SSE stream ended without a `message_stop` event, the provider would emit a "done" event. Now it emits an error event instead, allowing the agent loop to detect incomplete streams.
+
+2. **SSE JSON empty response format**: The `/api/v1/chat/send` SSE endpoint previously returned `{"events":null}` when no events were available. Now it returns `{"events":[]}` for consistency with JSON array semantics.
+
+**Rationale:** The first change improves error detection for malformed provider responses. The second change aligns the API response format with standard JSON array representation. Both changes were made during implementation to match expected UI client behavior.
+
+**Impact:** Both changes affect wire format but are non-breaking in practice:
+
+- The stream-end change only affects error cases (streams should always include `message_stop`)
+- The empty array change is semantically equivalent (null vs empty array both represent "no events")
+
+**Ref:** PR #16 review findings #25, #26
+
+---
+
+## D061: Auth-Enabled API Behavioral Changes
+
+**Question:** When authentication is enabled (tokens configured), how should the following endpoints behave relative to their unauthenticated implementations?
+
+**Changes:**
+
+1. **Workspace listing** — `GET /workspaces` now filters results to only workspaces where the authenticated user is a member. Previously returned all workspaces regardless of user identity.
+
+2. **Plugin endpoints** — `GET /plugins`, `GET /plugins/{id}`, `POST /plugins/{id}/reload` now require `admin:plugins` permission. Previously accessible to any authenticated user.
+
+3. **Chat workspace verification** — `POST /chat` and `GET /chat/stream` now verify the authenticated user is a member of the specified workspace. Previously accepted any workspace ID from any authenticated user.
+
+**Decision:** These three behavioral changes are intentional security hardening measures applied when token validation is enabled.
+
+**Rationale:**
+
+- **Workspace filtering** provides proper access control — users see only workspaces they belong to, preventing accidental or malicious cross-workspace access.
+- **Plugin admin restriction** enforces the principle of least privilege — plugin management (reload, inspect, lifecycle) is a sensitive operation requiring explicit `admin:plugins` capability.
+- **Chat workspace verification** prevents unauthorized conversation access — users cannot initiate chats in workspaces they're not members of, even if they know the workspace ID.
+
+**Impact on existing clients:**
+
+- Clients that previously iterated all workspaces will now see filtered results. Clients should check for empty results gracefully.
+- Clients attempting plugin operations will receive 403 Forbidden unless the token has `admin:plugins` permission.
+- Clients attempting chat in non-member workspaces will receive 403 Forbidden.
+
+**Unauthenticated mode (no tokens configured):**
+
+When no tokens are configured, the gateway operates in development mode: authentication middleware is disabled, and all three endpoints return to their previous behavior (unrestricted workspace access, plugin operations available to all authenticated requests, chat accepted for any workspace). This preserves the development experience while allowing secure production deployments.
+
+**Token permissions:**
+
+Existing tokens and client authentication headers MUST be reviewed after enabling auth. Tokens that worked in unauthenticated mode may now be insufficient if clients relied on implicit access to all workspaces or plugin operations. Token permissions should be updated to grant specific `admin:plugins` or workspace-scoped capabilities as needed.
+
+**Ref:** PR #16, auth enforcement hardening during Phase 7 UI distribution

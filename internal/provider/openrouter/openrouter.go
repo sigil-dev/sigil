@@ -6,7 +6,6 @@ package openrouter
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"slices"
 
@@ -49,10 +48,14 @@ func New(cfg Config) (*Provider, error) {
 		option.WithAPIKey(cfg.APIKey),
 		option.WithBaseURL(base),
 	)
+	health, err := provider.NewHealthTracker(provider.DefaultHealthCooldown)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "openrouter: creating health tracker")
+	}
 	return &Provider{
 		client: client,
 		config: cfg,
-		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+		health: health,
 	}, nil
 }
 
@@ -73,12 +76,12 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Claude Sonnet 4.5",
 			Provider: "openrouter",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 200000,
-				MaxOutputTokens:  16000,
+				SupportsThinking:  true,
+				MaxContextTokens:  200000,
+				MaxOutputTokens:   16000,
 			},
 		},
 		{
@@ -86,11 +89,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "GPT-4.1",
 			Provider: "openrouter",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				MaxContextTokens: 128000,
-				MaxOutputTokens:  32768,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   32768,
 			},
 		},
 		{
@@ -98,12 +101,12 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Gemini 2.5 Pro",
 			Provider: "openrouter",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 1000000,
-				MaxOutputTokens:  65536,
+				SupportsThinking:  true,
+				MaxContextTokens:  1000000,
+				MaxOutputTokens:   65536,
 			},
 		},
 		{
@@ -111,10 +114,10 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Llama 4 Maverick",
 			Provider: "openrouter",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
+				SupportsTools:     true,
 				SupportsStreaming: true,
-				MaxContextTokens: 128000,
-				MaxOutputTokens:  32768,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   32768,
 			},
 		},
 	}
@@ -276,9 +279,10 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 					acc := toolCalls[idx]
 					if !json.Valid([]byte(acc.partialArgs)) {
 						p.health.RecordFailure()
+						err := sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "openrouter: tool call %q has invalid JSON arguments", acc.name)
 						ch <- provider.ChatEvent{
 							Type:  provider.EventTypeError,
-							Error: fmt.Sprintf("openrouter: tool call %q has invalid JSON arguments", acc.name),
+							Error: err.Error(),
 						}
 						return
 					}
@@ -321,9 +325,10 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 		acc := toolCalls[idx]
 		if !json.Valid([]byte(acc.partialArgs)) {
 			p.health.RecordFailure()
+			err := sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "openrouter: tool call %q has invalid JSON arguments", acc.name)
 			ch <- provider.ChatEvent{
 				Type:  provider.EventTypeError,
-				Error: fmt.Sprintf("openrouter: tool call %q has invalid JSON arguments", acc.name),
+				Error: err.Error(),
 			}
 			return
 		}

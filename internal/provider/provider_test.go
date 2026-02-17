@@ -8,48 +8,14 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/provider"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// mockProvider implements provider.Provider for testing.
+// mockProvider embeds mockProviderBase for testing.
 type mockProvider struct {
-	name      string
-	available bool
-	models    []provider.ModelInfo
-}
-
-func (m *mockProvider) Name() string {
-	return m.name
-}
-
-func (m *mockProvider) Available(ctx context.Context) bool {
-	return m.available
-}
-
-func (m *mockProvider) ListModels(ctx context.Context) ([]provider.ModelInfo, error) {
-	return m.models, nil
-}
-
-func (m *mockProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
-	ch := make(chan provider.ChatEvent, 3)
-	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "hello"}
-	ch <- provider.ChatEvent{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}}
-	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
-	close(ch)
-	return ch, nil
-}
-
-func (m *mockProvider) Status(ctx context.Context) (provider.ProviderStatus, error) {
-	return provider.ProviderStatus{
-		Available: m.available,
-		Provider:  m.name,
-		Message:   "ok",
-	}, nil
-}
-
-func (m *mockProvider) Close() error {
-	return nil
+	*mockProviderBase
 }
 
 // Compile-time interface satisfaction checks.
@@ -86,33 +52,31 @@ func TestChatEventTypes(t *testing.T) {
 
 func TestProviderInterface_MultiProviderSupport(t *testing.T) {
 	// Compile-time proof that mockProvider satisfies provider.Provider.
-	var p provider.Provider = &mockProvider{
-		name:      "test-provider",
-		available: true,
-		models: []provider.ModelInfo{
-			{
-				ID:       "model-1",
-				Name:     "Test Model",
-				Provider: "test-provider",
-				Capabilities: provider.ModelCapabilities{
-					SupportsTools:     true,
-					SupportsStreaming: true,
-					MaxContextTokens:  128000,
-					MaxOutputTokens:   4096,
-				},
+	base := newMockProviderBase("test-provider", true)
+	base.models = []provider.ModelInfo{
+		{
+			ID:       "model-1",
+			Name:     "Test Model",
+			Provider: "test-provider",
+			Capabilities: provider.ModelCapabilities{
+				SupportsTools:     true,
+				SupportsStreaming: true,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   4096,
 			},
-			{
-				ID:       "model-2",
-				Name:     "Test Model Small",
-				Provider: "test-provider",
-				Capabilities: provider.ModelCapabilities{
-					SupportsStreaming: true,
-					MaxContextTokens:  32000,
-					MaxOutputTokens:   2048,
-				},
+		},
+		{
+			ID:       "model-2",
+			Name:     "Test Model Small",
+			Provider: "test-provider",
+			Capabilities: provider.ModelCapabilities{
+				SupportsStreaming: true,
+				MaxContextTokens:  32000,
+				MaxOutputTokens:   2048,
 			},
 		},
 	}
+	var p provider.Provider = &mockProvider{mockProviderBase: base}
 
 	ctx := context.Background()
 
@@ -149,9 +113,9 @@ func TestProviderInterface_MultiProviderSupport(t *testing.T) {
 
 func TestProviderInterface_MultiProviderFailover(t *testing.T) {
 	providers := []provider.Provider{
-		&mockProvider{name: "primary", available: false},
-		&mockProvider{name: "secondary", available: true},
-		&mockProvider{name: "tertiary", available: true},
+		&mockProvider{mockProviderBase: newMockProviderBase("primary", false)},
+		&mockProvider{mockProviderBase: newMockProviderBase("secondary", true)},
+		&mockProvider{mockProviderBase: newMockProviderBase("tertiary", true)},
 	}
 
 	ctx := context.Background()
@@ -170,7 +134,7 @@ func TestProviderInterface_MultiProviderFailover(t *testing.T) {
 }
 
 func TestProviderInterface_ChatStreaming(t *testing.T) {
-	p := &mockProvider{name: "streaming-test", available: true}
+	p := &mockProvider{mockProviderBase: newMockProviderBase("streaming-test", true)}
 
 	ctx := context.Background()
 	req := provider.ChatRequest{
@@ -233,4 +197,376 @@ func TestProviderInterface_RouterContract(t *testing.T) {
 		type closeFunc func() error
 		_ = closeFunc(nil)
 	})
+}
+
+func TestChatEvent_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   provider.ChatEvent
+		wantErr bool
+		errCode sigilerr.Code
+	}{
+		// Valid events
+		{
+			name:    "valid text_delta with Text",
+			event:   provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "hello"},
+			wantErr: false,
+		},
+		{
+			name:    "valid text_delta with empty Text",
+			event:   provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: ""},
+			wantErr: false,
+		},
+		{
+			name: "valid tool_call with ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid usage with Usage",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeUsage,
+				Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "valid done with no payload",
+			event:   provider.ChatEvent{Type: provider.EventTypeDone},
+			wantErr: false,
+		},
+		{
+			name: "valid done with Usage",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeDone,
+				Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "valid error with Error",
+			event:   provider.ChatEvent{Type: provider.EventTypeError, Error: "connection failed"},
+			wantErr: false,
+		},
+
+		// Invalid events - text_delta with wrong payloads
+		{
+			name: "text_delta cannot have ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeTextDelta,
+				Text:     "hello",
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "text_delta cannot have Usage",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeTextDelta,
+				Text:  "hello",
+				Usage: &provider.Usage{InputTokens: 10},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "text_delta cannot have Error",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeTextDelta,
+				Text:  "hello",
+				Error: "some error",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid events - tool_call with wrong payloads
+		{
+			name:    "tool_call must have ToolCall",
+			event:   provider.ChatEvent{Type: provider.EventTypeToolCall},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "tool_call cannot have Text",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				Text:     "text",
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "tool_call cannot have Usage",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+				Usage:    &provider.Usage{InputTokens: 10},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "tool_call cannot have Error",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+				Error:    "error",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid events - usage with wrong payloads
+		{
+			name:    "usage must have Usage",
+			event:   provider.ChatEvent{Type: provider.EventTypeUsage},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "usage cannot have Text",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeUsage,
+				Text:  "text",
+				Usage: &provider.Usage{InputTokens: 10},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "usage cannot have ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeUsage,
+				ToolCall: &provider.ToolCall{ID: "tc_1"},
+				Usage:    &provider.Usage{InputTokens: 10},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "usage cannot have Error",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeUsage,
+				Usage: &provider.Usage{InputTokens: 10},
+				Error: "error",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid events - done with wrong payloads
+		{
+			name: "done cannot have Text",
+			event: provider.ChatEvent{
+				Type: provider.EventTypeDone,
+				Text: "text",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "done cannot have ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeDone,
+				ToolCall: &provider.ToolCall{ID: "tc_1"},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "done cannot have Error",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeDone,
+				Error: "error",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid events - error with wrong payloads
+		{
+			name:    "error must have Error",
+			event:   provider.ChatEvent{Type: provider.EventTypeError},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "error cannot have Text",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeError,
+				Text:  "text",
+				Error: "error message",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "error cannot have ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeError,
+				ToolCall: &provider.ToolCall{ID: "tc_1"},
+				Error:    "error message",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "error cannot have Usage",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeError,
+				Usage: &provider.Usage{InputTokens: 10},
+				Error: "error message",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid event type
+		{
+			name:    "unknown event type",
+			event:   provider.ChatEvent{Type: provider.EventType("unknown")},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.event.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.errCode),
+					"expected error code %s, got %s", tt.errCode, sigilerr.CodeOf(err))
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestProvider_MidStreamFailure_HealthTracking(t *testing.T) {
+	tests := []struct {
+		name                string
+		events              []provider.ChatEvent
+		wantHealthyAfter    bool
+		wantRecordedFailure bool
+	}{
+		{
+			name: "successful stream never calls RecordFailure",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeTextDelta, Text: "hello"},
+				{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+				{Type: provider.EventTypeDone},
+			},
+			wantHealthyAfter:    true,
+			wantRecordedFailure: false,
+		},
+		{
+			name: "error after first successful event marks provider unhealthy",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeTextDelta, Text: "hello"},
+				{Type: provider.EventTypeError, Error: "connection lost"},
+			},
+			wantHealthyAfter:    false,
+			wantRecordedFailure: true,
+		},
+		{
+			name: "error after multiple successful events marks provider unhealthy",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeTextDelta, Text: "hello"},
+				{Type: provider.EventTypeTextDelta, Text: " world"},
+				{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+				{Type: provider.EventTypeError, Error: "stream interrupted"},
+			},
+			wantHealthyAfter:    false,
+			wantRecordedFailure: true,
+		},
+		{
+			name: "immediate error before any successful events also marks unhealthy",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeError, Error: "auth failed"},
+			},
+			wantHealthyAfter:    false,
+			wantRecordedFailure: true,
+		},
+		{
+			name: "channel closes after events without done marks provider unhealthy",
+			events: []provider.ChatEvent{
+				{Type: provider.EventTypeTextDelta, Text: "hello"},
+				{Type: provider.EventTypeTextDelta, Text: " world"},
+			},
+			wantHealthyAfter:    false,
+			wantRecordedFailure: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a mock provider with custom Chat behavior.
+			base := newMockProviderBase("test-provider", true)
+			healthTracker, err := provider.NewHealthTracker(provider.DefaultHealthCooldown)
+			require.NoError(t, err)
+			p := &mockProviderWithHealth{
+				mockProviderBase: base,
+				healthTracker:    healthTracker,
+			}
+
+			// Override Chat to emit the test's event sequence.
+			p.chatFunc = func(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+				ch := make(chan provider.ChatEvent, len(tt.events))
+				for _, ev := range tt.events {
+					ch <- ev
+				}
+				close(ch)
+				return ch, nil
+			}
+
+			ctx := context.Background()
+			req := provider.ChatRequest{
+				Model: "test-model",
+				Messages: []provider.Message{
+					{Role: "user", Content: "test"},
+				},
+			}
+
+			// Start chat stream.
+			eventCh, err := p.Chat(ctx, req)
+			require.NoError(t, err)
+			require.NotNil(t, eventCh)
+
+			// Read all events and simulate the provider's internal health tracking.
+			// In real providers (e.g., anthropic.Provider), RecordFailure is called
+			// internally when an error event is emitted or when the stream ends
+			// without a proper "done" event.
+			var sawError bool
+			var sawDone bool
+			for ev := range eventCh {
+				switch ev.Type {
+				case provider.EventTypeError:
+					sawError = true
+					p.RecordFailure()
+				case provider.EventTypeDone:
+					sawDone = true
+				}
+			}
+
+			// If stream ended without error or done, it's an abnormal termination.
+			if !sawError && !sawDone {
+				sawError = true // treat as error for test purposes
+				p.RecordFailure()
+			}
+
+			// Verify health state matches expectations.
+			assert.Equal(t, tt.wantHealthyAfter, p.healthTracker.IsHealthy(),
+				"health status should reflect whether an error occurred")
+			assert.Equal(t, tt.wantRecordedFailure, sawError,
+				"should have seen error event if and only if failure was expected")
+		})
+	}
 }

@@ -6,6 +6,8 @@ package google
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 
 	"google.golang.org/genai"
 
@@ -40,10 +42,15 @@ func New(cfg Config) (*Provider, error) {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "google: creating client")
 	}
 
+	health, err := provider.NewHealthTracker(provider.DefaultHealthCooldown)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "google: creating health tracker")
+	}
+
 	return &Provider{
 		client: client,
 		config: cfg,
-		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+		health: health,
 	}, nil
 }
 
@@ -64,12 +71,12 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Gemini 2.5 Pro",
 			Provider: "google",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 1000000,
-				MaxOutputTokens:  65536,
+				SupportsThinking:  true,
+				MaxContextTokens:  1000000,
+				MaxOutputTokens:   65536,
 			},
 		},
 		{
@@ -77,12 +84,12 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Gemini 2.5 Flash",
 			Provider: "google",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 1000000,
-				MaxOutputTokens:  65536,
+				SupportsThinking:  true,
+				MaxContextTokens:  1000000,
+				MaxOutputTokens:   65536,
 			},
 		},
 		{
@@ -90,11 +97,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Gemini 2.0 Flash",
 			Provider: "google",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				MaxContextTokens: 1000000,
-				MaxOutputTokens:  8192,
+				MaxContextTokens:  1000000,
+				MaxOutputTokens:   8192,
 			},
 		},
 	}
@@ -253,7 +260,25 @@ func (p *Provider) streamChat(
 					}
 				}
 				if part.FunctionCall != nil {
-					args, _ := json.Marshal(part.FunctionCall.Args)
+					args, err := json.Marshal(part.FunctionCall.Args)
+					if err != nil {
+						p.health.RecordFailure()
+						// Log detailed context before returning error event
+						argsStr := fmt.Sprintf("%v", part.FunctionCall.Args)
+						if len(argsStr) > 200 {
+							argsStr = argsStr[:200] + "..."
+						}
+						slog.Error("failed to marshal tool call arguments",
+							"function", part.FunctionCall.Name,
+							"args_preview", argsStr,
+							"error", err,
+						)
+						ch <- provider.ChatEvent{
+							Type:  provider.EventTypeError,
+							Error: sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "google: marshaling tool call arguments for %q: %w", part.FunctionCall.Name, err).Error(),
+						}
+						return
+					}
 					ch <- provider.ChatEvent{
 						Type: provider.EventTypeToolCall,
 						ToolCall: &provider.ToolCall{

@@ -7,16 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 )
-
-// RegisterServices sets the service dependencies and registers REST routes.
-func (s *Server) RegisterServices(svc *Services) {
-	s.services = svc
-	s.registerRoutes()
-}
 
 func (s *Server) registerRoutes() {
 	// Workspace endpoints
@@ -26,6 +21,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/workspaces",
 		Summary:     "List workspaces",
 		Tags:        []string{"workspaces"},
+		Errors:      []int{http.StatusTooManyRequests},
 	}, s.handleListWorkspaces)
 
 	huma.Register(s.api, huma.Operation{
@@ -34,6 +30,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/workspaces/{id}",
 		Summary:     "Get workspace details",
 		Tags:        []string{"workspaces"},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleGetWorkspace)
 
 	// Session endpoints
@@ -43,6 +40,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/workspaces/{id}/sessions",
 		Summary:     "List sessions in workspace",
 		Tags:        []string{"sessions"},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleListSessions)
 
 	huma.Register(s.api, huma.Operation{
@@ -51,6 +49,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/workspaces/{id}/sessions/{sessionId}",
 		Summary:     "Get session details",
 		Tags:        []string{"sessions"},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleGetSession)
 
 	// Plugin endpoints
@@ -60,6 +59,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/plugins",
 		Summary:     "List installed plugins",
 		Tags:        []string{"plugins"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleListPlugins)
 
 	huma.Register(s.api, huma.Operation{
@@ -68,6 +68,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/plugins/{name}",
 		Summary:     "Get plugin details",
 		Tags:        []string{"plugins"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleGetPlugin)
 
 	huma.Register(s.api, huma.Operation{
@@ -76,6 +77,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/plugins/{name}/reload",
 		Summary:     "Reload a plugin",
 		Tags:        []string{"plugins"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleReloadPlugin)
 
 	// Chat endpoint (non-streaming, delegates to stream handler)
@@ -85,6 +87,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/chat",
 		Summary:     "Send a message to the agent",
 		Tags:        []string{"chat"},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleSendMessage)
 
 	// User endpoints
@@ -94,6 +97,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/users",
 		Summary:     "List users",
 		Tags:        []string{"users"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleListUsers)
 
 	// Status endpoint
@@ -103,6 +107,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/status",
 		Summary:     "Gateway status",
 		Tags:        []string{"system"},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleStatus)
 }
 
@@ -185,31 +190,60 @@ type statusOutput struct {
 
 // --- Handlers ---
 
-func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWorkspacesOutput, error) {
-	ws, err := s.services.Workspaces.List(ctx)
-	if err != nil {
-		return nil, huma.Error500InternalServerError("listing workspaces", err)
+// notFoundOr500 maps a service error to a 404 (if the error carries the
+// not-found code) or a generic 500. The full error is logged server-side
+// so that 5xx responses never leak internal details.
+func notFoundOr500(err error, notFoundMsg, context string) error {
+	if IsNotFound(err) {
+		return huma.Error404NotFound(notFoundMsg)
 	}
+	slog.Error("internal error", "context", context, "error", err)
+	return huma.Error500InternalServerError("internal server error")
+}
+
+func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWorkspacesOutput, error) {
+	// When auth is enabled, use ListForUser for membership-filtered results.
+	user := UserFromContext(ctx)
+	var ws []WorkspaceSummary
+	var err error
+	if user != nil {
+		ws, err = s.services.Workspaces().ListForUser(ctx, user.ID())
+	} else {
+		ws, err = s.services.Workspaces().List(ctx)
+	}
+	if err != nil {
+		slog.Error("internal error", "context", "listing workspaces", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
+	}
+
 	out := &listWorkspacesOutput{}
 	out.Body.Workspaces = ws
 	return out, nil
 }
 
 func (s *Server) handleGetWorkspace(ctx context.Context, input *getWorkspaceInput) (*getWorkspaceOutput, error) {
-	ws, err := s.services.Workspaces.Get(ctx, input.ID)
+	if err := s.checkWorkspaceMembership(ctx, input.ID); err != nil {
+		return nil, err
+	}
+
+	ws, err := s.services.Workspaces().Get(ctx, input.ID)
 	if err != nil {
-		if IsNotFound(err) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("workspace %q not found", input.ID))
-		}
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting workspace %q", input.ID), err)
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("workspace %q not found", input.ID),
+			fmt.Sprintf("getting workspace %q", input.ID))
 	}
 	return &getWorkspaceOutput{Body: *ws}, nil
 }
 
 func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInput) (*listSessionsOutput, error) {
-	sessions, err := s.services.Sessions.List(ctx, input.ID)
+	if err := s.checkWorkspaceMembership(ctx, input.ID); err != nil {
+		return nil, err
+	}
+
+	sessions, err := s.services.Sessions().List(ctx, input.ID)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("listing sessions", err)
+		slog.Error("internal error", "context", "listing sessions", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listSessionsOutput{}
 	out.Body.Sessions = sessions
@@ -217,20 +251,47 @@ func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInpu
 }
 
 func (s *Server) handleGetSession(ctx context.Context, input *getSessionInput) (*getSessionOutput, error) {
-	session, err := s.services.Sessions.Get(ctx, input.ID, input.SessionID)
+	if err := s.checkWorkspaceMembership(ctx, input.ID); err != nil {
+		return nil, err
+	}
+
+	session, err := s.services.Sessions().Get(ctx, input.ID, input.SessionID)
 	if err != nil {
-		if IsNotFound(err) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("session %q not found", input.SessionID))
-		}
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting session %q", input.SessionID), err)
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("session %q not found", input.SessionID),
+			fmt.Sprintf("getting session %q", input.SessionID))
 	}
 	return &getSessionOutput{Body: *session}, nil
 }
 
+// requireAdmin checks that the caller has the given admin permission.
+// When auth is disabled (dev mode), the operation is allowed with an info log.
+// When auth is enabled but no user is present, 401 is returned (defense-in-depth).
+// When the user lacks the required permission, 403 is returned.
+func (s *Server) requireAdmin(ctx context.Context, permission, op string) error {
+	user := UserFromContext(ctx)
+	if user == nil {
+		if s.authDisabled() {
+			slog.Info("admin operation without authentication (auth disabled)", "op", op)
+			return nil
+		}
+		return huma.Error401Unauthorized("authentication required")
+	}
+	if !user.HasPermission(permission) {
+		return huma.Error403Forbidden(fmt.Sprintf("insufficient permissions to %s", op))
+	}
+	return nil
+}
+
 func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPluginsOutput, error) {
-	plugins, err := s.services.Plugins.List(ctx)
+	if err := s.requireAdmin(ctx, "admin:plugins", "list plugins"); err != nil {
+		return nil, err
+	}
+
+	plugins, err := s.services.Plugins().List(ctx)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("listing plugins", err)
+		slog.Error("internal error", "context", "listing plugins", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listPluginsOutput{}
 	out.Body.Plugins = plugins
@@ -238,22 +299,28 @@ func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPlugi
 }
 
 func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*getPluginOutput, error) {
-	p, err := s.services.Plugins.Get(ctx, input.Name)
+	if err := s.requireAdmin(ctx, "admin:plugins", "get plugin details"); err != nil {
+		return nil, err
+	}
+
+	p, err := s.services.Plugins().Get(ctx, input.Name)
 	if err != nil {
-		if IsNotFound(err) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
-		}
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("getting plugin %q", input.Name), err)
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("plugin %q not found", input.Name),
+			fmt.Sprintf("getting plugin %q", input.Name))
 	}
 	return &getPluginOutput{Body: *p}, nil
 }
 
 func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput) (*reloadPluginOutput, error) {
-	if err := s.services.Plugins.Reload(ctx, input.Name); err != nil {
-		if IsNotFound(err) {
-			return nil, huma.Error404NotFound(fmt.Sprintf("plugin %q not found", input.Name))
-		}
-		return nil, huma.Error500InternalServerError(fmt.Sprintf("reloading plugin %q", input.Name), err)
+	if err := s.requireAdmin(ctx, "admin:plugins", "reload plugins"); err != nil {
+		return nil, err
+	}
+
+	if err := s.services.Plugins().Reload(ctx, input.Name); err != nil {
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("plugin %q not found", input.Name),
+			fmt.Sprintf("reloading plugin %q", input.Name))
 	}
 	out := &reloadPluginOutput{}
 	out.Body.Status = "reloaded"
@@ -263,6 +330,11 @@ func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput)
 func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput) (*sendMessageOutput, error) {
 	if s.streamHandler == nil {
 		return nil, huma.Error503ServiceUnavailable("agent not configured")
+	}
+
+	// Verify workspace membership.
+	if err := s.checkWorkspaceMembership(ctx, input.Body.WorkspaceID); err != nil {
+		return nil, err
 	}
 
 	// Derive a cancellable context so we can signal the stream handler to stop
@@ -300,10 +372,7 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 				// Cancel context and drain remaining events to unblock the
 				// stream handler goroutine before returning.
 				cancel()
-				go func() {
-					for range ch {
-					}
-				}()
+				drainSSEChannel(ch)
 				return nil, huma.Error502BadGateway(msg)
 			}
 		case <-ctx.Done():
@@ -312,59 +381,110 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 	}
 }
 
+const (
+	// maxTextContentBytes is the maximum size for text content returned to clients
+	// when JSON parsing fails. This prevents malicious streams from leaking
+	// megabytes of data to the client.
+	maxTextContentBytes = 10240 // 10KB
+)
+
+// truncateForLogging returns s truncated to maxLen with "..." suffix if needed.
+func truncateForLogging(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
+}
+
 // extractSessionID parses a session_id event payload and returns the session ID.
 // Falls back to the provided fallback if parsing fails.
 func extractSessionID(data string, fallback string) string {
 	var payload struct {
 		SessionID string `json:"session_id"`
 	}
-	if err := json.Unmarshal([]byte(data), &payload); err != nil || payload.SessionID == "" {
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		truncated := truncateForLogging(data, 100)
+		slog.Warn("failed to parse session_id event, using fallback",
+			"raw_data", truncated,
+			"error", err,
+			"fallback", fallback,
+		)
+		return fallback
+	}
+	if payload.SessionID == "" {
+		slog.Warn("session_id event has empty session_id field, using fallback",
+			"raw_data", data,
+			"fallback", fallback,
+		)
 		return fallback
 	}
 	return payload.SessionID
 }
 
 // extractErrorMessage parses an error event payload and returns a human-readable message.
+// The returned message is bounded to 200 characters to prevent unbounded data leaks
+// from malicious/buggy stream handlers.
 func extractErrorMessage(data string) string {
 	var payload struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return data
+		truncated := truncateForLogging(data, 100)
+		slog.Warn("failed to parse error event, using raw string as fallback",
+			"raw_data", truncated,
+			"error", err,
+		)
+		// Return raw data truncated to 200 characters
+		return truncateForLogging(data, 200)
 	}
 	if payload.Message != "" {
-		return payload.Message
+		return truncateForLogging(payload.Message, 200)
 	}
 	if payload.Error != "" {
-		return payload.Error
+		return truncateForLogging(payload.Error, 200)
 	}
 	return "unknown stream error"
 }
 
 // extractText parses a JSON text_delta payload and returns the text field.
-// Falls back to the raw string if parsing fails.
+// Falls back to the raw string if parsing fails (truncated to maxTextContentBytes).
 func extractText(data string) string {
 	var delta struct {
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(data), &delta); err != nil {
-		return data
+		truncated := truncateForLogging(data, 100)
+		slog.Warn("failed to parse text_delta event, using raw string as fallback",
+			"raw_data", truncated,
+			"error", err,
+		)
+		// Truncate fallback to prevent data leak from malicious streams
+		return truncateForLogging(data, maxTextContentBytes)
 	}
 	return delta.Text
 }
 
 func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOutput, error) {
-	users, err := s.services.Users.List(ctx)
+	if err := s.requireAdmin(ctx, "admin:users", "list users"); err != nil {
+		return nil, err
+	}
+
+	users, err := s.services.Users().List(ctx)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("listing users", err)
+		slog.Error("internal error", "context", "listing users", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listUsersOutput{}
 	out.Body.Users = users
 	return out, nil
 }
 
-func (s *Server) handleStatus(_ context.Context, _ *struct{}) (*statusOutput, error) {
+func (s *Server) handleStatus(ctx context.Context, _ *struct{}) (*statusOutput, error) {
+	if err := s.requireAdmin(ctx, "admin:status", "get gateway status"); err != nil {
+		return nil, err
+	}
+
 	out := &statusOutput{}
 	out.Body.Status = "ok"
 	return out, nil

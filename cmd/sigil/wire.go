@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,7 +14,6 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/plugin"
-	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/internal/provider"
 	anthropicprov "github.com/sigil-dev/sigil/internal/provider/anthropic"
 	googleprov "github.com/sigil-dev/sigil/internal/provider/google"
@@ -23,6 +24,8 @@ import (
 	"github.com/sigil-dev/sigil/internal/store"
 	_ "github.com/sigil-dev/sigil/internal/store/sqlite" // register sqlite backend
 	"github.com/sigil-dev/sigil/internal/workspace"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	pluginpkg "github.com/sigil-dev/sigil/pkg/plugin"
 )
 
 // Gateway holds all wired subsystems and manages their lifecycle.
@@ -64,10 +67,29 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		slog.Info("discovered plugins", "count", len(manifests))
 	}
 
-	// 4. Provider registry — register built-in providers from config.
+	// 4. Provider registry — register built-in providers and wire routing.
 	provReg := provider.NewRegistry()
 
 	registerBuiltinProviders(cfg, provReg)
+
+	// Wire default model and failover chain from config so the agent loop
+	// can route requests without "no default provider configured" errors.
+	if cfg.Models.Default != "" {
+		if err := provReg.SetDefault(cfg.Models.Default); err != nil {
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
+			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting default provider: %s", cfg.Models.Default)
+		}
+	}
+	if len(cfg.Models.Failover) > 0 {
+		if err := provReg.SetFailover(cfg.Models.Failover); err != nil {
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
+			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting failover chain")
+		}
+	}
 
 	// 5. Workspace manager.
 	wsMgr := workspace.NewManager(filepath.Join(dataDir, "workspaces"), storeCfg)
@@ -82,7 +104,9 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 			}
 		}
 		if err := wsMgr.SetConfig(wsCfg); err != nil {
-			_ = gs.Close()
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
 			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "setting workspace config: %w", err)
 		}
 	}
@@ -90,30 +114,55 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	// 6. HTTP server.
 	var tokenValidator server.TokenValidator
 	if len(cfg.Auth.Tokens) > 0 {
-		tokenValidator = newConfigTokenValidator(cfg.Auth.Tokens)
+		var tvErr error
+		tokenValidator, tvErr = newConfigTokenValidator(cfg.Auth.Tokens)
+		if tvErr != nil {
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
+			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "configuring auth tokens: %w", tvErr)
+		}
+	} else {
+		slog.Warn("authentication disabled: no API tokens configured — all endpoints are unauthenticated")
+	}
+
+	// Wire service adapters for REST endpoints.
+	services, err := server.NewServices(
+		&workspaceServiceAdapter{cfg: cfg},
+		&pluginServiceAdapter{mgr: pluginMgr},
+		&sessionServiceAdapter{wsMgr: wsMgr},
+		&userServiceAdapter{store: gs.Users()},
+	)
+	if err != nil {
+		if closeErr := gs.Close(); closeErr != nil {
+			slog.Warn("gateway store close error during initialization", "error", closeErr)
+		}
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
 	}
 
 	srv, err := server.New(server.Config{
 		ListenAddr:     cfg.Networking.Listen,
-		CORSOrigins:    nil, // use defaults
+		CORSOrigins:    cfg.Networking.CORSOrigins,
 		TokenValidator: tokenValidator,
+		BehindProxy:    cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
+		TrustedProxies: cfg.Networking.TrustedProxies,
+		EnableHSTS:     cfg.Networking.EnableHSTS,
+		RateLimit: server.RateLimitConfig{
+			RequestsPerSecond: cfg.Networking.RateLimitRPS,
+			Burst:             cfg.Networking.RateLimitBurst,
+		},
+		// Provide stub stream handler so chat endpoints work during initial startup
+		// (before real agent loop integration). Prevents 503 errors that would occur
+		// with nil StreamHandler.
+		StreamHandler: &stubStreamHandler{},
+		Services:      services,
 	})
 	if err != nil {
-		_ = gs.Close()
+		if closeErr := gs.Close(); closeErr != nil {
+			slog.Warn("gateway store close error during initialization", "error", closeErr)
+		}
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
-
-	// Wire service adapters for REST endpoints.
-	srv.RegisterServices(&server.Services{
-		Workspaces: &workspaceServiceAdapter{cfg: cfg},
-		Plugins:    &pluginServiceAdapter{mgr: pluginMgr},
-		Sessions:   &sessionServiceAdapter{wsMgr: wsMgr},
-		Users:      &userServiceAdapter{store: gs.Users()},
-	})
-
-	// Register stub stream handler so chat endpoints return a helpful
-	// message instead of 503. Will be replaced by real agent loop.
-	srv.RegisterStreamHandler(&stubStreamHandler{})
 
 	return &Gateway{
 		Server:           srv,
@@ -130,20 +179,55 @@ func (gw *Gateway) Start(ctx context.Context) error {
 	return gw.Server.Start(ctx)
 }
 
-// Close releases all resources held by the gateway.
+// Validate checks that all required Gateway fields are non-nil.
+// This method ensures the Gateway was properly initialized by WireGateway.
+func (gw *Gateway) Validate() error {
+	if gw.Server == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "gateway server is nil")
+	}
+	if gw.GatewayStore == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "gateway store is nil")
+	}
+	if gw.PluginManager == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "plugin manager is nil")
+	}
+	if gw.ProviderRegistry == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "provider registry is nil")
+	}
+	if gw.WorkspaceManager == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "workspace manager is nil")
+	}
+	if gw.Enforcer == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "enforcer is nil")
+	}
+	return nil
+}
+
+// Close releases all resources held by the gateway. Unlike Validate(),
+// Close tolerates nil fields to avoid leaking resources from partial initialization.
 func (gw *Gateway) Close() error {
-	var firstErr error
+	var errs []error
+	if gw.Server != nil {
+		if err := gw.Server.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if gw.ProviderRegistry != nil {
+		if err := gw.ProviderRegistry.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if gw.WorkspaceManager != nil {
-		if err := gw.WorkspaceManager.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := gw.WorkspaceManager.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if gw.GatewayStore != nil {
-		if err := gw.GatewayStore.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := gw.GatewayStore.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return sigilerr.Join(errs...)
 }
 
 func convertBindings(bindings []config.BindingConfig) []workspace.Binding {
@@ -178,12 +262,13 @@ var builtinProviderFactories = map[string]providerFactory{
 }
 
 // registerBuiltinProviders iterates configured providers and registers
-// matching built-in implementations. Unknown names or empty API keys are
-// logged and skipped — neither is fatal at startup.
+// matching built-in implementations. Providers with no API key are silently
+// skipped at DEBUG level (normal when not configured). Providers with an API
+// key that still fail to initialize are logged at ERROR level (misconfigured).
 func registerBuiltinProviders(cfg *config.Config, reg *provider.Registry) {
 	for name, pc := range cfg.Providers {
 		if pc.APIKey == "" {
-			slog.Warn("skipping provider with empty API key", "provider", name)
+			slog.Debug("provider not configured, skipping", "provider", name)
 			continue
 		}
 		factory, ok := builtinProviderFactories[name]
@@ -193,7 +278,7 @@ func registerBuiltinProviders(cfg *config.Config, reg *provider.Registry) {
 		}
 		p, err := factory(pc)
 		if err != nil {
-			slog.Warn("failed to create provider", "provider", name, "error", err)
+			slog.Error("provider initialization failed", "provider", name, "error", err)
 			continue
 		}
 		reg.Register(name, p)
@@ -218,6 +303,26 @@ func (a *workspaceServiceAdapter) List(_ context.Context) ([]server.WorkspaceSum
 			ID:          id,
 			Description: ws.Description,
 		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (a *workspaceServiceAdapter) ListForUser(_ context.Context, userID string) ([]server.WorkspaceSummary, error) {
+	if a.cfg.Workspaces == nil {
+		return []server.WorkspaceSummary{}, nil
+	}
+	out := make([]server.WorkspaceSummary, 0, len(a.cfg.Workspaces))
+	for id, ws := range a.cfg.Workspaces {
+		for _, member := range ws.Members {
+			if member == userID {
+				out = append(out, server.WorkspaceSummary{
+					ID:          id,
+					Description: ws.Description,
+				})
+				break
+			}
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
@@ -249,9 +354,10 @@ func (a *pluginServiceAdapter) List(_ context.Context) ([]server.PluginSummary, 
 	for i, inst := range instances {
 		out[i] = server.PluginSummary{
 			Name:    inst.Name(),
-			Type:    inst.Type(),
+			Type:    pluginpkg.PluginType(inst.Type()),
 			Version: inst.Version(),
-			Status:  inst.State().String(),
+			Status:  server.PluginStatus(inst.State().String()),
+			Tier:    pluginpkg.ExecutionTier(inst.Tier()),
 		}
 	}
 	return out, nil
@@ -271,10 +377,10 @@ func (a *pluginServiceAdapter) Get(_ context.Context, name string) (*server.Plug
 	}
 	return &server.PluginDetail{
 		Name:         inst.Name(),
-		Type:         inst.Type(),
+		Type:         pluginpkg.PluginType(inst.Type()),
 		Version:      inst.Version(),
-		Status:       inst.State().String(),
-		Tier:         inst.Tier(),
+		Status:       server.PluginStatus(inst.State().String()),
+		Tier:         pluginpkg.ExecutionTier(inst.Tier()),
 		Capabilities: caps,
 	}, nil
 }
@@ -301,7 +407,8 @@ type userServiceAdapter struct {
 	store store.UserStore
 }
 
-// stubStreamHandler returns a placeholder message until a real agent loop is wired.
+// stubStreamHandler implements StreamHandler by returning a placeholder message.
+// Used during initial startup until the real agent loop is integrated.
 type stubStreamHandler struct{}
 
 func (h *stubStreamHandler) HandleStream(_ context.Context, _ server.ChatStreamRequest, events chan<- server.SSEEvent) {
@@ -331,26 +438,69 @@ func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, er
 	return out, nil
 }
 
-// configTokenValidator validates bearer tokens against static config entries.
+// configTokenValidator validates bearer tokens against pre-computed SHA256
+// hashes of static config entries. Hashing at init time avoids per-request
+// rehashing and keeps raw tokens out of long-lived memory.
 type configTokenValidator struct {
-	tokens map[string]*server.AuthenticatedUser
+	tokens map[[32]byte]*server.AuthenticatedUser
 }
 
-func newConfigTokenValidator(tokens []config.TokenConfig) *configTokenValidator {
-	m := make(map[string]*server.AuthenticatedUser, len(tokens))
-	for _, tc := range tokens {
-		m[tc.Token] = &server.AuthenticatedUser{
-			ID:          tc.UserID,
-			Name:        tc.Name,
-			Permissions: tc.Permissions,
+func newConfigTokenValidator(tokens []config.TokenConfig) (*configTokenValidator, error) {
+	m := make(map[[32]byte]*server.AuthenticatedUser, len(tokens))
+	skipped := 0
+	for i, tc := range tokens {
+		user, err := server.NewAuthenticatedUser(tc.UserID, tc.Name, tc.Permissions)
+		if err != nil {
+			slog.Error("skipping token with invalid user config",
+				"error", err,
+				"user_id", tc.UserID,
+				"token_index", i+1,
+				"token_count", len(tokens))
+			skipped++
+			continue
 		}
+		hash := sha256.Sum256([]byte(tc.Token))
+		m[hash] = user
 	}
-	return &configTokenValidator{tokens: m}
+	if len(tokens) > 0 && len(m) == 0 {
+		return nil, sigilerr.New(sigilerr.CodeCLISetupFailure,
+			"all configured auth tokens failed validation — gateway would be unusable")
+	}
+	// Log startup summary
+	if skipped > 0 {
+		slog.Warn("auth token startup summary",
+			"active_tokens", len(m),
+			"total_configured", len(tokens),
+			"skipped_due_to_errors", skipped)
+	} else if len(tokens) > 0 {
+		slog.Info("auth token startup summary",
+			"active_tokens", len(m),
+			"total_configured", len(tokens))
+	}
+	return &configTokenValidator{tokens: m}, nil
 }
 
 func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*server.AuthenticatedUser, error) {
-	if user, ok := v.tokens[token]; ok {
-		return user, nil
+	candidateHash := sha256.Sum256([]byte(token))
+	// Iterate through ALL tokens to prevent timing attacks that leak token count/position.
+	// Even after finding a match, we continue iterating to ensure constant-time behavior
+	// regardless of which token matches or where it appears in the iteration order.
+	var matched *server.AuthenticatedUser
+
+	for hash, user := range v.tokens {
+		// subtle.ConstantTimeCompare ensures the hash comparison takes the same time
+		// whether hashes match or not, preventing timing attacks on the hash value itself.
+		if subtle.ConstantTimeCompare(hash[:], candidateHash[:]) == 1 {
+			matched = user
+			// CRITICAL: Do NOT return here. Continue iterating through remaining tokens
+			// to prevent timing attacks that could reveal token position/count by measuring
+			// how many iterations were performed.
+		}
 	}
+
+	if matched != nil {
+		return matched, nil
+	}
+	slog.Debug("token validation failed: no configured token matched")
 	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")
 }

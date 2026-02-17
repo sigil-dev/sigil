@@ -146,10 +146,31 @@ func TestCapabilitySetContains(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := tt.set.Contains(tt.cap)
+			got, err := tt.set.Contains(tt.cap)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestCapabilitySetContains_InvalidPattern(t *testing.T) {
+	t.Parallel()
+
+	// A set containing an invalid pattern (too many segments) must return an error.
+	segments := make([]string, 33)
+	for i := range segments {
+		segments[i] = "a"
+	}
+	badPattern := strings.Join(segments, ".")
+	set := security.NewCapabilitySet("valid.pattern", badPattern)
+
+	_, err := set.Contains("valid.pattern")
+	require.NoError(t, err, "valid pattern checked before invalid one should succeed")
+
+	set2 := security.NewCapabilitySet(badPattern, "valid.pattern")
+	_, err = set2.Contains("anything")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityCapabilityInvalid))
 }
 
 func TestCapabilitySetAllowedBy(t *testing.T) {
@@ -177,7 +198,8 @@ func TestCapabilitySetAllowedBy(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := tt.left.AllowedBy(tt.right, tt.cap)
+			got, err := tt.left.AllowedBy(tt.right, tt.cap)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}

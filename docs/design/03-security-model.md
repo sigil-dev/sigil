@@ -57,6 +57,7 @@ The agent loop itself has security checks at every step:
 
 1. **Receive message from channel**
    - Input sanitization (prompt injection scan)
+     > **Status: Phase 8+ (deferred)** — Tracked in sigil-39g
    - Origin tagging (LLM sees `[user_input]` vs `[system]` markers)
 
 2. **Construct prompt**
@@ -80,24 +81,26 @@ The agent loop itself has security checks at every step:
 6. **Tool result returned**
    - Result size capped
    - Result scanned for injection patterns
+     > **Status: Phase 8+ (deferred)** — Tracked in sigil-j32
    - Result tagged as `tool_output` (not user input)
 
 7. **Format response**
    - Output filtering (PII, secrets)
+     > **Status: Phase 8+ (deferred)** — Tracked in sigil-hnh
    - Response sent back through channel
 
 ### Defense Matrix
 
-| Attack Vector                     | Defense                                                                                |
-| --------------------------------- | -------------------------------------------------------------------------------------- |
-| Prompt injection via user message | Input scanning + origin tagging                                                        |
-| Prompt injection via tool result  | Tool outputs tagged as `tool_output` role, scanned for instruction patterns            |
-| Tool escalation                   | Session-scoped tool allowlist + capability check before dispatch                       |
-| Infinite tool loops               | Per-session tool call budget (max N calls per turn, max M turns per session)           |
-| Cost explosion                    | Token budget per-session, per-hour, per-day enforced at provider level                 |
-| Plugin data exfiltration          | Plugins cannot read other plugins' KV/config. Network policy for container tier.       |
-| Session hijacking                 | Sessions bound to channel+user identity. Cross-session access requires explicit grant. |
-| Config poisoning                  | Config changes validated against schema, audit-logged, require admin capability        |
+| Attack Vector                     | Defense                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Prompt injection via user message | Input scanning (Phase 8+, sigil-39g) + origin tagging                                             |
+| Prompt injection via tool result  | Tool outputs tagged as `tool_output` role, scanned for instruction patterns (Phase 8+, sigil-j32) |
+| Tool escalation                   | Session-scoped tool allowlist + capability check before dispatch                                  |
+| Infinite tool loops               | Per-session tool call budget (max N calls per turn, max M turns per session)                      |
+| Cost explosion                    | Token budget per-session, per-hour, per-day enforced at provider level                            |
+| Plugin data exfiltration          | Plugins cannot read other plugins' KV/config. Network policy for container tier.                  |
+| Session hijacking                 | Sessions bound to channel+user identity. Cross-session access requires explicit grant.            |
+| Config poisoning                  | Config changes validated against schema, audit-logged, require admin capability                   |
 
 ## Layer 3: Plugin Isolation
 

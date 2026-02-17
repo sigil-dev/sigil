@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/sigil-dev/sigil/internal/security"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
@@ -20,9 +21,48 @@ type TokenValidator interface {
 
 // AuthenticatedUser represents a validated user from a bearer token.
 type AuthenticatedUser struct {
-	ID          string
-	Name        string
-	Permissions []string // capability patterns
+	id          string
+	name        string
+	permissions []string // capability patterns
+}
+
+// NewAuthenticatedUser creates an AuthenticatedUser with validation.
+// Returns an error if id is empty, since all authenticated users must have an identity.
+func NewAuthenticatedUser(id, name string, permissions []string) (*AuthenticatedUser, error) {
+	if id == "" {
+		return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "authenticated user ID must not be empty")
+	}
+	return &AuthenticatedUser{
+		id:          id,
+		name:        name,
+		permissions: append(make([]string, 0, len(permissions)), permissions...),
+	}, nil
+}
+
+// ID returns the user's unique identifier.
+func (u *AuthenticatedUser) ID() string {
+	if u == nil {
+		return ""
+	}
+	return u.id
+}
+
+// Name returns the user's display name.
+func (u *AuthenticatedUser) Name() string {
+	if u == nil {
+		return ""
+	}
+	return u.name
+}
+
+// Permissions returns a copy of the user's permission patterns.
+func (u *AuthenticatedUser) Permissions() []string {
+	if u == nil {
+		return nil
+	}
+	result := make([]string, len(u.permissions))
+	copy(result, u.permissions)
+	return result
 }
 
 // contextKey is an unexported type for context keys in this package.
@@ -35,6 +75,30 @@ const authUserKey contextKey = iota
 func UserFromContext(ctx context.Context) *AuthenticatedUser {
 	user, _ := ctx.Value(authUserKey).(*AuthenticatedUser)
 	return user
+}
+
+// HasPermission checks whether the user has a permission matching the given pattern.
+// Uses the same glob matching as capability enforcement via security.MatchCapability.
+// Returns false if user is nil (unauthenticated / auth disabled).
+func (u *AuthenticatedUser) HasPermission(required string) bool {
+	if u == nil {
+		return false
+	}
+	for _, p := range u.permissions {
+		// Use the same MatchCapability logic as the security enforcer to ensure consistency.
+		// MatchCapability treats the pattern as the first arg, so we check if the user's
+		// permission (p) matches the required capability.
+		matched, err := security.MatchCapability(p, required)
+		if err != nil {
+			// Invalid capability patterns should not grant access.
+			slog.Warn("invalid permission pattern in user permissions", "pattern", p, "error", err)
+			continue
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 // defaultPublicPaths are paths that never require authentication.
@@ -123,5 +187,11 @@ type authErrorBody struct {
 func writeAuthError(w http.ResponseWriter, msg string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(authErrorBody{Error: msg})
+	if err := json.NewEncoder(w).Encode(authErrorBody{Error: msg}); err != nil {
+		slog.Warn("failed to write auth error response",
+			"error", err,
+			"status", status,
+			"message", msg,
+		)
+	}
 }

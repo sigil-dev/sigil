@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +28,20 @@ type CheckRequest struct {
 	WorkspaceID     string
 	WorkspaceAllow  CapabilitySet
 	UserPermissions CapabilitySet
+}
+
+// Validate checks that required fields are non-empty and that Capability is a valid glob pattern.
+func (r CheckRequest) Validate() error {
+	if r.Plugin == "" {
+		return sigilerr.New(sigilerr.CodeSecurityInvalidInput, "CheckRequest: Plugin must not be empty")
+	}
+	if r.Capability == "" {
+		return sigilerr.New(sigilerr.CodeSecurityInvalidInput, "CheckRequest: Capability must not be empty")
+	}
+	if _, err := filepath.Match(r.Capability, ""); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeSecurityInvalidInput, "CheckRequest: Capability contains invalid glob pattern: %w", err)
+	}
+	return nil
 }
 
 // Enforcer applies plugin, workspace, and user capability policy checks.
@@ -68,6 +83,10 @@ func (e *Enforcer) UnregisterPlugin(name string) {
 
 // Check enforces plugin, workspace, and user capability policy constraints.
 func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
+	if err := req.Validate(); err != nil {
+		return err
+	}
+
 	e.mu.RLock()
 	pluginCaps, ok := e.plugins[req.Plugin]
 	e.mu.RUnlock()
@@ -76,28 +95,46 @@ func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
 		return e.deny(ctx, req, "plugin_not_registered", false, false, false, false)
 	}
 
-	pluginAllow := pluginCaps.allow.Contains(req.Capability)
+	pluginAllow, err := pluginCaps.allow.Contains(req.Capability)
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid, "checking plugin allow capabilities for %q", req.Plugin)
+	}
 	if !pluginAllow {
 		return e.deny(ctx, req, "plugin_allow_missing", pluginAllow, false, false, false)
 	}
 
-	pluginDeny := pluginCaps.deny.Contains(req.Capability)
+	pluginDeny, err := pluginCaps.deny.Contains(req.Capability)
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid, "checking plugin deny capabilities for %q", req.Plugin)
+	}
 	if pluginDeny {
 		return e.deny(ctx, req, "plugin_deny_match", pluginAllow, pluginDeny, false, false)
 	}
 
-	workspaceAllow := req.WorkspaceAllow.Contains(req.Capability)
+	workspaceAllow, err := req.WorkspaceAllow.Contains(req.Capability)
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid, "checking workspace capabilities")
+	}
 	if !workspaceAllow {
 		return e.deny(ctx, req, "workspace_allow_missing", pluginAllow, pluginDeny, workspaceAllow, false)
 	}
 
-	userAllow := req.UserPermissions.Contains(req.Capability)
+	userAllow, err := req.UserPermissions.Contains(req.Capability)
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid, "checking user permissions")
+	}
 	if !userAllow {
 		return e.deny(ctx, req, "user_permission_missing", pluginAllow, pluginDeny, workspaceAllow, userAllow)
 	}
 
+	// Audit logging is best-effort to prevent cascading failures from a flaky audit backend.
+	// In compliance-critical environments, consider making this configurable (fail-closed).
 	if err := e.auditDecision(ctx, req, "allowed", "ok", pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
-		return err
+		slog.Warn("audit log failure on allowed decision (best-effort, not blocking)",
+			"plugin", req.Plugin,
+			"capability", req.Capability,
+			"error", err,
+		)
 	}
 
 	return nil
@@ -120,8 +157,14 @@ func (e *Enforcer) deny(
 		reason,
 	)
 
+	// Audit logging is best-effort to prevent cascading failures from a flaky audit backend.
+	// In compliance-critical environments, consider making this configurable (fail-closed).
 	if err := e.auditDecision(ctx, req, "denied", reason, pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
-		return sigilerr.With(deniedErr, sigilerr.Field("audit_append_error", err.Error()))
+		slog.Warn("audit log failure on denied decision (best-effort, not blocking)",
+			"plugin", req.Plugin,
+			"capability", req.Capability,
+			"error", err,
+		)
 	}
 
 	return deniedErr

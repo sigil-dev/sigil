@@ -6,6 +6,8 @@ package provider
 import (
 	"sync"
 	"time"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // HealthTracker provides simple health state tracking for providers.
@@ -13,11 +15,11 @@ import (
 // After a failure, the provider is marked unhealthy for a cooldown
 // period, after which it becomes available again to allow recovery.
 type HealthTracker struct {
-	mu          sync.RWMutex
-	healthy     bool
-	failedAt    time.Time
-	cooldown    time.Duration
-	nowFunc     func() time.Time // for testing
+	mu       sync.RWMutex
+	healthy  bool
+	failedAt time.Time
+	cooldown time.Duration
+	nowFunc  func() time.Time // for testing
 }
 
 // DefaultHealthCooldown is the duration after which an unhealthy provider
@@ -25,12 +27,17 @@ type HealthTracker struct {
 const DefaultHealthCooldown = 30 * time.Second
 
 // NewHealthTracker creates a HealthTracker that starts healthy.
-func NewHealthTracker(cooldown time.Duration) *HealthTracker {
+// Returns an error if cooldown is zero or negative.
+func NewHealthTracker(cooldown time.Duration) (*HealthTracker, error) {
+	if cooldown <= 0 {
+		return nil, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"health tracker cooldown must be positive, got %s", cooldown)
+	}
 	return &HealthTracker{
 		healthy:  true,
 		cooldown: cooldown,
 		nowFunc:  time.Now,
-	}
+	}, nil
 }
 
 // IsHealthy returns true if the provider is healthy or the cooldown has elapsed.

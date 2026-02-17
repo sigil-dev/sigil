@@ -96,22 +96,32 @@ func MatchCapability(pattern, cap string) (bool, error) {
 }
 
 // Contains reports whether any capability pattern in the set matches cap.
-// If MatchCapability returns an error, that pattern is skipped.
-// Callers MUST validate patterns at load time (e.g. via manifest.Validate)
-// to ensure errors here indicate programming bugs, not untrusted input.
-func (s CapabilitySet) Contains(cap string) bool {
+// Returns an error if any pattern in the set is invalid, ensuring fail-closed
+// behavior: callers must handle invalid patterns rather than silently skipping them.
+func (s CapabilitySet) Contains(cap string) (bool, error) {
 	for _, pattern := range s.patterns {
 		match, err := MatchCapability(pattern, cap)
-		if err == nil && match {
-			return true
+		if err != nil {
+			return false, sigilerr.Wrapf(err, sigilerr.CodeSecurityCapabilityInvalid,
+				"invalid capability pattern %q in set", pattern)
+		}
+		if match {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // AllowedBy reports whether cap is allowed by both sets.
-func (s CapabilitySet) AllowedBy(other CapabilitySet, cap string) bool {
-	return s.Contains(cap) && other.Contains(cap)
+func (s CapabilitySet) AllowedBy(other CapabilitySet, cap string) (bool, error) {
+	ok, err := s.Contains(cap)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	return other.Contains(cap)
 }
 
 func matchSegment(patternSegment, capSegment string) bool {

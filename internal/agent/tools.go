@@ -147,16 +147,27 @@ type ToolDispatcher struct {
 
 	// turnBudgets tracks per-turn call counts keyed by TurnID.
 	turnBudgets sync.Map // map[string]*turnBudget
+
+	// auditFailCount tracks consecutive audit append failures for monitoring.
+	auditFailCount atomic.Int64
 }
 
 // NewToolDispatcher creates a ToolDispatcher with the given configuration.
-func NewToolDispatcher(cfg ToolDispatcherConfig) *ToolDispatcher {
+// Returns an error if required fields are nil.
+func NewToolDispatcher(cfg ToolDispatcherConfig) (*ToolDispatcher, error) {
+	if cfg.Enforcer == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Enforcer is required")
+	}
+	if cfg.PluginManager == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "PluginManager is required")
+	}
+
 	return &ToolDispatcher{
 		enforcer:       cfg.Enforcer,
 		pluginManager:  cfg.PluginManager,
 		auditStore:     cfg.AuditStore,
 		defaultTimeout: cfg.DefaultTimeout,
-	}
+	}, nil
 }
 
 // ClearTurn removes the budget entry for the given turn ID, freeing memory.
@@ -298,7 +309,18 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 	}
 
 	// Best-effort audit; do not fail the tool execution on audit errors.
-	_ = d.auditStore.Append(ctx, entry)
+	if err := d.auditStore.Append(ctx, entry); err != nil {
+		d.auditFailCount.Add(1)
+		slog.Warn("audit store append failed",
+			"error", err,
+			"plugin", req.PluginName,
+			"tool", req.ToolName,
+			"session_id", req.SessionID,
+			"consecutive_failures", d.auditFailCount.Load(),
+		)
+	} else {
+		d.auditFailCount.Store(0)
+	}
 }
 
 // scanToolOutput scans tool output for prompt injection patterns.

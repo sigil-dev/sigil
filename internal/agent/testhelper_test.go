@@ -5,6 +5,7 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -376,8 +377,8 @@ func newMockProviderRouterCapturing(capturer *mockProviderCapturing) *mockProvid
 // mockProviderRouterBudgetAware routes normally but enforces budget via RouteWithBudget.
 // It also captures the budget passed to RouteWithBudget for assertions.
 type mockProviderRouterBudgetAware struct {
-	provider      provider.Provider
-	mu            sync.Mutex
+	provider       provider.Provider
+	mu             sync.Mutex
 	capturedBudget *provider.Budget
 }
 
@@ -389,15 +390,17 @@ func (r *mockProviderRouterBudgetAware) RouteWithBudget(_ context.Context, _, _ 
 	r.mu.Lock()
 	r.capturedBudget = budget
 	r.mu.Unlock()
-	if budget != nil && budget.MaxSessionTokens > 0 && budget.UsedSessionTokens >= budget.MaxSessionTokens {
+	if budget != nil && budget.MaxSessionTokens() > 0 && budget.UsedSessionTokens() >= budget.MaxSessionTokens() {
 		return nil, "", sigilerr.New(sigilerr.CodeProviderBudgetExceeded, "budget exceeded")
 	}
 	return r.provider, "mock-model", nil
 }
 
-func (r *mockProviderRouterBudgetAware) RegisterProvider(_ string, _ provider.Provider) error { return nil }
-func (r *mockProviderRouterBudgetAware) MaxAttempts() int                                     { return 1 }
-func (r *mockProviderRouterBudgetAware) Close() error                                         { return nil }
+func (r *mockProviderRouterBudgetAware) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+func (r *mockProviderRouterBudgetAware) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterBudgetAware) Close() error     { return nil }
 
 func (r *mockProviderRouterBudgetAware) getCapturedBudget() *provider.Budget {
 	r.mu.Lock()
@@ -416,9 +419,11 @@ func (r *mockProviderRouterInvalidModelRef) RouteWithBudget(_ context.Context, _
 	return nil, "", sigilerr.New(sigilerr.CodeProviderInvalidModelRef, "model name must use provider/model format")
 }
 
-func (r *mockProviderRouterInvalidModelRef) RegisterProvider(_ string, _ provider.Provider) error { return nil }
-func (r *mockProviderRouterInvalidModelRef) MaxAttempts() int                                     { return 1 }
-func (r *mockProviderRouterInvalidModelRef) Close() error                                         { return nil }
+func (r *mockProviderRouterInvalidModelRef) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+func (r *mockProviderRouterInvalidModelRef) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterInvalidModelRef) Close() error     { return nil }
 
 // ---------------------------------------------------------------------------
 // Audit store mock
@@ -442,6 +447,40 @@ func (s *mockAuditStore) Append(_ context.Context, entry *store.AuditEntry) erro
 }
 
 func (s *mockAuditStore) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
+	return nil, nil
+}
+
+// mockAuditStoreError is an audit store that always returns an error from Append.
+type mockAuditStoreError struct {
+	appendCount atomic.Int32
+	err         error
+}
+
+func (s *mockAuditStoreError) Append(_ context.Context, _ *store.AuditEntry) error {
+	s.appendCount.Add(1)
+	return s.err
+}
+
+func (s *mockAuditStoreError) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
+	return nil, nil
+}
+
+// mockAuditStoreConditional is an audit store that fails for the first N calls,
+// then succeeds. Used to test consecutive failure counter behavior.
+type mockAuditStoreConditional struct {
+	callCount          atomic.Int32
+	failUntilCallCount int
+}
+
+func (s *mockAuditStoreConditional) Append(_ context.Context, _ *store.AuditEntry) error {
+	current := s.callCount.Add(1)
+	if int(current) <= s.failUntilCallCount {
+		return fmt.Errorf("simulated audit failure (call %d of %d)", current, s.failUntilCallCount)
+	}
+	return nil
+}
+
+func (s *mockAuditStoreConditional) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
 	return nil, nil
 }
 
@@ -506,6 +545,11 @@ func (m *mockPluginExecutorSlow) ExecuteTool(ctx context.Context, _, _, _ string
 // newMockPluginManagerSlow returns a PluginExecutor that sleeps for d before returning.
 func newMockPluginManagerSlow(d time.Duration) *mockPluginExecutorSlow {
 	return &mockPluginExecutorSlow{delay: d}
+}
+
+// newMockPluginManagerWithError returns a PluginExecutor that always returns the given error.
+func newMockPluginManagerWithError(err error) *mockPluginExecutorError {
+	return &mockPluginExecutorError{err: err}
 }
 
 // ---------------------------------------------------------------------------
@@ -810,4 +854,35 @@ func cosineDistance(a, b []float32) float64 {
 		return 1.0
 	}
 	return 1.0 - dot/(math.Sqrt(normA)*math.Sqrt(normB))
+}
+
+// mockProviderStreamUsageThenError emits a text delta, usage event, then error event.
+// Used to test that token accounting survives stream failures.
+type mockProviderStreamUsageThenError struct{}
+
+func (p *mockProviderStreamUsageThenError) Name() string                     { return "mock-usage-error" }
+func (p *mockProviderStreamUsageThenError) Available(_ context.Context) bool { return true }
+
+func (p *mockProviderStreamUsageThenError) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+
+func (p *mockProviderStreamUsageThenError) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	ch := make(chan provider.ChatEvent, 4)
+	ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Partial "}
+	ch <- provider.ChatEvent{Type: provider.EventTypeUsage, Usage: &provider.Usage{InputTokens: 30, OutputTokens: 20}}
+	ch <- provider.ChatEvent{Type: provider.EventTypeError, Error: "stream interrupted"}
+	close(ch)
+	return ch, nil
+}
+
+func (p *mockProviderStreamUsageThenError) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-usage-error"}, nil
+}
+
+func (p *mockProviderStreamUsageThenError) Close() error { return nil }
+
+// newMockProviderRouterStreamUsageThenError returns a Router with a provider that emits usage then error.
+func newMockProviderRouterStreamUsageThenError() *mockProviderRouter {
+	return &mockProviderRouter{provider: &mockProviderStreamUsageThenError{}}
 }

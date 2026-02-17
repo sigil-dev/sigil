@@ -5,6 +5,8 @@ package anthropic
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 
 	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -40,10 +42,14 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	client := anthropicsdk.NewClient(opts...)
+	health, err := provider.NewHealthTracker(provider.DefaultHealthCooldown)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "anthropic: creating health tracker")
+	}
 	return &Provider{
 		client: client,
 		config: cfg,
-		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+		health: health,
 	}, nil
 }
 
@@ -64,12 +70,12 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Claude Opus 4.6",
 			Provider: "anthropic",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 200000,
-				MaxOutputTokens:  32000,
+				SupportsThinking:  true,
+				MaxContextTokens:  200000,
+				MaxOutputTokens:   32000,
 			},
 		},
 		{
@@ -77,12 +83,12 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Claude Sonnet 4.5",
 			Provider: "anthropic",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 200000,
-				MaxOutputTokens:  16000,
+				SupportsThinking:  true,
+				MaxContextTokens:  200000,
+				MaxOutputTokens:   16000,
 			},
 		},
 		{
@@ -90,11 +96,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "Claude Haiku 4.5",
 			Provider: "anthropic",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				MaxContextTokens: 200000,
-				MaxOutputTokens:  8192,
+				MaxContextTokens:  200000,
+				MaxOutputTokens:   8192,
 			},
 		},
 	}
@@ -229,9 +235,13 @@ func extractSchema(raw map[string]any) anthropicsdk.ToolInputSchemaParam {
 			for _, v := range arr {
 				if s, ok := v.(string); ok {
 					strs = append(strs, s)
+				} else {
+					slog.Warn("extractSchema: non-string element in required array", "value", v)
 				}
 			}
 			schema.Required = strs
+		} else {
+			slog.Warn("extractSchema: required field is not an array", "type", fmt.Sprintf("%T", req))
 		}
 	}
 	return schema
@@ -329,7 +339,14 @@ func (p *Provider) streamChat(ctx context.Context, params anthropicsdk.MessageNe
 		return
 	}
 
-	// If we exit the loop without a message_stop, still send done.
-	p.health.RecordSuccess()
-	ch <- provider.ChatEvent{Type: provider.EventTypeDone}
+	// If we exit the loop without a message_stop, this is an abnormal termination.
+	// Mark the provider unhealthy via RecordFailure and send error event to trigger
+	// failover to the next available provider.
+	slog.Warn("anthropic: stream ended without message_stop event")
+	p.health.RecordFailure()
+	err := sigilerr.New(sigilerr.CodeProviderUpstreamFailure, "stream ended without message_stop event")
+	ch <- provider.ChatEvent{
+		Type:  provider.EventTypeError,
+		Error: err.Error(),
+	}
 }

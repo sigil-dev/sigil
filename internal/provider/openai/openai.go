@@ -6,7 +6,6 @@ package openai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"slices"
 
@@ -46,10 +45,14 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	client := openaisdk.NewClient(opts...)
+	health, err := provider.NewHealthTracker(provider.DefaultHealthCooldown)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "openai: creating health tracker")
+	}
 	return &Provider{
 		client: client,
 		config: cfg,
-		health: provider.NewHealthTracker(provider.DefaultHealthCooldown),
+		health: health,
 	}, nil
 }
 
@@ -70,11 +73,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "GPT-4.1",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				MaxContextTokens: 128000,
-				MaxOutputTokens:  32768,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   32768,
 			},
 		},
 		{
@@ -82,11 +85,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "GPT-4.1 Mini",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
-				SupportsVision:   true,
+				SupportsTools:     true,
+				SupportsVision:    true,
 				SupportsStreaming: true,
-				MaxContextTokens: 128000,
-				MaxOutputTokens:  16384,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   16384,
 			},
 		},
 		{
@@ -94,10 +97,10 @@ func knownModels() []provider.ModelInfo {
 			Name:     "GPT-4.1 Nano",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
+				SupportsTools:     true,
 				SupportsStreaming: true,
-				MaxContextTokens: 128000,
-				MaxOutputTokens:  16384,
+				MaxContextTokens:  128000,
+				MaxOutputTokens:   16384,
 			},
 		},
 		{
@@ -105,11 +108,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "o3",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
+				SupportsTools:     true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 200000,
-				MaxOutputTokens:  100000,
+				SupportsThinking:  true,
+				MaxContextTokens:  200000,
+				MaxOutputTokens:   100000,
 			},
 		},
 		{
@@ -117,11 +120,11 @@ func knownModels() []provider.ModelInfo {
 			Name:     "o4-mini",
 			Provider: "openai",
 			Capabilities: provider.ModelCapabilities{
-				SupportsTools:    true,
+				SupportsTools:     true,
 				SupportsStreaming: true,
-				SupportsThinking: true,
-				MaxContextTokens: 200000,
-				MaxOutputTokens:  100000,
+				SupportsThinking:  true,
+				MaxContextTokens:  200000,
+				MaxOutputTokens:   100000,
 			},
 		},
 	}
@@ -287,9 +290,10 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 					acc := toolCalls[idx]
 					if !json.Valid([]byte(acc.partialArgs)) {
 						p.health.RecordFailure()
+						err := sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "openai: tool call %q has invalid JSON arguments", acc.name)
 						ch <- provider.ChatEvent{
 							Type:  provider.EventTypeError,
-							Error: fmt.Sprintf("openai: tool call %q has invalid JSON arguments", acc.name),
+							Error: err.Error(),
 						}
 						return
 					}
@@ -311,8 +315,8 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 			ch <- provider.ChatEvent{
 				Type: provider.EventTypeUsage,
 				Usage: &provider.Usage{
-					InputTokens:    int(chunk.Usage.PromptTokens),
-					OutputTokens:   int(chunk.Usage.CompletionTokens),
+					InputTokens:     int(chunk.Usage.PromptTokens),
+					OutputTokens:    int(chunk.Usage.CompletionTokens),
 					CacheReadTokens: int(chunk.Usage.PromptTokensDetails.CachedTokens),
 				},
 			}
@@ -333,9 +337,10 @@ func (p *Provider) streamChat(ctx context.Context, params openaisdk.ChatCompleti
 		acc := toolCalls[idx]
 		if !json.Valid([]byte(acc.partialArgs)) {
 			p.health.RecordFailure()
+			err := sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "openai: tool call %q has invalid JSON arguments", acc.name)
 			ch <- provider.ChatEvent{
 				Type:  provider.EventTypeError,
-				Error: fmt.Sprintf("openai: tool call %q has invalid JSON arguments", acc.name),
+				Error: err.Error(),
 			}
 			return
 		}

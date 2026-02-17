@@ -256,47 +256,138 @@ func TestEnforcer_AuditEntryIDsAreUnique(t *testing.T) {
 	assert.NotEqual(t, entries[0].ID, entries[1].ID)
 }
 
-func TestEnforcer_DenyWhenAuditAppendFailsReturnsCapabilityDenied(t *testing.T) {
+func TestEnforcer_AuditFailure_DeniedStillDenies(t *testing.T) {
 	t.Parallel()
 
-	audit := &mockAuditStore{err: errors.New("audit backend unavailable")}
+	audit := &mockAuditStore{err: errors.New("database offline")}
 	enforcer := security.NewEnforcer(audit)
-	enforcer.RegisterPlugin("telegram", security.NewCapabilitySet(
-		"sessions.read",
-	), security.NewCapabilitySet())
+	enforcer.RegisterPlugin("test-plugin", security.NewCapabilitySet("read"), security.NewCapabilitySet())
 
+	// A denied check should still return the capability denied error, not an audit error.
 	err := enforcer.Check(context.Background(), security.CheckRequest{
-		Plugin:          "telegram",
-		Capability:      "exec.run",
-		WorkspaceID:     "ws-1",
-		WorkspaceAllow:  security.NewCapabilitySet("*"),
-		UserPermissions: security.NewCapabilitySet("*"),
+		Plugin:          "test-plugin",
+		Capability:      "write", // not in allow set
+		WorkspaceAllow:  security.NewCapabilitySet("write"),
+		UserPermissions: security.NewCapabilitySet("write"),
 	})
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied))
-	assert.Contains(t, err.Error(), "denied")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied),
+		"denied check should return capability denied error, not audit error")
 	assert.Empty(t, audit.snapshot())
 }
 
-func TestEnforcer_AllowWhenAuditAppendFailsReturnsStoreFailure(t *testing.T) {
+func TestEnforcer_AuditFailure_BestEffort(t *testing.T) {
 	t.Parallel()
 
-	audit := &mockAuditStore{err: errors.New("audit backend unavailable")}
-	enforcer := security.NewEnforcer(audit)
-	enforcer.RegisterPlugin("telegram", security.NewCapabilitySet(
-		"sessions.read",
-	), security.NewCapabilitySet())
+	// sigil-kqd.207: Test that audit store failures don't block operations.
+	// This is critical for availability — a failing audit system must not
+	// cause cascading failures in the authorization system.
+	tests := []struct {
+		name           string
+		auditErr       error
+		pluginAllow    []string
+		pluginDeny     []string
+		capability     string
+		workspaceAllow []string
+		userPerms      []string
+		expectAllowed  bool
+		expectReason   string
+	}{
+		{
+			name:           "allowed check succeeds despite audit failure",
+			auditErr:       errors.New("database offline"),
+			pluginAllow:    []string{"read"},
+			pluginDeny:     []string{},
+			capability:     "read",
+			workspaceAllow: []string{"read"},
+			userPerms:      []string{"read"},
+			expectAllowed:  true,
+		},
+		{
+			name:           "denied check still denies despite audit failure",
+			auditErr:       errors.New("audit store timeout"),
+			pluginAllow:    []string{"read"},
+			pluginDeny:     []string{},
+			capability:     "write",
+			workspaceAllow: []string{"write"},
+			userPerms:      []string{"write"},
+			expectAllowed:  false,
+			expectReason:   "plugin_allow_missing",
+		},
+		{
+			name:           "explicit deny still enforced despite audit failure",
+			auditErr:       errors.New("audit store unreachable"),
+			pluginAllow:    []string{"exec.*"},
+			pluginDeny:     []string{"exec.*"},
+			capability:     "exec.run",
+			workspaceAllow: []string{"exec.*"},
+			userPerms:      []string{"exec.*"},
+			expectAllowed:  false,
+			expectReason:   "plugin_deny_match",
+		},
+		{
+			name:           "workspace deny still enforced despite audit failure",
+			auditErr:       errors.New("audit disk full"),
+			pluginAllow:    []string{"file.read"},
+			pluginDeny:     []string{},
+			capability:     "file.read",
+			workspaceAllow: []string{"calendar.*"},
+			userPerms:      []string{"*"},
+			expectAllowed:  false,
+			expectReason:   "workspace_allow_missing",
+		},
+		{
+			name:           "user permission deny still enforced despite audit failure",
+			auditErr:       errors.New("audit connection refused"),
+			pluginAllow:    []string{"messages.send"},
+			pluginDeny:     []string{},
+			capability:     "messages.send",
+			workspaceAllow: []string{"*"},
+			userPerms:      []string{"messages.read"},
+			expectAllowed:  false,
+			expectReason:   "user_permission_missing",
+		},
+	}
 
-	err := enforcer.Check(context.Background(), security.CheckRequest{
-		Plugin:          "telegram",
-		Capability:      "sessions.read",
-		WorkspaceID:     "ws-1",
-		WorkspaceAllow:  security.NewCapabilitySet("*"),
-		UserPermissions: security.NewCapabilitySet("*"),
-	})
-	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeStoreDatabaseFailure))
-	assert.Empty(t, audit.snapshot())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			audit := &mockAuditStore{err: tt.auditErr}
+			enforcer := security.NewEnforcer(audit)
+			enforcer.RegisterPlugin("test-plugin",
+				security.NewCapabilitySet(tt.pluginAllow...),
+				security.NewCapabilitySet(tt.pluginDeny...))
+
+			err := enforcer.Check(context.Background(), security.CheckRequest{
+				Plugin:          "test-plugin",
+				Capability:      tt.capability,
+				WorkspaceID:     "ws-1",
+				WorkspaceAllow:  security.NewCapabilitySet(tt.workspaceAllow...),
+				UserPermissions: security.NewCapabilitySet(tt.userPerms...),
+			})
+
+			if tt.expectAllowed {
+				assert.NoError(t, err, "operation should succeed despite audit store failure")
+			} else {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied),
+					"should return capability denied error, not audit error")
+				if tt.expectReason != "" {
+					assert.Contains(t, err.Error(), tt.expectReason)
+				}
+			}
+
+			// Verify audit store received no entries (because append failed).
+			assert.Empty(t, audit.snapshot(),
+				"audit store should have no entries when append fails")
+
+			// Note: This test verifies best-effort audit behavior where:
+			// 1. Operations proceed despite audit failures (allowed checks succeed)
+			// 2. Denied checks still return denial errors (not audit errors)
+			// 3. Errors are not leaked to clients
+			// 4. Warning logs are emitted (verified by code inspection in enforcer.go:116-120, 145-149)
+			//    Log capture is not performed as it's not part of the codebase's test patterns.
+		})
+	}
 }
 
 // --- sigil-anm.11: Missing spec test cases ---
@@ -513,4 +604,66 @@ func TestEnforcer_IndependentAuditIDSequences(t *testing.T) {
 
 	// All IDs should be unique (no collision across enforcers)
 	assert.Len(t, ids, 6, "expected 6 unique audit IDs across two independent enforcers")
+}
+
+func TestCheckRequest_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     security.CheckRequest
+		wantErr bool
+	}{
+		{
+			name:    "valid request",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "tool:exec"},
+			wantErr: false,
+		},
+		{
+			name:    "empty plugin",
+			req:     security.CheckRequest{Plugin: "", Capability: "tool:exec"},
+			wantErr: true,
+		},
+		{
+			name:    "empty capability",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: ""},
+			wantErr: true,
+		},
+		{
+			name:    "both empty",
+			req:     security.CheckRequest{Plugin: "", Capability: ""},
+			wantErr: true,
+		},
+		{
+			name:    "valid glob pattern with wildcard",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "sessions.*"},
+			wantErr: false,
+		},
+		{
+			name:    "valid glob pattern with question mark",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "exec.?un"},
+			wantErr: false,
+		},
+		{
+			name:    "invalid glob pattern with unclosed bracket",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "exec.[run"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid glob pattern with unmatched bracket",
+			req:     security.CheckRequest{Plugin: "test-plugin", Capability: "tool:[abc"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityInvalidInput),
+					"expected CodeSecurityInvalidInput, got: %v", sigilerr.CodeOf(err))
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

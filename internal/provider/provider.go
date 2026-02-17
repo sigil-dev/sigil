@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Provider is the core interface for LLM providers.
@@ -26,8 +27,7 @@ type Provider interface {
 	// Chat sends a chat request and streams responses.
 	Chat(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error)
 
-	// Status returns detailed health and capability information about the provider.
-	// Includes health state, supported models, error details, and rate limit information.
+	// Status returns the provider's current availability and name.
 	Status(ctx context.Context) (ProviderStatus, error)
 
 	// Close cleans up provider resources.
@@ -100,6 +100,87 @@ type ChatEvent struct {
 	Error    string
 }
 
+// Validate checks that the ChatEvent's Type is consistent with its payload fields.
+// Returns an error if the Type field doesn't match the populated payload fields.
+// Empty payloads are allowed (e.g., EventTypeDone may have no payload).
+func (e ChatEvent) Validate() error {
+	switch e.Type {
+	case EventTypeTextDelta:
+		// TextDelta should have Text, but other fields should be empty
+		if e.ToolCall != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "text_delta event cannot have ToolCall payload")
+		}
+		if e.Usage != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "text_delta event cannot have Usage payload")
+		}
+		if e.Error != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "text_delta event cannot have Error payload")
+		}
+
+	case EventTypeToolCall:
+		// ToolCall should have ToolCall, but other fields should be empty
+		if e.ToolCall == nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "tool_call event must have ToolCall payload")
+		}
+		if e.Text != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "tool_call event cannot have Text payload")
+		}
+		if e.Usage != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "tool_call event cannot have Usage payload")
+		}
+		if e.Error != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "tool_call event cannot have Error payload")
+		}
+
+	case EventTypeUsage:
+		// Usage should have Usage, but other fields should be empty
+		if e.Usage == nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "usage event must have Usage payload")
+		}
+		if e.Text != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "usage event cannot have Text payload")
+		}
+		if e.ToolCall != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "usage event cannot have ToolCall payload")
+		}
+		if e.Error != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "usage event cannot have Error payload")
+		}
+
+	case EventTypeDone:
+		// Done may have Usage (final usage), but other fields should be empty
+		if e.Text != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "done event cannot have Text payload")
+		}
+		if e.ToolCall != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "done event cannot have ToolCall payload")
+		}
+		if e.Error != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "done event cannot have Error payload")
+		}
+
+	case EventTypeError:
+		// Error should have Error, but other fields should be empty
+		if e.Error == "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "error event must have Error payload")
+		}
+		if e.Text != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "error event cannot have Text payload")
+		}
+		if e.ToolCall != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "error event cannot have ToolCall payload")
+		}
+		if e.Usage != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "error event cannot have Usage payload")
+		}
+
+	default:
+		return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "unknown event type: "+string(e.Type))
+	}
+
+	return nil
+}
+
 // EventType defines the type of chat event.
 type EventType string
 
@@ -110,6 +191,31 @@ const (
 	EventTypeDone      EventType = "done"
 	EventTypeError     EventType = "error"
 )
+
+// NewTextDeltaEvent creates a ChatEvent for streaming text content.
+func NewTextDeltaEvent(text string) ChatEvent {
+	return ChatEvent{Type: EventTypeTextDelta, Text: text}
+}
+
+// NewToolCallEvent creates a ChatEvent for a tool invocation.
+func NewToolCallEvent(tc *ToolCall) ChatEvent {
+	return ChatEvent{Type: EventTypeToolCall, ToolCall: tc}
+}
+
+// NewUsageEvent creates a ChatEvent with token usage information.
+func NewUsageEvent(usage *Usage) ChatEvent {
+	return ChatEvent{Type: EventTypeUsage, Usage: usage}
+}
+
+// NewDoneEvent creates a ChatEvent signaling stream completion.
+func NewDoneEvent() ChatEvent {
+	return ChatEvent{Type: EventTypeDone}
+}
+
+// NewErrorEvent creates a ChatEvent for stream errors.
+func NewErrorEvent(msg string) ChatEvent {
+	return ChatEvent{Type: EventTypeError, Error: msg}
+}
 
 // ToolCall represents a tool invocation by the LLM.
 type ToolCall struct {
@@ -152,10 +258,17 @@ type ProviderStatus struct {
 }
 
 // HealthReporter is an optional interface that providers can implement to
-// expose circuit-breaker health signals. When a provider implements this
-// interface, the agent loop calls RecordFailure on pre-stream Chat() errors
-// so the router's failover chain can skip unhealthy providers. The existing
-// HealthTracker already implements cooldown-based recovery (circuit breaker
+// expose circuit-breaker health signals.
+//
+// Recording responsibilities are split by failure phase:
+//   - Pre-stream failures: the agent loop calls RecordFailure when Chat()
+//     returns an error (provider unreachable, auth failure, rate limit).
+//   - In-stream failures: providers call RecordFailure internally when the
+//     event stream encounters errors (malformed response, connection drop).
+//   - Success: providers call RecordSuccess internally after a complete,
+//     successful stream (agent loop never calls RecordSuccess).
+//
+// The HealthTracker implements cooldown-based recovery (circuit-breaker
 // half-open state), so providers become eligible for retry after the cooldown.
 type HealthReporter interface {
 	RecordFailure()

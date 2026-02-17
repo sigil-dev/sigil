@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Sigil Contributors
+
+[package]
+name = "sigil"
+version = "0.1.0"
+authors = ["Sigil Contributors"]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/sigil-dev/sigil"
+description = "Sigil Desktop App"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+thiserror = "2"
+ureq = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+# This feature is used for production builds or when `devPath` points to the filesystem
+# DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
