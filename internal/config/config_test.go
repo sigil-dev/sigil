@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/config"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +113,13 @@ func validConfig() *config.Config {
 		},
 		Storage: config.StorageConfig{
 			Backend: "sqlite",
+		},
+		Security: config.SecurityConfig{
+			Scanner: config.ScannerConfig{
+				Input:  "block",
+				Tool:   "flag",
+				Output: "redact",
+			},
 		},
 	}
 }
@@ -507,6 +515,48 @@ storage:
 	_, err = config.Load(cfgPath)
 	require.Error(t, err, "Load should fail with invalid config")
 	assert.Contains(t, err.Error(), "validating config")
+}
+
+func TestConfig_ScannerDefaults(t *testing.T) {
+	v := viper.New()
+	config.SetDefaults(v)
+
+	assert.Equal(t, "block", v.GetString("security.scanner.input"))
+	assert.Equal(t, "flag", v.GetString("security.scanner.tool"))
+	assert.Equal(t, "redact", v.GetString("security.scanner.output"))
+}
+
+func TestConfig_ScannerValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		tool    string
+		output  string
+		wantErr bool
+	}{
+		{"valid defaults", "block", "flag", "redact", false},
+		{"all block", "block", "block", "block", false},
+		{"invalid input mode", "invalid", "flag", "redact", true},
+		{"invalid tool mode", "block", "nope", "redact", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := viper.New()
+			config.SetDefaults(v)
+			v.Set("security.scanner.input", tt.input)
+			v.Set("security.scanner.tool", tt.tool)
+			v.Set("security.scanner.output", tt.output)
+
+			cfg, err := config.FromViper(v)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.input, cfg.Security.Scanner.Input)
+			}
+		})
+	}
 }
 
 func TestValidate_RateLimitConfig(t *testing.T) {

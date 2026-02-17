@@ -24,6 +24,7 @@ type Config struct {
 	Sessions   SessionsConfig             `mapstructure:"sessions"`
 	Storage    StorageConfig              `mapstructure:"storage"`
 	Workspaces map[string]WorkspaceConfig `mapstructure:"workspaces"`
+	Security   SecurityConfig             `mapstructure:"security"`
 }
 
 // AuthConfig controls REST API authentication.
@@ -114,6 +115,18 @@ type ToolsConfig struct {
 	Deny  []string `mapstructure:"deny"`
 }
 
+// SecurityConfig holds security subsystem settings.
+type SecurityConfig struct {
+	Scanner ScannerConfig `mapstructure:"scanner"`
+}
+
+// ScannerConfig controls per-hook scanner detection modes.
+type ScannerConfig struct {
+	Input  string `mapstructure:"input"`
+	Tool   string `mapstructure:"tool"`
+	Output string `mapstructure:"output"`
+}
+
 // SetDefaults applies Sigil's default configuration values to v.
 func SetDefaults(v *viper.Viper) {
 	v.SetDefault("networking.mode", "local")
@@ -127,6 +140,9 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("models.budgets.per_session_tokens", 100000)
 	v.SetDefault("models.budgets.per_hour_usd", 5.00)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
+	v.SetDefault("security.scanner.input", "block")
+	v.SetDefault("security.scanner.tool", "flag")
+	v.SetDefault("security.scanner.output", "redact")
 }
 
 // SetupEnv configures environment variable binding on v with prefix SIGIL_.
@@ -194,6 +210,7 @@ func (c *Config) Validate() []error {
 	errs = append(errs, c.validateStorage()...)
 	errs = append(errs, c.validateModels()...)
 	errs = append(errs, c.validateSessions()...)
+	errs = append(errs, c.validateSecurity()...)
 
 	return errs
 }
@@ -358,6 +375,22 @@ func (c *Config) validateSessions() []error {
 		))
 	}
 
+	return errs
+}
+
+func (c *Config) validateSecurity() []error {
+	var errs []error
+	validModes := map[string]bool{"block": true, "flag": true, "redact": true}
+
+	for _, pair := range []struct{ field, value string }{
+		{"security.scanner.input", c.Security.Scanner.Input},
+		{"security.scanner.tool", c.Security.Scanner.Tool},
+		{"security.scanner.output", c.Security.Scanner.Output},
+	} {
+		if err := validateStringInSet(pair.value, pair.field, validModes); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errs
 }
 
