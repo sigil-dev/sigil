@@ -74,6 +74,11 @@ type ScanContext struct {
 type ScanResult struct {
 	Threat  bool
 	Matches []Match
+	// Content holds the normalized content after Scan processing (NFKC +
+	// zero-width character stripping). Match.Location/Length are byte offsets
+	// into this string. Callers MUST use this for redaction to avoid offset
+	// misalignment when the original content contained Unicode evasion chars.
+	Content string
 }
 
 // Match describes a single pattern match.
@@ -158,7 +163,7 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 
 	content = normalize(content)
 
-	result := ScanResult{}
+	result := ScanResult{Content: content}
 
 	for _, rule := range s.rules {
 		if rule.Stage != opts.Stage {
@@ -226,92 +231,89 @@ func ToolRules() []Rule {
 	}
 }
 
-// ToolSecretRules returns secret detection patterns for tool output stage.
-func ToolSecretRules() []Rule {
-	rules := OutputRules()
-	for i := range rules {
-		rules[i].Stage = StageTool
-	}
-	return rules
-}
-
-// OutputRules returns secret/credential detection patterns.
-func OutputRules() []Rule {
+// secretRules returns secret/credential detection patterns for the given stage.
+func secretRules(stage Stage) []Rule {
 	return []Rule{
 		{
 			Name:     "aws_access_key",
 			Pattern:  regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "openai_api_key",
 			Pattern:  regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "openai_legacy_key",
 			Pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "github_pat",
 			Pattern:  regexp.MustCompile(`ghp_[A-Za-z0-9]{36}`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "github_fine_grained_pat",
 			Pattern:  regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "slack_token",
 			Pattern:  regexp.MustCompile(`xox[bpas]-[A-Za-z0-9-]+`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "anthropic_api_key",
 			Pattern:  regexp.MustCompile(`sk-ant-api\d{2}-[A-Za-z0-9_-]{20,}`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "google_api_key",
 			Pattern:  regexp.MustCompile(`AIza[0-9A-Za-z_-]{35}`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "bearer_token",
 			Pattern:  regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9_\-.]{20,}`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "pem_private_key",
 			Pattern:  regexp.MustCompile(`-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "database_connection_string",
 			Pattern:  regexp.MustCompile(`(?i)(postgres|mysql|mongodb|redis)://[^\s]+:[^\s]+@[^\s]+`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "keyring_uri",
 			Pattern:  regexp.MustCompile(`keyring://[^\s]+`),
-			Stage:    StageOutput,
+			Stage:    stage,
 			Severity: SeverityMedium,
 		},
 	}
 }
+
+// OutputRules returns secret/credential detection patterns for the output stage.
+func OutputRules() []Rule { return secretRules(StageOutput) }
+
+// ToolSecretRules returns secret/credential detection patterns for the tool stage.
+func ToolSecretRules() []Rule { return secretRules(StageTool) }
 
 // Mode defines how the scanner result is handled.
 type Mode string
@@ -359,7 +361,15 @@ func ApplyMode(mode Mode, content string, result ScanResult) (string, error) {
 	case ModeFlag:
 		return content, nil
 	case ModeRedact:
-		return redact(content, result.Matches), nil
+		// Use the normalized content from the scan result when available.
+		// Match offsets are computed against the normalized string; applying
+		// them to the original un-normalized content causes incorrect redaction
+		// when zero-width or NFKC-affected characters shift byte positions.
+		redactContent := content
+		if result.Content != "" {
+			redactContent = result.Content
+		}
+		return redact(redactContent, result.Matches), nil
 	default:
 		return "", sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "unknown scanner mode %q", mode)
 	}

@@ -349,7 +349,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 				)
 			}
 		}
-		content, modeErr := scanner.ApplyMode(l.scannerModes.Input, msg.Content, scanResult)
+		content, modeErr := scanner.ApplyMode(l.scannerModes.Input, scanResult.Content, scanResult)
 		if modeErr != nil {
 			return nil, nil, modeErr
 		}
@@ -685,7 +685,7 @@ func (l *Loop) runToolLoop(
 					}
 				}
 				var modeErr error
-				resultContent, modeErr = scanner.ApplyMode(l.scannerModes.Tool, resultContent, scanResult)
+				resultContent, modeErr = scanner.ApplyMode(l.scannerModes.Tool, scanResult.Content, scanResult)
 				if modeErr != nil {
 					return "", nil, modeErr
 				}
@@ -760,7 +760,7 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 			)
 		}
 		var modeErr error
-		text, modeErr = scanner.ApplyMode(l.scannerModes.Output, text, scanResult)
+		text, modeErr = scanner.ApplyMode(l.scannerModes.Output, scanResult.Content, scanResult)
 		if modeErr != nil {
 			return nil, modeErr
 		}

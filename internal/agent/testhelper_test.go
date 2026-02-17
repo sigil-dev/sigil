@@ -928,3 +928,38 @@ func (p *mockProviderCustomResponse) Close() error { return nil }
 func newMockProviderRouterWithResponse(response string) *mockProviderRouter {
 	return &mockProviderRouter{provider: &mockProviderCustomResponse{response: response}}
 }
+
+// ---------------------------------------------------------------------------
+// Error scanner mock
+// ---------------------------------------------------------------------------
+
+// mockErrorScanner always returns an error from Scan, simulating an internal
+// scanner failure (e.g. OOM, regex engine panic, or other infrastructure fault).
+type mockErrorScanner struct{}
+
+func (s *mockErrorScanner) Scan(_ context.Context, _ string, _ scanner.ScanContext) (scanner.ScanResult, error) {
+	return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
+}
+
+// mockOutputErrorScanner returns an error only when scanning the output stage,
+// allowing input and tool scans to pass through cleanly.
+type mockOutputErrorScanner struct{}
+
+func (s *mockOutputErrorScanner) Scan(_ context.Context, _ string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage == scanner.StageOutput {
+		return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
+	}
+	return scanner.ScanResult{}, nil
+}
+
+// mockToolErrorScanner returns an error only when scanning the tool stage,
+// allowing input scans to pass through cleanly so ProcessMessage reaches
+// the tool execution path.
+type mockToolErrorScanner struct{}
+
+func (s *mockToolErrorScanner) Scan(_ context.Context, _ string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage == scanner.StageTool {
+		return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
+	}
+	return scanner.ScanResult{}, nil
+}

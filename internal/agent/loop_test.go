@@ -2732,3 +2732,110 @@ func TestAgentLoop_NoScannerRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopInvalidInput))
 }
+
+func TestAgentLoop_InputScannerErrorPropagates(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		Enforcer:       newMockEnforcer(),
+		AuditStore:     newMockAuditStore(),
+		Scanner:        &mockErrorScanner{},
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"expected CodeSecurityScannerFailure, got: %v", err)
+}
+
+func TestAgentLoop_OutputScannerErrorPropagates(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// mockOutputErrorScanner passes input/tool scans but fails on output scan,
+	// so ProcessMessage reaches the output scanning stage before surfacing the error.
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		Enforcer:       newMockEnforcer(),
+		AuditStore:     newMockAuditStore(),
+		Scanner:        &mockOutputErrorScanner{},
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"expected CodeSecurityScannerFailure, got: %v", err)
+}
+
+func TestAgentLoop_ToolScannerErrorPropagates(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-1",
+			Name:      "get_weather",
+			Arguments: `{"city":"London"}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny, 22C"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// mockToolErrorScanner passes input scans but errors on tool stage,
+	// so ProcessMessage reaches the tool scanning path before surfacing the error.
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
+		ToolDispatcher: dispatcher,
+		Scanner:        &mockToolErrorScanner{},
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather in London?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"expected CodeSecurityScannerFailure, got: %v", err)
+}
