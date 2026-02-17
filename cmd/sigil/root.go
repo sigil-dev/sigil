@@ -75,6 +75,13 @@ func initViper(cmd *cobra.Command) error {
 			if !errors.As(err, &notFound) {
 				return sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading config: %w", err)
 			}
+			// No config found anywhere — bootstrap a default to ~/.config/sigil/.
+			if path := config.BootstrapConfig(); path != "" {
+				v.SetConfigFile(path)
+				if err := v.ReadInConfig(); err != nil {
+					return sigilerr.Errorf(sigilerr.CodeConfigLoadReadFailure, "reading bootstrapped config: %w", err)
+				}
+			}
 		}
 	}
 
