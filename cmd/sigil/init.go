@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +16,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sigil-dev/sigil/internal/channel/telegram"
+	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/secrets"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/cobra"
@@ -26,14 +27,14 @@ import (
 // Exposed as a variable so tests can replace it.
 var initHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
-// ProviderType represents a supported LLM provider.
-type ProviderType string
+// ProviderType aliases provider.ProviderName for use in the init wizard.
+type ProviderType = provider.ProviderName
 
 const (
-	ProviderAnthropic  ProviderType = "anthropic"
-	ProviderOpenAI     ProviderType = "openai"
-	ProviderGoogle     ProviderType = "google"
-	ProviderOpenRouter ProviderType = "openrouter"
+	ProviderAnthropic  = provider.ProviderAnthropic
+	ProviderOpenAI     = provider.ProviderOpenAI
+	ProviderGoogle     = provider.ProviderGoogle
+	ProviderOpenRouter = provider.ProviderOpenRouter
 )
 
 // ChannelType represents a supported messaging channel.
@@ -110,6 +111,8 @@ type initModel struct {
 	configPath     string
 	secretStore    secrets.Store
 	errFinal       error
+	skipChannel    bool
+	forceOverwrite bool
 }
 
 func newInitModel(store secrets.Store) initModel {
@@ -258,6 +261,11 @@ func (m initModel) handleChannelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.channelInput.SetValue("")
 		m.channelInput.Focus()
 		return m, textinput.Blink
+	case "s":
+		// Skip channel — proceed directly to config write.
+		m.result.Channel = ""
+		m.result.ChannelToken = ""
+		return m, writeConfigCmd(m.result, m.secretStore, m.forceOverwrite)
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	}
@@ -290,10 +298,15 @@ func (m initModel) handleChannelTokenInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 func (m initModel) handleValidationSuccess(msg validationSuccessMsg) (tea.Model, tea.Cmd) {
 	switch msg.step {
 	case stepValidateKey:
+		if m.skipChannel {
+			// --skip-channel flag or equivalent: go straight to config write.
+			m.result.Channel = ""
+			m.result.ChannelToken = ""
+			return m, writeConfigCmd(m.result, m.secretStore, m.forceOverwrite)
+		}
 		m.step = stepChannel
 	case stepValidateChan:
-		// Write config
-		return m, writeConfigCmd(m.result, m.secretStore)
+		return m, writeConfigCmd(m.result, m.secretStore, m.forceOverwrite)
 	}
 	return m, nil
 }
@@ -349,7 +362,7 @@ func (m initModel) View() string {
 				b.WriteString(dimStyle.Render("    "+string(ch)) + "\n")
 			}
 		}
-		b.WriteString("\n" + dimStyle.Render("↑/↓ to navigate  enter to select  q to quit"))
+		b.WriteString("\n" + dimStyle.Render("↑/↓ to navigate  enter to select  s to skip  q to quit"))
 
 	case stepChannelToken:
 		b.WriteString(promptStyle.Render("Step 2/2: Telegram bot token") + "\n\n")
@@ -379,9 +392,9 @@ func (m initModel) View() string {
 
 // --- tea.Cmd factories ---
 
-func validateProviderKeyCmd(provider ProviderType, key string) tea.Cmd {
+func validateProviderKeyCmd(p ProviderType, key string) tea.Cmd {
 	return func() tea.Msg {
-		if err := ValidateProviderKey(context.Background(), initHTTPClient, provider, key); err != nil {
+		if err := provider.ValidateKey(context.Background(), initHTTPClient, p, key); err != nil {
 			return validationErrorMsg{step: stepValidateKey, err: err}
 		}
 		return validationSuccessMsg{step: stepValidateKey}
@@ -390,106 +403,21 @@ func validateProviderKeyCmd(provider ProviderType, key string) tea.Cmd {
 
 func validateTelegramTokenCmd(token string) tea.Cmd {
 	return func() tea.Msg {
-		if err := ValidateTelegramToken(context.Background(), initHTTPClient, token); err != nil {
+		if err := telegram.ValidateToken(context.Background(), initHTTPClient, token); err != nil {
 			return validationErrorMsg{step: stepValidateChan, err: err}
 		}
 		return validationSuccessMsg{step: stepValidateChan}
 	}
 }
 
-func writeConfigCmd(result initResult, store secrets.Store) tea.Cmd {
+func writeConfigCmd(result initResult, store secrets.Store, forceOverwrite bool) tea.Cmd {
 	return func() tea.Msg {
-		path, err := storeSecretAndWriteConfig(result, store)
+		path, err := storeSecretAndWriteConfig(result, store, forceOverwrite)
 		if err != nil {
 			return err
 		}
 		return configWrittenMsg{path: path}
 	}
-}
-
-// --- Validation functions (exported for tests) ---
-
-// ValidateProviderKey makes a lightweight HTTP call to the provider's models
-// endpoint to confirm the API key is valid.
-func ValidateProviderKey(ctx context.Context, client *http.Client, provider ProviderType, key string) error {
-	var (
-		url     string
-		headers map[string]string
-	)
-
-	switch provider {
-	case ProviderAnthropic:
-		url = "https://api.anthropic.com/v1/models"
-		headers = map[string]string{
-			"x-api-key":         key,
-			"anthropic-version": "2023-06-01",
-		}
-	case ProviderOpenAI:
-		url = "https://api.openai.com/v1/models"
-		headers = map[string]string{
-			"Authorization": "Bearer " + key,
-		}
-	case ProviderGoogle:
-		// Google's Generative Language API authenticates via query parameter.
-		// This is Google's standard approach; there is no header-based alternative.
-		url = "https://generativelanguage.googleapis.com/v1/models?key=" + key
-	case ProviderOpenRouter:
-		url = "https://openrouter.ai/api/v1/models"
-		headers = map[string]string{
-			"Authorization": "Bearer " + key,
-		}
-	default:
-		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "unknown provider: %s", provider)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "building validation request: %w", err)
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "validating %s key: %w", provider, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "invalid %s API key (HTTP %d)", provider, resp.StatusCode)
-	}
-	if resp.StatusCode >= 400 {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "%s validation failed (HTTP %d)", provider, resp.StatusCode)
-	}
-
-	return nil
-}
-
-// ValidateTelegramToken calls Telegram's getMe endpoint to verify the bot token.
-func ValidateTelegramToken(ctx context.Context, client *http.Client, token string) error {
-	url := "https://api.telegram.org/bot" + token + "/getMe"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "building Telegram validation request: %w", err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "validating Telegram token: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "invalid Telegram bot token (HTTP %d)", resp.StatusCode)
-	}
-	if resp.StatusCode >= 400 {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "Telegram validation failed (HTTP %d)", resp.StatusCode)
-	}
-
-	return nil
 }
 
 // --- Config generation (exported for tests) ---
@@ -499,7 +427,6 @@ func ValidateTelegramToken(ctx context.Context, client *http.Client, token strin
 // separately via storeSecretAndWriteConfig.
 func GenerateConfigYAML(result initResult) string {
 	providerKey := fmt.Sprintf("keyring://sigil/%s-api-key", result.Provider)
-	channelKey := fmt.Sprintf("keyring://sigil/%s-bot-token", result.Channel)
 
 	// Default model per provider.
 	defaultModel := defaultModelForProvider(result.Provider)
@@ -540,16 +467,25 @@ func GenerateConfigYAML(result initResult) string {
 	sb.WriteString("  personal:\n")
 	sb.WriteString("    description: \"Default personal workspace\"\n")
 	sb.WriteString("    members: []\n")
-	sb.WriteString("    bindings:\n")
-	sb.WriteString(fmt.Sprintf("      - channel: \"%s\"\n", result.Channel))
-	sb.WriteString("        channel_id: \"default\"\n")
-	sb.WriteString("    tools:\n")
-	sb.WriteString("      allow: [\"*\"]\n")
-	sb.WriteString("    skills: []\n\n")
 
-	// Channel plugin configuration hint (comment block).
-	sb.WriteString("# Channel plugin configuration\n")
-	sb.WriteString(fmt.Sprintf("# %s_bot_token: \"%s\"\n", result.Channel, channelKey))
+	// Only include channel binding if a channel was configured.
+	if result.Channel != "" {
+		channelKey := fmt.Sprintf("keyring://sigil/%s-bot-token", result.Channel)
+		sb.WriteString("    bindings:\n")
+		sb.WriteString(fmt.Sprintf("      - channel: \"%s\"\n", result.Channel))
+		sb.WriteString("        channel_id: \"default\"\n")
+		sb.WriteString("    tools:\n")
+		sb.WriteString("      allow: [\"*\"]\n")
+		sb.WriteString("    skills: []\n\n")
+		// Channel plugin configuration hint (comment block).
+		sb.WriteString("# Channel plugin configuration\n")
+		sb.WriteString(fmt.Sprintf("# %s_bot_token: \"%s\"\n", result.Channel, channelKey))
+	} else {
+		sb.WriteString("    bindings: []\n")
+		sb.WriteString("    tools:\n")
+		sb.WriteString("      allow: [\"*\"]\n")
+		sb.WriteString("    skills: []\n")
+	}
 
 	return sb.String()
 }
@@ -572,26 +508,41 @@ func defaultModelForProvider(p ProviderType) string {
 
 // storeSecretAndWriteConfig saves secrets to the OS keyring and writes the
 // config YAML to the default config path.
-func storeSecretAndWriteConfig(result initResult, store secrets.Store) (string, error) {
+//
+// When forceOverwrite is false and the config file already exists, an error is
+// returned asking the user to pass --force. When forceOverwrite is true the
+// entire config is overwritten (full re-init). A smarter merge that preserves
+// non-secret sections is left as a future enhancement.
+func storeSecretAndWriteConfig(result initResult, store secrets.Store, forceOverwrite bool) (string, error) {
 	// Store provider API key.
 	providerKeyName := string(result.Provider) + "-api-key"
 	if err := store.Store("sigil", providerKeyName, result.APIKey); err != nil {
 		return "", sigilerr.Errorf(sigilerr.CodeSecretStoreFailure, "storing %s API key: %w", result.Provider, err)
 	}
 
-	// Store channel token.
+	// Store channel token (skip when channel was not configured).
 	// NOTE: If config write fails below, secrets already stored in keyring are
 	// not rolled back. This is acceptable — orphaned keyring entries are harmless
 	// and will be overwritten on a successful re-run.
-	chanKeyName := string(result.Channel) + "-bot-token"
-	if err := store.Store("sigil", chanKeyName, result.ChannelToken); err != nil {
-		return "", sigilerr.Errorf(sigilerr.CodeSecretStoreFailure, "storing %s bot token: %w", result.Channel, err)
+	if result.ChannelToken != "" {
+		chanKeyName := string(result.Channel) + "-bot-token"
+		if err := store.Store("sigil", chanKeyName, result.ChannelToken); err != nil {
+			return "", sigilerr.Errorf(sigilerr.CodeSecretStoreFailure, "storing %s bot token: %w", result.Channel, err)
+		}
 	}
 
 	// Write config file.
 	cfgPath, err := configPathForWrite()
 	if err != nil {
 		return "", err
+	}
+
+	// Check for existing config unless --force is set.
+	if !forceOverwrite {
+		if _, statErr := os.Stat(cfgPath); statErr == nil {
+			return "", sigilerr.Errorf(sigilerr.CodeConfigAlreadyExists,
+				"config file already exists at %s; use --force to overwrite", cfgPath)
+		}
 	}
 
 	dir := filepath.Dir(cfgPath)
@@ -622,7 +573,7 @@ func defaultConfigPathForWrite() (string, error) {
 // --- Cobra command ---
 
 func newInitCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Interactive setup wizard for Sigil",
 		Long: `Run an interactive TUI wizard that walks you through:
@@ -638,6 +589,11 @@ After completion, run:
   sigil doctor   — verify your setup`,
 		RunE: runInit,
 	}
+
+	cmd.Flags().Bool("skip-channel", false, "Skip the messaging channel step (web UI only)")
+	cmd.Flags().Bool("force", false, "Overwrite existing config file")
+
+	return cmd
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
@@ -650,8 +606,13 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "sigil init: not an interactive terminal")
 	}
 
+	skipChannel, _ := cmd.Flags().GetBool("skip-channel")
+	forceOverwrite, _ := cmd.Flags().GetBool("force")
+
 	store := secrets.NewKeyringStore()
 	m := newInitModel(store)
+	m.skipChannel = skipChannel
+	m.forceOverwrite = forceOverwrite
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := p.Run()

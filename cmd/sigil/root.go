@@ -41,6 +41,7 @@ func NewRootCmd() *cobra.Command {
 		newSessionCmd(),
 		newChatCmd(),
 		newDoctorCmd(),
+		newSecretCmd(),
 	)
 
 	return root

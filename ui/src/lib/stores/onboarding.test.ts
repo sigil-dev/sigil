@@ -206,13 +206,13 @@ describe("onboarding store", () => {
       expect(result.message).toContain("too short");
     });
 
-    it("validates correct anthropic key format with gateway check", async () => {
-      const mockGet = vi.mocked(api.GET);
-      mockGet.mockResolvedValue({
-        data: { status: "ok" },
+    it("validates correct anthropic key via backend", async () => {
+      const mockPost = vi.mocked(api.POST);
+      mockPost.mockResolvedValue({
+        data: { status: "ok", provider: "anthropic" },
         error: undefined,
         response: new Response(),
-      } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never);
+      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
 
       const result = await validateProviderKey({
         type: "anthropic",
@@ -220,11 +220,32 @@ describe("onboarding store", () => {
         label: "test",
       });
       expect(result.valid).toBe(true);
+      expect(result.message).toContain("validated and saved");
+      expect(mockPost).toHaveBeenCalledWith("/api/v1/config/providers", {
+        body: { type: "anthropic", api_key: "sk-ant-test-key-12345" },
+      });
+    });
+
+    it("returns backend error detail on invalid key", async () => {
+      const mockPost = vi.mocked(api.POST);
+      mockPost.mockResolvedValue({
+        data: undefined,
+        error: { detail: "invalid anthropic API key" },
+        response: new Response(null, { status: 400 }),
+      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
+
+      const result = await validateProviderKey({
+        type: "anthropic",
+        apiKey: "sk-ant-test-key-12345",
+        label: "test",
+      });
+      expect(result.valid).toBe(false);
+      expect(result.message).toContain("invalid anthropic API key");
     });
 
     it("fails when gateway unreachable", async () => {
-      const mockGet = vi.mocked(api.GET);
-      mockGet.mockRejectedValue(new TypeError("fetch failed"));
+      const mockPost = vi.mocked(api.POST);
+      mockPost.mockRejectedValue(new TypeError("fetch failed"));
 
       const result = await validateProviderKey({
         type: "anthropic",
@@ -257,13 +278,13 @@ describe("onboarding store", () => {
       expect(result.message).toContain("Invalid Telegram");
     });
 
-    it("validates correct telegram token format with gateway check", async () => {
-      const mockGet = vi.mocked(api.GET);
-      mockGet.mockResolvedValue({
-        data: { status: "ok" },
+    it("validates correct telegram token via backend", async () => {
+      const mockPost = vi.mocked(api.POST);
+      mockPost.mockResolvedValue({
+        data: { status: "ok", channel: "telegram" },
         error: undefined,
         response: new Response(),
-      } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never);
+      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
 
       const result = await validateChannelToken({
         type: "telegram",
@@ -271,6 +292,10 @@ describe("onboarding store", () => {
         label: "test",
       });
       expect(result.valid).toBe(true);
+      expect(result.message).toContain("validated and saved");
+      expect(mockPost).toHaveBeenCalledWith("/api/v1/config/channels", {
+        body: { type: "telegram", bot_token: "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ_abcdefgh" },
+      });
     });
   });
 
@@ -364,12 +389,12 @@ describe("onboarding store", () => {
     });
 
     it("validateProvider sets loading state", async () => {
-      const mockGet = vi.mocked(api.GET);
-      mockGet.mockResolvedValue({
-        data: { status: "ok" },
+      const mockPost = vi.mocked(api.POST);
+      mockPost.mockResolvedValue({
+        data: { status: "ok", provider: "anthropic" },
         error: undefined,
         response: new Response(),
-      } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never);
+      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
 
       store.providerType = "anthropic";
       store.providerApiKey = "sk-ant-test-key-12345";
@@ -392,12 +417,12 @@ describe("onboarding store", () => {
     });
 
     it("validateChannel sets loading state", async () => {
-      const mockGet = vi.mocked(api.GET);
-      mockGet.mockResolvedValue({
-        data: { status: "ok" },
+      const mockPost = vi.mocked(api.POST);
+      mockPost.mockResolvedValue({
+        data: { status: "ok", channel: "telegram" },
         error: undefined,
         response: new Response(),
-      } as ReturnType<typeof api.GET> extends Promise<infer R> ? R : never);
+      } as ReturnType<typeof api.POST> extends Promise<infer R> ? R : never);
 
       store.channelBotToken = "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ_abcdefgh";
 

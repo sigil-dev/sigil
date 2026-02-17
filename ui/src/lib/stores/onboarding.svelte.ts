@@ -28,7 +28,7 @@ export const STEP_LABELS: Record<OnboardingStep, string> = {
 const ONBOARDING_COMPLETE_KEY = "sigil:onboarding:complete";
 
 /** Supported provider types */
-export type ProviderType = "anthropic" | "openai" | "google";
+export type ProviderType = "anthropic" | "openai" | "google" | "openrouter";
 
 /** Provider configuration for the wizard */
 export interface ProviderConfig {
@@ -105,14 +105,14 @@ export async function detectFirstRun(): Promise<boolean> {
 }
 
 /**
- * Validate a provider API key by attempting a lightweight API call.
- * Since there's no dedicated provider config endpoint yet, we validate
- * the key format and check gateway connectivity.
+ * Validate a provider API key and persist it via the backend.
+ * Client-side format checks run first as a quick gate, then the backend
+ * validates against the provider API and stores the key in the OS keyring.
  */
 export async function validateProviderKey(config: ProviderConfig): Promise<ValidationResult> {
   const { type, apiKey } = config;
 
-  // Basic format validation
+  // Basic format validation (quick client-side gate)
   if (!apiKey.trim()) {
     return { valid: false, message: "API key is required" };
   }
@@ -136,23 +136,28 @@ export async function validateProviderKey(config: ProviderConfig): Promise<Valid
       break;
   }
 
-  // Verify gateway connectivity
+  // Validate and persist via backend
   try {
-    const { error: err } = await api.GET("/api/v1/status");
+    const { data, error: err } = await api.POST("/api/v1/config/providers", {
+      body: { type, api_key: apiKey },
+    });
     if (err) {
-      return { valid: false, message: "Cannot reach gateway — is it running?" };
+      const detail = (err as { detail?: string })?.detail ?? "Validation failed";
+      return { valid: false, message: detail };
     }
-    return { valid: true, message: "API key format validated and gateway is reachable" };
+    return { valid: true, message: `${data?.provider ?? type} API key validated and saved` };
   } catch {
     return { valid: false, message: "Cannot reach gateway — is it running?" };
   }
 }
 
 /**
- * Validate a Telegram bot token format and check gateway connectivity.
+ * Validate a Telegram bot token and persist it via the backend.
+ * Client-side format checks run first, then the backend validates
+ * against the Telegram API and stores the token in the OS keyring.
  */
 export async function validateChannelToken(config: ChannelConfig): Promise<ValidationResult> {
-  const { botToken } = config;
+  const { type, botToken } = config;
 
   if (!botToken.trim()) {
     return { valid: false, message: "Bot token is required" };
@@ -167,13 +172,16 @@ export async function validateChannelToken(config: ChannelConfig): Promise<Valid
     };
   }
 
-  // Verify gateway connectivity
+  // Validate and persist via backend
   try {
-    const { error: err } = await api.GET("/api/v1/status");
+    const { data, error: err } = await api.POST("/api/v1/config/channels", {
+      body: { type, bot_token: botToken },
+    });
     if (err) {
-      return { valid: false, message: "Cannot reach gateway — is it running?" };
+      const detail = (err as { detail?: string })?.detail ?? "Validation failed";
+      return { valid: false, message: detail };
     }
-    return { valid: true, message: "Token format validated and gateway is reachable" };
+    return { valid: true, message: `${data?.channel ?? type} bot token validated and saved` };
   } catch {
     return { valid: false, message: "Cannot reach gateway — is it running?" };
   }

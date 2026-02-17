@@ -4,10 +4,8 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,123 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// --- Provider key validation tests ---
-
-func TestValidateProviderKey_Anthropic_Success(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/v1/models", r.URL.Path)
-		assert.Equal(t, "test-api-key", r.Header.Get("x-api-key"))
-		assert.Equal(t, "2023-06-01", r.Header.Get("anthropic-version"))
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{}})
-	}))
-	defer srv.Close()
-
-	client := srv.Client()
-	// Patch the URL to use the test server.
-	oldClient := initHTTPClient
-	initHTTPClient = client
-	defer func() { initHTTPClient = oldClient }()
-
-	// We need to redirect to the test server, so we use a wrapper.
-	err := validateProviderKeyWithURL(context.Background(), client, ProviderAnthropic, "test-api-key", srv.URL+"/v1/models", nil)
-	require.NoError(t, err)
-}
-
-func TestValidateProviderKey_InvalidKey_ReturnsError(t *testing.T) {
-	tests := []struct {
-		name       string
-		provider   ProviderType
-		statusCode int
-		wantCode   sigilerr.Code
-	}{
-		{
-			name:       "anthropic 401",
-			provider:   ProviderAnthropic,
-			statusCode: http.StatusUnauthorized,
-			wantCode:   sigilerr.CodeCLIInputInvalid,
-		},
-		{
-			name:       "openai 403",
-			provider:   ProviderOpenAI,
-			statusCode: http.StatusForbidden,
-			wantCode:   sigilerr.CodeCLIInputInvalid,
-		},
-		{
-			name:       "google 401",
-			provider:   ProviderGoogle,
-			statusCode: http.StatusUnauthorized,
-			wantCode:   sigilerr.CodeCLIInputInvalid,
-		},
-		{
-			name:       "openrouter 500",
-			provider:   ProviderOpenRouter,
-			statusCode: http.StatusInternalServerError,
-			wantCode:   sigilerr.CodeCLIRequestFailure,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tt.statusCode)
-			}))
-			defer srv.Close()
-
-			err := validateProviderKeyWithURL(context.Background(), srv.Client(), tt.provider, "bad-key", srv.URL+"/v1/models", nil)
-			require.Error(t, err)
-			assert.True(t, sigilerr.HasCode(err, tt.wantCode),
-				"expected %s, got %s", tt.wantCode, sigilerr.CodeOf(err))
-		})
-	}
-}
-
-func TestValidateProviderKey_UnknownProvider(t *testing.T) {
-	err := validateProviderKeyWithURL(context.Background(), http.DefaultClient, "unknown", "key", "", nil)
-	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeCLIInputInvalid))
-}
-
-// --- Telegram token validation tests ---
-
-func TestValidateTelegramToken_Success(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Contains(t, r.URL.Path, "/bottest-token/getMe")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"id": 123}})
-	}))
-	defer srv.Close()
-
-	err := validateTelegramTokenWithURL(context.Background(), srv.Client(), "test-token", srv.URL+"/bottest-token/getMe")
-	require.NoError(t, err)
-}
-
-func TestValidateTelegramToken_InvalidToken(t *testing.T) {
-	tests := []struct {
-		name       string
-		statusCode int
-		wantCode   sigilerr.Code
-	}{
-		{"401 unauthorized", http.StatusUnauthorized, sigilerr.CodeCLIInputInvalid},
-		{"403 forbidden", http.StatusForbidden, sigilerr.CodeCLIInputInvalid},
-		{"500 server error", http.StatusInternalServerError, sigilerr.CodeCLIRequestFailure},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tt.statusCode)
-			}))
-			defer srv.Close()
-
-			err := validateTelegramTokenWithURL(context.Background(), srv.Client(), "bad-token", srv.URL+"/botbad-token/getMe")
-			require.Error(t, err)
-			assert.True(t, sigilerr.HasCode(err, tt.wantCode),
-				"expected %s, got %s", tt.wantCode, sigilerr.CodeOf(err))
-		})
-	}
-}
 
 // --- Config generation tests ---
 
@@ -420,73 +301,142 @@ func TestGenerateConfigYAML_ContainsRequiredSections(t *testing.T) {
 	}
 }
 
-// --- Helpers for testable validation (URL-parameterized versions) ---
+// --- Channel skip tests ---
 
-// validateProviderKeyWithURL is a testable version of ValidateProviderKey that
-// accepts an explicit URL. When url is non-empty it overrides the provider default.
-func validateProviderKeyWithURL(ctx context.Context, client *http.Client, provider ProviderType, key, url string, headers map[string]string) error {
-	if provider == "" || provider == "unknown" {
-		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "unknown provider: %s", provider)
-	}
+func TestInitModel_ChannelSkip_SKeySkipsChannel(t *testing.T) {
+	m := newInitModel(nil)
+	m.step = stepChannel
+	m.result.Provider = ProviderAnthropic
 
-	if url == "" {
-		// Fall through to the real endpoint (only in integration tests).
-		return ValidateProviderKey(ctx, client, provider, key)
-	}
-
-	// Build a synthetic provider with the given URL.
-	if headers == nil {
-		headers = make(map[string]string)
-	}
-	switch provider {
-	case ProviderAnthropic:
-		headers["x-api-key"] = key
-		headers["anthropic-version"] = "2023-06-01"
-	case ProviderOpenAI, ProviderOpenRouter:
-		headers["Authorization"] = "Bearer " + key
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "building request: %w", err)
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "invalid %s API key (HTTP %d)", provider, resp.StatusCode)
-	}
-	if resp.StatusCode >= 400 {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "validation failed (HTTP %d)", resp.StatusCode)
-	}
-	return nil
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	result := m2.(initModel)
+	// Channel and ChannelToken should be empty.
+	assert.Empty(t, result.result.Channel)
+	assert.Empty(t, result.result.ChannelToken)
+	// A command should be returned (writeConfigCmd).
+	assert.NotNil(t, cmd)
 }
 
-// validateTelegramTokenWithURL is a testable version that uses the given URL directly.
-func validateTelegramTokenWithURL(ctx context.Context, client *http.Client, token, url string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "building Telegram request: %w", err)
-	}
+func TestInitModel_SkipChannelFlag_SkipsAfterProviderValidation(t *testing.T) {
+	m := newInitModel(nil)
+	m.step = stepValidateKey
+	m.result.Provider = ProviderAnthropic
+	m.skipChannel = true
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "Telegram request failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return sigilerr.Errorf(sigilerr.CodeCLIInputInvalid, "invalid Telegram bot token (HTTP %d)", resp.StatusCode)
-	}
-	if resp.StatusCode >= 400 {
-		return sigilerr.Errorf(sigilerr.CodeCLIRequestFailure, "Telegram validation failed (HTTP %d)", resp.StatusCode)
-	}
-	return nil
+	m2, cmd := m.Update(validationSuccessMsg{step: stepValidateKey})
+	result := m2.(initModel)
+	// Channel should be empty (skipped).
+	assert.Empty(t, result.result.Channel)
+	assert.Empty(t, result.result.ChannelToken)
+	// Should produce a write command, not transition to stepChannel.
+	assert.NotNil(t, cmd)
+	assert.NotEqual(t, stepChannel, result.step)
 }
+
+func TestInitModel_NoSkipChannelFlag_TransitionsToChannel(t *testing.T) {
+	m := newInitModel(nil)
+	m.step = stepValidateKey
+	m.result.Provider = ProviderAnthropic
+	m.skipChannel = false
+
+	m2, _ := m.Update(validationSuccessMsg{step: stepValidateKey})
+	assert.Equal(t, stepChannel, m2.(initModel).step)
+}
+
+func TestInitModel_ChannelView_ShowsSkipHint(t *testing.T) {
+	m := newInitModel(nil)
+	m.step = stepChannel
+	view := m.View()
+	assert.Contains(t, view, "s to skip")
+}
+
+// --- Config generation with empty channel ---
+
+func TestGenerateConfigYAML_EmptyChannel(t *testing.T) {
+	result := initResult{
+		Provider: ProviderAnthropic,
+		APIKey:   "sk-ant",
+		Channel:  "",
+	}
+	yaml := GenerateConfigYAML(result)
+
+	// Should still have required sections.
+	assert.Contains(t, yaml, "providers:")
+	assert.Contains(t, yaml, "workspaces:")
+	// Should NOT contain channel binding or channel token reference.
+	assert.NotContains(t, yaml, "channel: \"telegram\"")
+	assert.NotContains(t, yaml, "bot-token")
+	// Should have empty bindings list.
+	assert.Contains(t, yaml, "bindings: []")
+}
+
+// --- Config overwrite detection ---
+// Tests below reuse mockSecretStore from secret_test.go (same package).
+
+func TestStoreSecretAndWriteConfig_OverwriteProtection(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "sigil.yaml")
+
+	// Override configPathForWrite so it points to our temp dir.
+	origFn := configPathForWrite
+	configPathForWrite = func() (string, error) { return cfgPath, nil }
+	t.Cleanup(func() { configPathForWrite = origFn })
+
+	store := newMockSecretStore()
+	result := initResult{
+		Provider:     ProviderAnthropic,
+		APIKey:       "sk-test",
+		Channel:      ChannelTelegram,
+		ChannelToken: "bot:token",
+	}
+
+	// First write should succeed.
+	path, err := storeSecretAndWriteConfig(result, store, false)
+	require.NoError(t, err)
+	assert.Equal(t, cfgPath, path)
+
+	// Second write without force should fail.
+	_, err = storeSecretAndWriteConfig(result, store, false)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeConfigAlreadyExists))
+	assert.Contains(t, err.Error(), "--force to overwrite")
+
+	// Write with force should succeed.
+	path, err = storeSecretAndWriteConfig(result, store, true)
+	require.NoError(t, err)
+	assert.Equal(t, cfgPath, path)
+}
+
+func TestStoreSecretAndWriteConfig_SkipsChannelTokenWhenEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "sigil.yaml")
+
+	origFn := configPathForWrite
+	configPathForWrite = func() (string, error) { return cfgPath, nil }
+	t.Cleanup(func() { configPathForWrite = origFn })
+
+	store := newMockSecretStore()
+	result := initResult{
+		Provider:     ProviderAnthropic,
+		APIKey:       "sk-test",
+		Channel:      "",
+		ChannelToken: "",
+	}
+
+	_, err := storeSecretAndWriteConfig(result, store, false)
+	require.NoError(t, err)
+
+	// Provider key should be stored.
+	_, provErr := store.Retrieve("sigil", "anthropic-api-key")
+	assert.NoError(t, provErr)
+
+	// No channel token should be stored.
+	assert.Len(t, store.data, 1, "only provider key should be stored when channel is skipped")
+
+	// Written config should not reference channel.
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "channel: \"telegram\"")
+	assert.Contains(t, string(data), "bindings: []")
+}
+

@@ -29,6 +29,7 @@ const (
 	CodeConfigLoadReadFailure      Code = "config.load.read.failure"
 	CodeConfigParseInvalidFormat   Code = "config.parse.invalid_format"
 	CodeConfigValidateInvalidValue Code = "config.validate.invalid_value"
+	CodeConfigAlreadyExists        Code = "config.already_exists"
 
 	CodePluginManifestValidateInvalid    Code = "plugin.manifest.validate.invalid"
 	CodePluginCapabilityDenied           Code = "plugin.capability.denied"
@@ -52,6 +53,8 @@ const (
 	CodeProviderNoDefault       Code = "provider.routing.no_default"
 	CodeProviderInvalidModelRef Code = "provider.routing.invalid_model_ref"
 	CodeProviderInvalidEvent    Code = "provider.event.invalid"
+	CodeProviderKeyInvalid     Code = "provider.key.invalid"
+	CodeProviderKeyCheckFailed Code = "provider.key.check_failed"
 
 	CodeAgentLoopInvalidInput        Code = "agent.loop.invalid_input"
 	CodeAgentLoopFailure             Code = "agent.loop.failure"
@@ -84,6 +87,9 @@ const (
 
 	CodeSecurityCapabilityInvalid Code = "security.capability.invalid"
 	CodeSecurityInvalidInput      Code = "security.input.invalid"
+
+	CodeChannelTokenInvalid    Code = "channel.token.invalid"
+	CodeChannelTokenCheckFailed Code = "channel.token.check_failed"
 
 	CodeChannelPairingRequired Code = "channel.pairing.required"
 	CodeChannelPairingDenied   Code = "channel.pairing.denied"

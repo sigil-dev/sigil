@@ -33,6 +33,7 @@ type Config struct {
 	TrustedProxies []string        // CIDR ranges of trusted proxies (required when BehindProxy=true)
 	StreamHandler  StreamHandler   // nil = SSE routes return 503 until handler is set
 	Services       *Services       // nil = service-dependent routes fail closed
+	ConfigDeps     *ConfigDeps     // nil = config routes return 503 until deps are set
 }
 
 // ApplyDefaults sets default values for zero-valued fields.
@@ -87,6 +88,7 @@ type Server struct {
 	cfg           Config
 	streamHandler StreamHandler
 	services      *Services
+	configDeps    *ConfigDeps
 	rateLimitDone chan struct{}
 	closeOnce     sync.Once
 }
@@ -147,6 +149,7 @@ func New(cfg Config) (*Server, error) {
 		cfg:           cfg,
 		streamHandler: cfg.StreamHandler,
 		services:      cfg.Services,
+		configDeps:    cfg.ConfigDeps,
 		rateLimitDone: rateLimitDone,
 	}
 
@@ -157,6 +160,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Services != nil {
 		srv.registerRoutes()
 	}
+
+	// Register config routes (always registered; handlers fail closed if deps nil).
+	srv.registerConfigRoutes()
 
 	return srv, nil
 }

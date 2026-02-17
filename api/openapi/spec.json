@@ -1,6 +1,163 @@
 {
   "components": {
     "schemas": {
+      "ChatStreamRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/ChatStreamRequest.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "content": {
+            "description": "Message content",
+            "minLength": 1,
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Optional session to resume",
+            "type": "string"
+          },
+          "workspace_id": {
+            "description": "Target workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "workspace_id"
+        ],
+        "type": "object"
+      },
+      "ConfigureChannelInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/ConfigureChannelInputBody.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "bot_token": {
+            "description": "Channel bot token",
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": {
+            "description": "Channel type",
+            "enum": [
+              "telegram"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "bot_token"
+        ],
+        "type": "object"
+      },
+      "ConfigureChannelOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/ConfigureChannelOutputBody.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "channel": {
+            "description": "Configured channel type",
+            "type": "string"
+          },
+          "status": {
+            "description": "Result status",
+            "examples": [
+              "ok"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "channel"
+        ],
+        "type": "object"
+      },
+      "ConfigureProviderInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/ConfigureProviderInputBody.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "api_key": {
+            "description": "Provider API key",
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": {
+            "description": "Provider type",
+            "enum": [
+              "anthropic",
+              "openai",
+              "google",
+              "openrouter"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "api_key"
+        ],
+        "type": "object"
+      },
+      "ConfigureProviderOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/ConfigureProviderOutputBody.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "provider": {
+            "description": "Configured provider type",
+            "type": "string"
+          },
+          "status": {
+            "description": "Result status",
+            "examples": [
+              "ok"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "provider"
+        ],
+        "type": "object"
+      },
       "ErrorDetail": {
         "additionalProperties": false,
         "properties": {
@@ -627,31 +784,208 @@
     },
     "/api/v1/chat/stream": {
       "post": {
-        "description": "Send a message and receive a streaming response. Set Accept: text/event-stream for SSE, otherwise receives a JSON object containing an events array.",
+        "description": "Send a message and receive a streaming response as server-sent events.",
         "operationId": "chat-stream",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "properties": {
-                  "content": {
-                    "description": "Message content",
-                    "minLength": 1,
-                    "type": "string"
+                "$ref": "#/components/schemas/ChatStreamRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "description": "Each oneOf object in the array represents one possible Server Sent Events (SSE) message.",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "data": {
+                            "description": "The event payload (JSON object)."
+                          },
+                          "event": {
+                            "const": "done",
+                            "description": "The event name.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "data",
+                          "event"
+                        ],
+                        "title": "Event done",
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "data": {
+                            "description": "The event payload (JSON object)."
+                          },
+                          "event": {
+                            "const": "error",
+                            "description": "The event name.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "data",
+                          "event"
+                        ],
+                        "title": "Event error",
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "data": {
+                            "description": "The event payload (JSON object)."
+                          },
+                          "event": {
+                            "const": "session_id",
+                            "description": "The event name.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "data",
+                          "event"
+                        ],
+                        "title": "Event session_id",
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "data": {
+                            "description": "The event payload (JSON object)."
+                          },
+                          "event": {
+                            "const": "text_delta",
+                            "description": "The event name.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "data",
+                          "event"
+                        ],
+                        "title": "Event text_delta",
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "data": {
+                            "description": "The event payload (JSON object)."
+                          },
+                          "event": {
+                            "const": "tool_call",
+                            "description": "The event name.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "data",
+                          "event"
+                        ],
+                        "title": "Event tool_call",
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "data": {
+                            "description": "The event payload (JSON object)."
+                          },
+                          "event": {
+                            "const": "usage",
+                            "description": "The event name.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "data",
+                          "event"
+                        ],
+                        "title": "Event usage",
+                        "type": "object"
+                      }
+                    ]
                   },
-                  "session_id": {
-                    "description": "Optional session to resume",
-                    "type": "string"
-                  },
-                  "workspace_id": {
-                    "description": "Target workspace",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "content"
-                ],
-                "type": "object"
+                  "title": "Server Sent Events",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Stream a chat response via SSE",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/v1/config/channels": {
+      "post": {
+        "operationId": "configure-channel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureChannelInputBody"
               }
             }
           },
@@ -662,46 +996,147 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "events": {
-                      "description": "Collected events with type and data",
-                      "items": {
-                        "properties": {
-                          "data": {
-                            "description": "Event payload"
-                          },
-                          "event": {
-                            "description": "Event type (text_delta, session_id, error, done)",
-                            "type": "string"
-                          }
-                        },
-                        "type": "object"
-                      },
-                      "type": "array"
-                    }
-                  },
-                  "type": "object"
-                }
-              },
-              "text/event-stream": {
-                "schema": {
-                  "description": "Server-sent event stream",
-                  "type": "string"
+                  "$ref": "#/components/schemas/ConfigureChannelOutputBody"
                 }
               }
             },
-            "description": "Streaming response (SSE or JSON depending on Accept header)"
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "422": {
-            "description": "Validation error (missing content)"
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Gateway"
           },
           "503": {
-            "description": "Stream handler not configured"
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
-        "summary": "Stream a chat response via SSE",
+        "summary": "Configure a channel bot token",
         "tags": [
-          "chat"
+          "config"
+        ]
+      }
+    },
+    "/api/v1/config/providers": {
+      "post": {
+        "operationId": "configure-provider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureProviderInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigureProviderOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Configure a provider API key",
+        "tags": [
+          "config"
         ]
       }
     },
