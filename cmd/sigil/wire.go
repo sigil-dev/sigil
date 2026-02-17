@@ -44,7 +44,7 @@ type Gateway struct {
 
 // WireGateway creates all subsystems and wires them together.
 // The dataDir is the root directory for all persistent state.
-func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gateway, error) {
+func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Gateway, retErr error) {
 	storeCfg := &store.StorageConfig{Backend: cfg.Storage.Backend}
 
 	// Ensure the data directory exists.
@@ -57,6 +57,13 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating gateway store: %w", err)
 	}
+	defer func() {
+		if retErr != nil {
+			if closeErr := gs.Close(); closeErr != nil {
+				slog.Warn("gateway store close error during initialization", "error", closeErr)
+			}
+		}
+	}()
 
 	// 2. Security enforcer.
 	enforcer := security.NewEnforcer(gs.AuditLog())
@@ -65,9 +72,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	// convert config modes for use by the agent loop when it is wired.
 	sc, err := scanner.NewRegexScanner(scanner.DefaultRules())
 	if err != nil {
-		if closeErr := gs.Close(); closeErr != nil {
-			slog.Warn("gateway store close error during initialization", "error", closeErr)
-		}
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating security scanner: %w", err)
 	}
 	scannerModes := agent.NewScannerModesFromConfig(cfg.Security.Scanner)
@@ -91,17 +95,11 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 	// can route requests without "no default provider configured" errors.
 	if cfg.Models.Default != "" {
 		if err := provReg.SetDefault(cfg.Models.Default); err != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
 			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting default provider: %s", cfg.Models.Default)
 		}
 	}
 	if len(cfg.Models.Failover) > 0 {
 		if err := provReg.SetFailover(cfg.Models.Failover); err != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
 			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting failover chain")
 		}
 	}
@@ -119,9 +117,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 			}
 		}
 		if err := wsMgr.SetConfig(wsCfg); err != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
 			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "setting workspace config: %w", err)
 		}
 	}
@@ -132,9 +127,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		var tvErr error
 		tokenValidator, tvErr = newConfigTokenValidator(cfg.Auth.Tokens)
 		if tvErr != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
 			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "configuring auth tokens: %w", tvErr)
 		}
 	} else {
@@ -149,9 +141,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		&userServiceAdapter{store: gs.Users()},
 	)
 	if err != nil {
-		if closeErr := gs.Close(); closeErr != nil {
-			slog.Warn("gateway store close error during initialization", "error", closeErr)
-		}
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
 	}
 
@@ -173,9 +162,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		Services:      services,
 	})
 	if err != nil {
-		if closeErr := gs.Close(); closeErr != nil {
-			slog.Warn("gateway store close error during initialization", "error", closeErr)
-		}
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
 

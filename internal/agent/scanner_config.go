@@ -8,22 +8,21 @@ import (
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
-	"github.com/sigil-dev/sigil/pkg/types"
 )
 
 // NewScannerModesFromConfig converts config.ScannerConfig to agent.ScannerModes.
-// Config fields are strings; this function converts them to typed scanner.Mode values.
+// Config fields are types.ScannerMode; scanner.Mode is an alias so the conversion is direct.
 // Empty fields default to the standard modes: block (input), flag (tool), redact (output).
 func NewScannerModesFromConfig(cfg config.ScannerConfig) ScannerModes {
-	input := scanner.Mode(types.ScannerMode(cfg.Input))
+	input := scanner.Mode(cfg.Input)
 	if input == "" {
 		input = scanner.ModeBlock
 	}
-	tool := scanner.Mode(types.ScannerMode(cfg.Tool))
+	tool := scanner.Mode(cfg.Tool)
 	if tool == "" {
 		tool = scanner.ModeFlag
 	}
-	output := scanner.Mode(types.ScannerMode(cfg.Output))
+	output := scanner.Mode(cfg.Output)
 	if output == "" {
 		output = scanner.ModeRedact
 	}

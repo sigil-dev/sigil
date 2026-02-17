@@ -124,10 +124,10 @@ type SecurityConfig struct {
 
 // ScannerConfig controls per-hook scanner detection modes.
 type ScannerConfig struct {
-	Input                    string `mapstructure:"input"`
-	Tool                     string `mapstructure:"tool"`
-	Output                   string `mapstructure:"output"`
-	AllowPermissiveInputMode bool   `mapstructure:"allow_permissive_input_mode"`
+	Input                    types.ScannerMode `mapstructure:"input"`
+	Tool                     types.ScannerMode `mapstructure:"tool"`
+	Output                   types.ScannerMode `mapstructure:"output"`
+	AllowPermissiveInputMode bool              `mapstructure:"allow_permissive_input_mode"`
 }
 
 // SetDefaults applies Sigil's default configuration values to v.
@@ -384,19 +384,22 @@ func (c *Config) validateSessions() []error {
 func (c *Config) validateSecurity() []error {
 	var errs []error
 
-	for _, pair := range []struct{ field, value string }{
+	for _, pair := range []struct {
+		field string
+		value types.ScannerMode
+	}{
 		{"security.scanner.input", c.Security.Scanner.Input},
 		{"security.scanner.tool", c.Security.Scanner.Tool},
 		{"security.scanner.output", c.Security.Scanner.Output},
 	} {
-		if !types.ScannerMode(pair.value).Valid() {
+		if !pair.value.Valid() {
 			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 				"config: %s: invalid scanner mode %q (valid: block, flag, redact)", pair.field, pair.value))
 		}
 	}
 
 	// Require explicit opt-in to use non-block modes for input scanning.
-	if c.Security.Scanner.Input != "block" && !c.Security.Scanner.AllowPermissiveInputMode {
+	if c.Security.Scanner.Input != types.ScannerModeBlock && !c.Security.Scanner.AllowPermissiveInputMode {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: security.scanner.input is %q but only 'block' is allowed without security.scanner.allow_permissive_input_mode=true",
 			c.Security.Scanner.Input,

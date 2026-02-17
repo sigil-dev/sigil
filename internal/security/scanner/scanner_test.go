@@ -528,6 +528,7 @@ func TestRedact_OutOfBoundsLocation(t *testing.T) {
 		name    string
 		content string
 		matches []scanner.Match
+		want    string
 	}{
 		{
 			name:    "match Location equals len(content)",
@@ -535,6 +536,7 @@ func TestRedact_OutOfBoundsLocation(t *testing.T) {
 			matches: []scanner.Match{
 				{Rule: "test", Location: 5, Length: 3, Severity: scanner.SeverityHigh},
 			},
+			want: "hello",
 		},
 		{
 			name:    "match Location exceeds len(content)",
@@ -542,6 +544,7 @@ func TestRedact_OutOfBoundsLocation(t *testing.T) {
 			matches: []scanner.Match{
 				{Rule: "test", Location: 100, Length: 5, Severity: scanner.SeverityHigh},
 			},
+			want: "hello",
 		},
 		{
 			name:    "overlapping matches where second start is before previous end",
@@ -550,6 +553,7 @@ func TestRedact_OutOfBoundsLocation(t *testing.T) {
 				{Rule: "first", Location: 0, Length: 8, Severity: scanner.SeverityHigh},
 				{Rule: "second", Location: 3, Length: 5, Severity: scanner.SeverityHigh},
 			},
+			want: "[REDACTED]rld",
 		},
 	}
 
@@ -563,7 +567,7 @@ func TestRedact_OutOfBoundsLocation(t *testing.T) {
 			// Must not panic.
 			redacted, err := scanner.ApplyMode(scanner.ModeRedact, scanner.StageOutput, result)
 			require.NoError(t, err)
-			assert.NotEmpty(t, redacted, "redacted output must not be empty")
+			assert.Equal(t, tt.want, redacted)
 		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/config"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -553,7 +554,7 @@ func TestConfig_ScannerValidation(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tt.input, cfg.Security.Scanner.Input)
+				assert.Equal(t, types.ScannerMode(tt.input), cfg.Security.Scanner.Input)
 			}
 		})
 	}
@@ -585,7 +586,7 @@ func TestConfig_AllowPermissiveInputMode(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tt.input, cfg.Security.Scanner.Input)
+				assert.Equal(t, types.ScannerMode(tt.input), cfg.Security.Scanner.Input)
 			}
 		})
 	}
