@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,16 +112,8 @@ type ToolCallRequest struct {
 
 // ToolResult holds the output from a tool execution.
 type ToolResult struct {
-	Content    string
-	Origin     string      // "tool_output" — always tagged for injection defense
-	ScanResult *ScanResult // Optional scan metadata for suspicious content
-}
-
-// ScanResult contains injection scanning metadata for tool outputs.
-type ScanResult struct {
-	Suspicious bool     // True if suspicious patterns were detected
-	Patterns   []string // Names of matched patterns
-	Score      float64  // Confidence score (0.0-1.0, higher = more suspicious)
+	Content string
+	Origin  string // "tool_output" — always tagged for injection defense
 }
 
 // ToolDispatcherConfig holds dependencies for ToolDispatcher.
@@ -228,26 +219,8 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*Too
 		Origin:  "tool_output",
 	}
 
-	// Step 5: Scan for prompt injection patterns.
-	scanResult := scanToolOutput(content)
-	result.ScanResult = scanResult
-
-	if scanResult.Suspicious {
-		slog.Warn("suspicious content detected in tool output",
-			"plugin", req.PluginName,
-			"tool", req.ToolName,
-			"session_id", req.SessionID,
-			"patterns", scanResult.Patterns,
-			"score", scanResult.Score,
-		)
-	}
-
-	// Step 6: Audit log the execution.
-	auditResult := "ok"
-	if scanResult.Suspicious {
-		auditResult = "ok_suspicious_content"
-	}
-	d.auditToolExecution(ctx, req, auditResult, scanResult)
+	// Step 5: Audit log the execution.
+	d.auditToolExecution(ctx, req, "ok")
 
 	return result, nil
 }
@@ -280,20 +253,13 @@ func (d *ToolDispatcher) ExecuteForTurn(ctx context.Context, req ToolCallRequest
 	return d.Execute(ctx, req)
 }
 
-func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallRequest, result string, scanResult *ScanResult) {
+func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallRequest, result string) {
 	if d.auditStore == nil {
 		return
 	}
 
 	details := map[string]any{
 		"tool_name": req.ToolName,
-	}
-
-	// Include scan metadata if present.
-	if scanResult != nil && scanResult.Suspicious {
-		details["scan_suspicious"] = scanResult.Suspicious
-		details["scan_patterns"] = scanResult.Patterns
-		details["scan_score"] = scanResult.Score
 	}
 
 	entry := &store.AuditEntry{
@@ -320,102 +286,5 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 		)
 	} else {
 		d.auditFailCount.Store(0)
-	}
-}
-
-// scanToolOutput scans tool output for prompt injection patterns.
-// Returns metadata flagging suspicious content.
-func scanToolOutput(output string) *ScanResult {
-	if output == "" {
-		return &ScanResult{
-			Suspicious: false,
-			Patterns:   nil,
-			Score:      0.0,
-		}
-	}
-
-	// Convert to lowercase for case-insensitive matching.
-	lower := strings.ToLower(output)
-
-	// Pattern definitions: each pattern has a name and detection strings.
-	type pattern struct {
-		name    string
-		phrases []string
-	}
-
-	patterns := []pattern{
-		{
-			name: "system_prompt_override",
-			phrases: []string{
-				"ignore previous instructions",
-				"ignore all previous instructions",
-				"disregard previous instructions",
-				"forget previous instructions",
-				"you are now",
-				"system:",
-				"system prompt",
-				"new instructions",
-				"override instructions",
-			},
-		},
-		{
-			name: "role_confusion",
-			phrases: []string{
-				"### human:",
-				"### assistant:",
-				"user:",
-				"assistant:",
-				"<|im_start|>",
-				"<|im_end|>",
-				"[system]",
-				"[user]",
-				"[assistant]",
-			},
-		},
-		{
-			name: "instruction_injection",
-			phrases: []string{
-				"do not follow",
-				"disregard",
-				"override",
-				"ignore the",
-				"forget the",
-				"don't follow",
-				"you must",
-				"you should now",
-				"instead, you will",
-			},
-		},
-	}
-
-	var matchedPatterns []string
-	matchCount := 0
-
-	for _, p := range patterns {
-		for _, phrase := range p.phrases {
-			if strings.Contains(lower, phrase) {
-				matchedPatterns = append(matchedPatterns, p.name)
-				matchCount++
-				break // Only count each pattern once per tool output.
-			}
-		}
-	}
-
-	suspicious := len(matchedPatterns) > 0
-
-	// Calculate score based on number of distinct patterns matched.
-	// Score = (patterns matched / total patterns) capped at 1.0.
-	var score float64
-	if suspicious {
-		score = float64(len(matchedPatterns)) / float64(len(patterns))
-		if score > 1.0 {
-			score = 1.0
-		}
-	}
-
-	return &ScanResult{
-		Suspicious: suspicious,
-		Patterns:   matchedPatterns,
-		Score:      score,
 	}
 }
