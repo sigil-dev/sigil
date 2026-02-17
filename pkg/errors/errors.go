@@ -85,8 +85,10 @@ const (
 	CodeCLISetupFailure      Code = "cli.setup.failure"
 	CodeCLIInputInvalid      Code = "cli.input.invalid"
 
-	CodeSecurityCapabilityInvalid Code = "security.capability.invalid"
-	CodeSecurityInvalidInput      Code = "security.input.invalid"
+	CodeSecurityCapabilityInvalid    Code = "security.capability.invalid"
+	CodeSecurityInvalidInput         Code = "security.input.invalid"
+	CodeSecurityScannerInputBlocked  Code = "security.scanner.input_blocked"
+	CodeSecurityScannerFailure       Code = "security.scanner.failure"
 
 	CodeChannelTokenInvalid    Code = "channel.token.invalid"
 	CodeChannelTokenCheckFailed Code = "channel.token.check_failed"

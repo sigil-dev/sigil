@@ -76,12 +76,22 @@ type ChatOptions struct {
 	Stream        bool
 }
 
+// Origin indicates the source of a message for context-aware security scanning.
+type Origin string
+
+const (
+	OriginUser   Origin = "user_input"
+	OriginSystem Origin = "system"
+	OriginTool   Origin = "tool_output"
+)
+
 // Message represents a conversation message.
 type Message struct {
 	Role       store.MessageRole
 	Content    string
 	ToolCallID string
 	ToolName   string
+	Origin     Origin
 }
 
 // ToolDefinition describes a tool available to the agent.
