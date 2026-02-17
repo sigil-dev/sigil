@@ -14,7 +14,7 @@ import (
 )
 
 func TestApplyMode(t *testing.T) {
-	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	s, err := scanner.NewRegexScanner(mustDefaultRules(t))
 	require.NoError(t, err)
 	ctx := context.Background()
 

@@ -97,7 +97,11 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	// 2b. Security scanner — create regex scanner with default rules and
 	// convert config scanner modes (input: block, tool: flag, output: redact by default)
 	// for use by the agent loop.
-	sc, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	defaultRules, err := scanner.DefaultRules()
+	if err != nil {
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "loading scanner rules: %w", err)
+	}
+	sc, err := scanner.NewRegexScanner(defaultRules)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating security scanner: %w", err)
 	}

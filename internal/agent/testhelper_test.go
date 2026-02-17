@@ -24,7 +24,11 @@ import (
 // newDefaultScanner creates a RegexScanner with DefaultRules for testing.
 func newDefaultScanner(t *testing.T) *scanner.RegexScanner {
 	t.Helper()
-	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	rules, err := scanner.DefaultRules()
+	if err != nil {
+		t.Fatalf("DefaultRules: %v", err)
+	}
+	s, err := scanner.NewRegexScanner(rules)
 	if err != nil {
 		t.Fatalf("NewRegexScanner: %v", err)
 	}

@@ -306,20 +306,30 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 }
 
 // DefaultRules returns the built-in rule set for all three stages.
-// Stage ordering does not affect behavior; the scanner filters rules by Stage during Scan().
-func DefaultRules() []Rule {
-	return slices.Concat(InputRules(), ToolRules(), ToolSecretRules(), OutputRules())
+// Returns an error if the embedded secrets-patterns-db cannot be loaded.
+func DefaultRules() ([]Rule, error) {
+	input, err := InputRules()
+	if err != nil {
+		return nil, err
+	}
+	output, err := OutputRules()
+	if err != nil {
+		return nil, err
+	}
+	toolSecrets, err := ToolSecretRules()
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(input, ToolRules(), toolSecrets, output), nil
 }
 
 // InputRules returns rules for StageInput: prompt injection, instruction override,
 // and secret detection patterns. Secrets in user input are blocked (default mode)
 // before reaching the LLM, preventing accidental credential forwarding.
-func InputRules() []Rule {
+func InputRules() ([]Rule, error) {
 	injection := []Rule{
 		{
 			// Allow up to 3 optional words between the verb and the target noun phrase.
-			// This catches "Please disregard your previous instructions" and similar
-			// constructions while keeping the regex anchored to known keywords.
 			Name:     "instruction_override",
 			Pattern:  regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)(\s+\w+){0,3}\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
 			Stage:    StageInput,
@@ -338,7 +348,6 @@ func InputRules() []Rule {
 			Severity: SeverityMedium,
 		},
 		{
-			// NOTE: This pattern uses nested alternatives; safe due to Go RE2 linear-time guarantee.
 			Name:     "new_task_injection",
 			Pattern:  regexp.MustCompile(`(?i)(new\s+task|from\s+now\s+on|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?)\s+(?:do\s+not|don'?t)\s+exist)`),
 			Stage:    StageInput,
@@ -351,10 +360,15 @@ func InputRules() []Rule {
 			Severity: SeverityHigh,
 		},
 	}
-	return slices.Concat(injection, secretRules(StageInput))
+	secrets, err := secretRules(StageInput)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(injection, secrets), nil
 }
 
 // ToolRules returns rules for StageTool: tool call injection and system command patterns.
+// These are static patterns that do not depend on the secrets DB.
 func ToolRules() []Rule {
 	return []Rule{
 		{
@@ -378,153 +392,37 @@ func ToolRules() []Rule {
 	}
 }
 
-// secretRules returns secret/credential detection patterns for the given stage.
-func secretRules(stage Stage) []Rule {
-	return []Rule{
-		{
-			Name:     "aws_access_key",
-			Pattern:  regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "openai_api_key",
-			Pattern:  regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		// openai_legacy_key: matches sk-[40+ chars]. Intentionally broad —
-		// overlaps with anthropic_api_key and openai_api_key patterns.
-		// Redundant matches are safe: redaction merge handles overlapping spans.
-		// Go's RE2 engine lacks lookaheads, so exclusion requires post-match
-		// filtering. Accepted as defense-in-depth for v1.
-		{
-			Name:     "openai_legacy_key",
-			Pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{40,}`),
-			Stage:    stage,
-			Severity: SeverityMedium,
-		},
-		{
-			Name:     "github_pat",
-			Pattern:  regexp.MustCompile(`ghp_[A-Za-z0-9]{36}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "github_fine_grained_pat",
-			Pattern:  regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "slack_token",
-			Pattern:  regexp.MustCompile(`xox[bpas]-[A-Za-z0-9-]{10,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "anthropic_api_key",
-			Pattern:  regexp.MustCompile(`sk-ant-api\d{2}-[A-Za-z0-9_-]{20,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "google_api_key",
-			Pattern:  regexp.MustCompile(`AIza[0-9A-Za-z_-]{35}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "bearer_token",
-			Pattern:  regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9_\-.]{20,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "pem_private_key",
-			Pattern:  regexp.MustCompile(`-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name: "database_connection_string",
-			// Matches: protocol://[user[:password]@]host[:port][/path]
-			// Supports:
-			// - URL-encoded passwords (e.g., p%40ssw0rd for p@ssw0rd, p%3Aword for p:word)
-			// - IPv6 hosts in brackets (e.g., [::1], [fe80::1])
-			// - Standard hostnames and IPv4 addresses
-			Pattern:  regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb|redis|jdbc:[a-z]+)://[^\s:@]+:(?:[^@\s%]|%[0-9A-Fa-f]{2})+@(?:\[[0-9A-Fa-f:]+\]|[^\s/:]+)(?:[:/][^\s]*)?`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "mssql_connection_string",
-			Pattern:  regexp.MustCompile(`(?i)(?:Server|Data Source)\s*=\s*[^;]+;\s*(?:Password|Pwd)\s*=\s*[^;]+`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "keyring_uri",
-			Pattern:  regexp.MustCompile(`keyring://[^\s]+`),
-			Stage:    stage,
-			Severity: SeverityMedium,
-		},
-		{
-			Name:     "stripe_api_key",
-			Pattern:  regexp.MustCompile(`sk_live_[A-Za-z0-9]{24,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "stripe_restricted_key",
-			Pattern:  regexp.MustCompile(`rk_live_[A-Za-z0-9]{24,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "npm_token",
-			Pattern:  regexp.MustCompile(`npm_[A-Za-z0-9]{36}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "azure_connection_string",
-			Pattern:  regexp.MustCompile(`(?i)AccountKey\s*=\s*[A-Za-z0-9+/=]{20,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "sendgrid_api_key",
-			Pattern:  regexp.MustCompile(`SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "digitalocean_pat",
-			Pattern:  regexp.MustCompile(`dop_v1_[a-f0-9]{64}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "vault_token",
-			Pattern:  regexp.MustCompile(`hvs\.[A-Za-z0-9_-]{24,}`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "twilio_api_key",
-			Pattern:  regexp.MustCompile(`\bSK[0-9a-fA-F]{32}\b`),
-			Stage:    stage,
-			Severity: SeverityHigh,
-		},
+// secretRules returns the combined secrets-patterns-db + Sigil-specific secret
+// detection patterns for the given stage. Sigil-specific rules override DB
+// rules with the same name (better precision or coverage).
+func secretRules(stage Stage) ([]Rule, error) {
+	sigil := sigilSpecificRules(stage)
+	sigilNames := make(map[string]bool, len(sigil))
+	for _, r := range sigil {
+		sigilNames[r.Name] = true
 	}
+
+	db, err := loadDBRules(stage)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter DB rules that collide with Sigil-specific names.
+	filtered := make([]Rule, 0, len(db))
+	for _, r := range db {
+		if !sigilNames[r.Name] {
+			filtered = append(filtered, r)
+		}
+	}
+
+	return append(filtered, sigil...), nil
 }
 
 // OutputRules returns rules for StageOutput: secret/credential detection patterns.
-func OutputRules() []Rule { return secretRules(StageOutput) }
+func OutputRules() ([]Rule, error) { return secretRules(StageOutput) }
 
 // ToolSecretRules returns rules for StageTool: secret/credential detection patterns.
-func ToolSecretRules() []Rule { return secretRules(StageTool) }
+func ToolSecretRules() ([]Rule, error) { return secretRules(StageTool) }
 
 // Mode is the scanner detection mode. Aliased from pkg/types for backward compatibility.
 type Mode = types.ScannerMode

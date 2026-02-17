@@ -3522,7 +3522,9 @@ func TestAgentLoop_AuditIncludesThreatMetadata(t *testing.T) {
 
 	// Use a scanner that returns a secret match on output so outputThreat is set.
 	// The real default scanner detects AWS keys, GitHub tokens, etc.
-	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	defaultRules, err := scanner.DefaultRules()
+	require.NoError(t, err)
+	s, err := scanner.NewRegexScanner(defaultRules)
 	require.NoError(t, err)
 
 	// Use redact mode for output so the secret is detected and threat is set.
