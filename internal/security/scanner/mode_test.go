@@ -51,6 +51,23 @@ func TestApplyMode(t *testing.T) {
 			wantErr:     false,
 			wantContent: "SYSTEM: secret prompt here",
 		},
+		// Finding .263 — stage-specific error codes for block mode.
+		{
+			name:        "block mode tool stage returns CodeSecurityScannerToolBlocked",
+			content:     "SYSTEM: injected prompt content here",
+			stage:       scanner.StageTool,
+			mode:        scanner.ModeBlock,
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeSecurityScannerToolBlocked,
+		},
+		{
+			name:        "block mode output stage returns CodeSecurityScannerOutputBlocked",
+			content:     "Here is your AWS key: AKIAIOSFODNN7EXAMPLE",
+			stage:       scanner.StageOutput,
+			mode:        scanner.ModeBlock,
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeSecurityScannerOutputBlocked,
+		},
 		{
 			name:        "redact mode replaces matched content",
 			content:     "Key: AKIAIOSFODNN7EXAMPLE is the AWS key",

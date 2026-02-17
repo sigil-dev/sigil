@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"regexp"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -99,9 +101,31 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_
 	return nil
 }
 
+// safeIdentRe matches SQL identifiers that are safe to interpolate into DDL.
+// All callers MUST pass compile-time string constants for table, column, and
+// columnDef — never values derived from user input or runtime data.
+var safeIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
 // addColumnIfMissing checks whether the named column exists in the given table
 // via PRAGMA table_info, and issues ALTER TABLE ADD COLUMN if it does not.
+//
+// IMPORTANT: table, column, and columnDef MUST be compile-time constants.
+// They are validated against safeIdentRe before use, but callers must never
+// pass values derived from user input or external sources.
 func addColumnIfMissing(db *sql.DB, table, column, columnDef string) error {
+	if !safeIdentRe.MatchString(table) {
+		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "addColumnIfMissing: unsafe table name %q", table)
+	}
+	if !safeIdentRe.MatchString(column) {
+		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "addColumnIfMissing: unsafe column name %q", column)
+	}
+	// columnDef is a compound expression (e.g. "TEXT NOT NULL DEFAULT '{}'") so
+	// we validate only the leading type token, which must be a safe identifier.
+	typeToken := strings.Fields(columnDef)
+	if len(typeToken) == 0 || !safeIdentRe.MatchString(typeToken[0]) {
+		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "addColumnIfMissing: unsafe column definition %q", columnDef)
+	}
+
 	rows, err := db.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "querying table_info for %s: %w", table, err)

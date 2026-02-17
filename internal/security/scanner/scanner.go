@@ -5,6 +5,7 @@ package scanner
 
 import (
 	"context"
+	"html"
 	"regexp"
 	"slices"
 	"strings"
@@ -15,23 +16,14 @@ import (
 )
 
 // Stage identifies where in the pipeline scanning occurs.
-type Stage string
+// Aliased from pkg/types for backward compatibility.
+type Stage = types.ScanStage
 
 const (
-	StageInput  Stage = "input"
-	StageTool   Stage = "tool"
-	StageOutput Stage = "output"
+	StageInput  Stage = types.ScanStageInput
+	StageTool   Stage = types.ScanStageTool
+	StageOutput Stage = types.ScanStageOutput
 )
-
-// Valid reports whether the stage is a known pipeline stage.
-func (s Stage) Valid() bool {
-	switch s {
-	case StageInput, StageTool, StageOutput:
-		return true
-	default:
-		return false
-	}
-}
 
 // Origin indicates the source of content (user input, system, or tool output).
 // Aliased from pkg/types for backward compatibility.
@@ -153,8 +145,17 @@ type RegexScanner struct {
 	maxContentLength int
 }
 
-// NewRegexScanner creates a scanner with the given rules.
-func NewRegexScanner(rules []Rule) (*RegexScanner, error) {
+// ScannerOption configures a RegexScanner.
+type ScannerOption func(*RegexScanner)
+
+// WithMaxContentLength sets the maximum content length the scanner will accept.
+// Values <= 0 cause NewRegexScanner to return an error.
+func WithMaxContentLength(n int) ScannerOption {
+	return func(s *RegexScanner) { s.maxContentLength = n }
+}
+
+// NewRegexScanner creates a scanner with the given rules and optional configuration.
+func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error) {
 	for i, r := range rules {
 		if r.Pattern == nil {
 			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has nil pattern", i, r.Name)
@@ -178,7 +179,15 @@ func NewRegexScanner(rules []Rule) (*RegexScanner, error) {
 			Severity: r.Severity,
 		}
 	}
-	return &RegexScanner{rules: copied, maxContentLength: DefaultMaxContentLength}, nil
+	s := &RegexScanner{rules: copied, maxContentLength: DefaultMaxContentLength}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if s.maxContentLength <= 0 {
+		return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
+			"maxContentLength must be > 0, got %d", s.maxContentLength)
+	}
+	return s, nil
 }
 
 // invisibleCharReplacer strips zero-width and other invisible Unicode characters
@@ -208,11 +217,16 @@ var invisibleCharReplacer = strings.NewReplacer(
 	"\ufffb", "", // interlinear annotation terminator
 )
 
-// normalize applies NFKC normalization and strips zero-width characters
-// to reduce evasion via Unicode homoglyphs.
-func normalize(s string) string {
+// Normalize applies HTML entity decoding, zero-width character stripping, and
+// NFKC normalization to reduce evasion via Unicode homoglyphs and HTML encoding.
+// Exported so other packages (e.g., the agent loop) can apply the same
+// normalization pipeline.
+func Normalize(s string) string {
+	// 1. Decode HTML entities so that encoded payloads get normalized.
+	s = html.UnescapeString(s)
+	// 2. Strip zero-width and invisible Unicode characters.
 	s = invisibleCharReplacer.Replace(s)
-	// NFKC normalization collapses compatibility equivalents.
+	// 3. NFKC normalization collapses compatibility equivalents.
 	return norm.NFKC.String(s)
 }
 
@@ -234,24 +248,13 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 		opts.Metadata = copied
 	}
 
+	content = Normalize(content)
+
 	if len(content) > s.maxContentLength {
 		return ScanResult{
 			Content: content,
 		}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
 			"content exceeds maximum length",
-			sigilerr.Field("length", len(content)),
-			sigilerr.Field("max_length", s.maxContentLength),
-			sigilerr.Field("stage", string(opts.Stage)),
-		)
-	}
-
-	content = normalize(content)
-
-	if len(content) > s.maxContentLength {
-		return ScanResult{
-			Content: content,
-		}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
-			"content exceeds maximum length after normalization",
 			sigilerr.Field("length", len(content)),
 			sigilerr.Field("max_length", s.maxContentLength),
 			sigilerr.Field("stage", string(opts.Stage)),
@@ -284,9 +287,11 @@ func DefaultRules() []Rule {
 	return slices.Concat(InputRules(), ToolRules(), ToolSecretRules(), OutputRules())
 }
 
-// InputRules returns rules for StageInput: prompt injection and instruction override patterns.
+// InputRules returns rules for StageInput: prompt injection, instruction override,
+// and secret detection patterns. Secrets are detected in user input so they can be
+// redacted before reaching the LLM.
 func InputRules() []Rule {
-	return []Rule{
+	injection := []Rule{
 		{
 			// Allow up to 3 optional words between the verb and the target noun phrase.
 			// This catches "Please disregard your previous instructions" and similar
@@ -321,6 +326,7 @@ func InputRules() []Rule {
 			Severity: SeverityHigh,
 		},
 	}
+	return slices.Concat(injection, secretRules(StageInput))
 }
 
 // ToolRules returns rules for StageTool: tool call injection and system command patterns.
@@ -333,8 +339,14 @@ func ToolRules() []Rule {
 			Severity: SeverityHigh,
 		},
 		{
-			Name:     "role_impersonation",
-			Pattern:  regexp.MustCompile(`(?is)\[INST\].{0,1000}?\[/INST\]`),
+			Name:     "role_impersonation_open",
+			Pattern:  regexp.MustCompile(`(?i)\[INST\]`),
+			Stage:    StageTool,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "role_impersonation_close",
+			Pattern:  regexp.MustCompile(`(?i)\[/INST\]`),
 			Stage:    StageTool,
 			Severity: SeverityHigh,
 		},
@@ -586,24 +598,12 @@ func redact(content string, matches []Match) string {
 	b.Grow(len(content))
 	pos := 0
 	for _, s := range spans {
-		start := s.start
-		end := s.end
-		if end > len(content) {
-			end = len(content)
-		}
-		if start > len(content) {
-			start = len(content)
-		}
-		if start < pos {
-			start = pos
-		}
-		if start >= end {
-			b.WriteString(content[pos:start])
-			pos = end
-			continue
-		}
+		start := max(min(s.start, len(content)), pos)
+		end := min(s.end, len(content))
 		b.WriteString(content[pos:start])
-		b.WriteString("[REDACTED]")
+		if start < end {
+			b.WriteString("[REDACTED]")
+		}
 		pos = end
 	}
 	b.WriteString(content[pos:])

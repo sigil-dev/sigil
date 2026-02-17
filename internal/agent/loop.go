@@ -28,22 +28,23 @@ type ScannerModes struct {
 
 // Validate checks that all scanner mode fields are non-empty and valid.
 func (m ScannerModes) Validate() error {
-	for _, pair := range []struct {
-		name string
-		mode scanner.Mode
-	}{
-		{"Input", m.Input},
-		{"Tool", m.Tool},
-		{"Output", m.Output},
-	} {
-		if pair.mode == "" {
-			return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput,
-				"ScannerModes.%s is required", pair.name)
-		}
-		if !pair.mode.Valid() {
-			return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput,
-				"invalid ScannerModes.%s: %q", pair.name, pair.mode)
-		}
+	if m.Input == "" {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes.Input is required")
+	}
+	if !m.Input.Valid() {
+		return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Input: %q", m.Input)
+	}
+	if m.Tool == "" {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes.Tool is required")
+	}
+	if !m.Tool.Valid() {
+		return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Tool: %q", m.Tool)
+	}
+	if m.Output == "" {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes.Output is required")
+	}
+	if !m.Output.Valid() {
+		return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Output: %q", m.Output)
 	}
 	return nil
 }
@@ -348,6 +349,9 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 		[]slog.Attr{slog.String("session_id", msg.SessionID), slog.String("workspace_id", msg.WorkspaceID)},
 	)
 	if scanErr != nil {
+		// Audit blocked input before returning the error so security teams
+		// have visibility into rejected messages.
+		l.auditInputBlocked(ctx, msg, inputThreat)
 		return nil, nil, scanErr
 	}
 	// Note: msg.Content is replaced with the scanner-normalized form
@@ -790,7 +794,7 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 
 	details := map[string]any{"content_length": len(out.Content)}
 
-	// Finding 3: include threat metadata in audit details when threats were detected.
+	// Include threat metadata in audit details when threats were detected.
 	if threatInfo != nil && threatInfo.Detected {
 		details["threat_detected"] = true
 		details["threat_rules"] = threatInfo.Rules
@@ -810,15 +814,56 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 
 	// Best-effort audit; do not fail the response on audit errors.
 	if err := l.auditStore.Append(ctx, entry); err != nil {
-		l.auditFailCount.Add(1)
-		slog.Warn("audit store append failed",
+		consecutive := l.auditFailCount.Add(1)
+		logLevel := slog.LevelWarn
+		if consecutive >= 3 {
+			logLevel = slog.LevelError
+		}
+		slog.Log(ctx, logLevel, "audit store append failed",
 			"error", err,
 			"workspace_id", msg.WorkspaceID,
 			"session_id", msg.SessionID,
-			"consecutive_failures", l.auditFailCount.Load(),
+			"consecutive_failures", consecutive,
 		)
 	} else {
 		l.auditFailCount.Store(0)
+	}
+}
+
+// auditInputBlocked records a best-effort audit entry when the input scanner
+// blocks a message. This gives security teams visibility into rejected inputs
+// without failing the already-failing request path.
+func (l *Loop) auditInputBlocked(ctx context.Context, msg InboundMessage, threatInfo *store.ThreatInfo) {
+	if l.auditStore == nil {
+		return
+	}
+
+	details := map[string]any{
+		"content_length": len(msg.Content),
+	}
+	if threatInfo != nil && threatInfo.Detected {
+		details["threat_detected"] = true
+		details["threat_rules"] = threatInfo.Rules
+		details["threat_stage"] = string(threatInfo.Stage)
+	}
+
+	entry := &store.AuditEntry{
+		ID:          uuid.New().String(),
+		Timestamp:   time.Now().UTC(),
+		Action:      "agent_loop.input_blocked",
+		Actor:       msg.UserID,
+		WorkspaceID: msg.WorkspaceID,
+		SessionID:   msg.SessionID,
+		Details:     details,
+		Result:      "blocked",
+	}
+
+	if err := l.auditStore.Append(ctx, entry); err != nil {
+		slog.Warn("audit store append failed for input_blocked",
+			"error", err,
+			"workspace_id", msg.WorkspaceID,
+			"session_id", msg.SessionID,
+		)
 	}
 }
 
@@ -891,7 +936,12 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 					"consecutive_failures", consecutive,
 				}, attrsToAny(logAttrs)...)...,
 			)
-			return content, nil, nil
+			// D062 decision: availability over security for tool results.
+			// Apply normalization (NFKC + zero-width stripping + HTML entity decoding)
+			// even on the best-effort path to ensure consistent unicode handling.
+			// Stage and origin are compile-time constants, so only regex engine
+			// failures can realistically reach here.
+			return scanner.Normalize(content), nil, nil
 		}
 		return "", nil, sigilerr.Wrapf(scanErr, sigilerr.CodeSecurityScannerFailure,
 			"scanning %s content", stage,
@@ -924,10 +974,10 @@ func (l *Loop) applyScannedResult(stage scanner.Stage, mode scanner.Mode, scanRe
 		threat = &store.ThreatInfo{
 			Detected: true,
 			Rules:    rules,
-			Stage:    store.ScanStage(stage),
+			Stage:    stage,
 		}
 
-		// Finding 2: enhanced flag-mode logging with match count, highest severity, and scanner mode.
+		// Enhanced flag-mode logging with match count, highest severity, and scanner mode.
 		if mode == scanner.ModeFlag {
 			slog.Warn("scanner flag mode: threats detected in content",
 				append([]any{
@@ -970,7 +1020,7 @@ func (l *Loop) AuditFailCount() int64 {
 }
 
 // ScannerFailCount returns the current consecutive tool-stage scanner failure count.
-// Exposed for testing to verify circuit breaker semantics (D062).
+// Exposed for testing to verify consecutive-failure log escalation (D062).
 func (l *Loop) ScannerFailCount() int64 {
 	return l.scannerFailCount.Load()
 }
@@ -982,17 +1032,15 @@ func sanitizeToolError(err error) string {
 	slog.Warn("tool dispatch error", "error", err)
 
 	code := sigilerr.CodeOf(err)
-	switch {
-	case code == sigilerr.CodePluginNotFound,
-		code == sigilerr.CodeAgentToolBudgetExceeded,
-		code == sigilerr.CodeAgentToolTimeout:
+	switch code {
+	case sigilerr.CodePluginNotFound:
 		return "tool not found"
-	case code == sigilerr.CodePluginCapabilityDenied,
-		code == sigilerr.CodeWorkspaceMembershipDenied:
+	case sigilerr.CodeAgentToolBudgetExceeded:
+		return "tool call limit reached"
+	case sigilerr.CodeAgentToolTimeout:
+		return "tool execution timed out"
+	case sigilerr.CodePluginCapabilityDenied, sigilerr.CodeWorkspaceMembershipDenied:
 		return "capability denied"
-	case code != "":
-		return "tool execution failed"
-	default:
-		return "tool execution failed"
 	}
+	return "tool execution failed"
 }

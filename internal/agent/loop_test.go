@@ -2551,13 +2551,13 @@ func TestNewLoop_MaxToolCallsPerTurnDefault(t *testing.T) {
 				"expected at least %d LLM calls for MaxToolCallsPerTurn=%d",
 				tt.wantMinLLMCalls, tt.maxToolCallsPerTurn)
 
-			// sanitizeToolError converts CodeAgentToolBudgetExceeded to "tool not found"
+			// sanitizeToolError converts CodeAgentToolBudgetExceeded to "tool call limit reached"
 			// to avoid leaking internal budget state to the LLM. We verify the
 			// sanitized message is present, not the raw internal error string.
 			var foundBudgetError bool
 			for _, req := range reqs {
 				for _, msg := range req.Messages {
-					if msg.Role == store.MessageRoleTool && strings.Contains(msg.Content, "tool not found") {
+					if msg.Role == store.MessageRoleTool && strings.Contains(msg.Content, "tool call limit reached") {
 						foundBudgetError = true
 					}
 				}
@@ -3282,14 +3282,14 @@ func TestSanitizeToolError(t *testing.T) {
 			wantMsg: "tool not found",
 		},
 		{
-			name:    "tool budget exceeded returns tool not found",
+			name:    "tool budget exceeded returns tool call limit reached",
 			err:     sigilerr.New(sigilerr.CodeAgentToolBudgetExceeded, "tool call limit reached"),
-			wantMsg: "tool not found",
+			wantMsg: "tool call limit reached",
 		},
 		{
-			name:    "tool timeout returns tool not found",
+			name:    "tool timeout returns tool execution timed out",
 			err:     sigilerr.New(sigilerr.CodeAgentToolTimeout, "tool timed out"),
-			wantMsg: "tool not found",
+			wantMsg: "tool execution timed out",
 		},
 		{
 			name:    "capability denied returns capability denied",

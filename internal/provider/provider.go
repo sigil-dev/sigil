@@ -271,6 +271,16 @@ type ProviderStatus struct {
 }
 
 // OriginTag returns the text marker for the given origin, or empty string if unknown.
+//
+// Security note: these tags are defense-in-depth informational hints prepended
+// to message content for human readability and lightweight scanning. They are
+// NOT security boundaries. A user can embed "[user_input]", "[system]", or
+// "[tool_output]" literally in their own message content, so the presence of a
+// tag in content does NOT guarantee the message originated from that source.
+// Actual message origin is enforced by the provider API's native role field
+// (e.g. "user", "assistant", "tool" in the upstream LLM request). Security
+// decisions MUST rely on the role field and the agent loop's 7-step validation
+// pipeline, not on these textual markers.
 func OriginTag(origin Origin) string {
 	switch origin {
 	case OriginUser:

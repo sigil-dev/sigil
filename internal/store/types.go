@@ -5,6 +5,8 @@ package store
 
 import (
 	"time"
+
+	"github.com/sigil-dev/sigil/pkg/types"
 )
 
 // --- Session types ---
@@ -63,24 +65,14 @@ const (
 )
 
 // ScanStage identifies the pipeline stage where a security scan occurred.
-// Mirrors scanner.Stage but avoids importing internal/security/scanner from store.
-type ScanStage string
+// Aliased from pkg/types for backward compatibility.
+type ScanStage = types.ScanStage
 
 const (
-	ScanStageInput  ScanStage = "input"
-	ScanStageTool   ScanStage = "tool"
-	ScanStageOutput ScanStage = "output"
+	ScanStageInput  ScanStage = types.ScanStageInput
+	ScanStageTool   ScanStage = types.ScanStageTool
+	ScanStageOutput ScanStage = types.ScanStageOutput
 )
-
-// Valid reports whether the scan stage is a known pipeline stage.
-func (s ScanStage) Valid() bool {
-	switch s {
-	case ScanStageInput, ScanStageTool, ScanStageOutput:
-		return true
-	default:
-		return false
-	}
-}
 
 // ThreatInfo records security scanner findings for audit persistence.
 type ThreatInfo struct {
