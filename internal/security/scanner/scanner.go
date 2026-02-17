@@ -121,6 +121,12 @@ func NewRegexScanner(rules []Rule) (*RegexScanner, error) {
 		if !r.Stage.Valid() {
 			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid stage %q", i, r.Name, r.Stage)
 		}
+		if r.Name == "" {
+			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d has empty name", i)
+		}
+		if !r.Severity.Valid() {
+			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid severity %q", i, r.Name, r.Severity)
+		}
 	}
 	return &RegexScanner{rules: rules, maxContentLength: DefaultMaxContentLength}, nil
 }
@@ -162,6 +168,13 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 	}
 
 	content = normalize(content)
+
+	if len(content) > s.maxContentLength {
+		return ScanResult{Threat: true, Content: content, Matches: []Match{{
+			Rule:     "content_too_large",
+			Severity: SeverityHigh,
+		}}}, nil
+	}
 
 	result := ScanResult{Content: content}
 

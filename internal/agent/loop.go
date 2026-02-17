@@ -759,6 +759,15 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 				sigilerr.FieldSessionID(sessionID),
 			)
 		}
+		if scanResult.Threat {
+			for _, m := range scanResult.Matches {
+				slog.Warn("output secret/injection detected",
+					"rule", m.Rule,
+					"severity", m.Severity,
+					"session_id", sessionID,
+				)
+			}
+		}
 		var modeErr error
 		text, modeErr = scanner.ApplyMode(l.scannerModes.Output, scanResult.Content, scanResult)
 		if modeErr != nil {
