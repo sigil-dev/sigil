@@ -16,7 +16,7 @@ A single `Scanner` interface with a regex-based rule engine. Three rule configur
 
 ```go
 type Scanner interface {
-    Scan(ctx context.Context, content string, opts ScanContext) (*ScanResult, error)
+    Scan(ctx context.Context, content string, opts ScanContext) (ScanResult, error)
 }
 
 type ScanContext struct {
