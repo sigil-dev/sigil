@@ -2,9 +2,14 @@
 // Copyright 2026 Sigil Contributors
 
 import { api, API_BASE } from "$lib/api/client";
+import type { paths } from "$lib/api/generated/schema";
 import { logger } from "$lib/logger";
 import { classifyError } from "./classify-error";
 import { parseSSEEventData } from "./sse-parser";
+
+/** Request body type for the chat stream endpoint */
+type ChatStreamRequestBody =
+  paths["/api/v1/chat/stream"]["post"]["requestBody"]["content"]["application/json"];
 
 /** Maximum SSE stream duration before automatic abort (5 minutes) */
 const SSE_STREAM_TIMEOUT_MS = 5 * 60 * 1000;
@@ -200,9 +205,11 @@ export class ChatStore {
     this.abortController = new AbortController();
 
     try {
-      const body: Record<string, unknown> = { content: content.trim() };
-      if (this.workspaceId) body.workspace_id = this.workspaceId;
-      if (this.sessionId) body.session_id = this.sessionId;
+      const body: ChatStreamRequestBody = {
+        content: content.trim(),
+        ...(this.workspaceId ? { workspace_id: this.workspaceId } : {}),
+        ...(this.sessionId ? { session_id: this.sessionId } : {}),
+      };
 
       // Note: Using raw fetch for SSE streaming endpoint instead of typed client.
       // openapi-fetch supports streaming via parseAs: "stream" (v0.9.4+), but raw
