@@ -559,6 +559,50 @@ func TestConfig_ScannerValidation(t *testing.T) {
 	}
 }
 
+func TestConfig_AllowPermissiveInputMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		allow   bool
+		wantErr bool
+	}{
+		{"block mode does not require allow", "block", false, false},
+		{"flag mode without allow is rejected", "flag", false, true},
+		{"flag mode with allow is accepted", "flag", true, false},
+		{"redact mode without allow is rejected", "redact", false, true},
+		{"redact mode with allow is accepted", "redact", true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := viper.New()
+			config.SetDefaults(v)
+			v.Set("security.scanner.input", tt.input)
+			v.Set("security.scanner.allow_permissive_input_mode", tt.allow)
+
+			cfg, err := config.FromViper(v)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.input, cfg.Security.Scanner.Input)
+			}
+		})
+	}
+}
+
+func TestConfig_AllowPermissiveInputModeEnvRejected(t *testing.T) {
+	t.Setenv("SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE", "true")
+
+	v := viper.New()
+	config.SetDefaults(v)
+	config.SetupEnv(v)
+
+	_, err := config.FromViper(v)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "allow_permissive_input_mode cannot be set via environment variable")
+}
+
 func TestValidate_RateLimitConfig(t *testing.T) {
 	tests := []struct {
 		name    string

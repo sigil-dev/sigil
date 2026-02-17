@@ -6,12 +6,12 @@ package config
 import (
 	"errors"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/sigil-dev/sigil/internal/secrets"
-	"github.com/sigil-dev/sigil/internal/security/scanner"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/viper"
 )
@@ -126,7 +126,7 @@ type ScannerConfig struct {
 	Input                string `mapstructure:"input"`
 	Tool                 string `mapstructure:"tool"`
 	Output               string `mapstructure:"output"`
-	AllowPermissiveInput bool   `mapstructure:"allow_permissive_input"`
+	AllowPermissiveInputMode bool `mapstructure:"allow_permissive_input_mode"`
 }
 
 // SetDefaults applies Sigil's default configuration values to v.
@@ -388,18 +388,25 @@ func (c *Config) validateSecurity() []error {
 		{"security.scanner.tool", c.Security.Scanner.Tool},
 		{"security.scanner.output", c.Security.Scanner.Output},
 	} {
-		if _, err := scanner.ParseMode(pair.value); err != nil {
+		if !isValidScannerMode(pair.value) {
 			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-				"config: %s: %v", pair.field, err))
+				"config: %s: invalid scanner mode %q (valid: block, flag, redact)", pair.field, pair.value))
 		}
 	}
 
 	// Require explicit opt-in to use non-block modes for input scanning.
-	if c.Security.Scanner.Input != "block" && !c.Security.Scanner.AllowPermissiveInput {
+	if c.Security.Scanner.Input != "block" && !c.Security.Scanner.AllowPermissiveInputMode {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"config: security.scanner.input is %q but only 'block' is allowed without security.scanner.allow_permissive_input=true",
+			"config: security.scanner.input is %q but only 'block' is allowed without security.scanner.allow_permissive_input_mode=true",
 			c.Security.Scanner.Input,
 		))
+	}
+
+	// AllowPermissiveInputMode must not be overridable via environment variable
+	// to prevent env injection from weakening input scanning in production.
+	if os.Getenv("SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE") != "" {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: security.scanner.allow_permissive_input_mode cannot be set via environment variable"))
 	}
 
 	return errs
@@ -411,6 +418,18 @@ func providerFromModel(model string) string {
 		return model[:idx]
 	}
 	return model
+}
+
+// isValidScannerMode checks if a mode string is one of the known scanner modes.
+// This is intentionally a local check to avoid importing internal/security/scanner
+// from the config package, which would invert the dependency direction.
+func isValidScannerMode(mode string) bool {
+	switch mode {
+	case "block", "flag", "redact":
+		return true
+	default:
+		return false
+	}
 }
 
 // validateStringInSet checks if a value is in a set of valid options.
