@@ -348,7 +348,7 @@ func secretRules(stage Stage) []Rule {
 		},
 		{
 			Name:     "slack_token",
-			Pattern:  regexp.MustCompile(`xox[bpas]-[A-Za-z0-9-]+`),
+			Pattern:  regexp.MustCompile(`xox[bpas]-[A-Za-z0-9-]{10,}`),
 			Stage:    stage,
 			Severity: SeverityHigh,
 		},
@@ -398,6 +398,54 @@ func secretRules(stage Stage) []Rule {
 			Pattern:  regexp.MustCompile(`keyring://[^\s]+`),
 			Stage:    stage,
 			Severity: SeverityMedium,
+		},
+		{
+			Name:     "stripe_api_key",
+			Pattern:  regexp.MustCompile(`sk_live_[A-Za-z0-9]{24,}`),
+			Stage:    stage,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "stripe_restricted_key",
+			Pattern:  regexp.MustCompile(`rk_live_[A-Za-z0-9]{24,}`),
+			Stage:    stage,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "npm_token",
+			Pattern:  regexp.MustCompile(`npm_[A-Za-z0-9]{36}`),
+			Stage:    stage,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "azure_connection_string",
+			Pattern:  regexp.MustCompile(`(?i)AccountKey\s*=\s*[A-Za-z0-9+/=]{20,}`),
+			Stage:    stage,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "sendgrid_api_key",
+			Pattern:  regexp.MustCompile(`SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}`),
+			Stage:    stage,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "digitalocean_pat",
+			Pattern:  regexp.MustCompile(`dop_v1_[a-f0-9]{64}`),
+			Stage:    stage,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "vault_token",
+			Pattern:  regexp.MustCompile(`hvs\.[A-Za-z0-9_-]{24,}`),
+			Stage:    stage,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "twilio_api_key",
+			Pattern:  regexp.MustCompile(`SK[0-9a-fA-F]{32}`),
+			Stage:    stage,
+			Severity: SeverityHigh,
 		},
 	}
 }

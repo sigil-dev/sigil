@@ -709,6 +709,151 @@ func TestScan_KnownInputInjectionBypasses(t *testing.T) {
 	}
 }
 
+// Finding sigil-7g5.194 — Slack token regex bounded to {10,} to reduce false positives.
+func TestSecretRules_SlackTokenBounded(t *testing.T) {
+	s, err := scanner.NewRegexScanner(scanner.OutputRules())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		content     string
+		shouldMatch bool
+	}{
+		{
+			name:        "real-length bot token matches",
+			content:     "SLACK_TOKEN=xoxb-1234567890-abcdefghijklmnop",
+			shouldMatch: true,
+		},
+		{
+			name:        "short string does not match",
+			content:     "xoxb-word-test",
+			shouldMatch: false,
+		},
+		{
+			name:        "exactly 10 chars after prefix matches",
+			content:     "xoxp-1234567890",
+			shouldMatch: true,
+		},
+		{
+			name:        "9 chars after prefix does not match",
+			content:     "xoxb-123456789",
+			shouldMatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := s.Scan(context.Background(), tt.content, scanner.ScanContext{
+				Stage:  scanner.StageOutput,
+				Origin: scanner.OriginSystem,
+			})
+			require.NoError(t, err)
+			if tt.shouldMatch {
+				assert.True(t, result.Threat, "expected slack_token match for: %q", tt.content)
+			} else {
+				assert.False(t, result.Threat, "expected no match for short string: %q", tt.content)
+			}
+		})
+	}
+}
+
+// Finding sigil-7g5.190 — New secret patterns: Stripe, npm, Azure, SendGrid, DigitalOcean, Vault, Twilio.
+func TestSecretRules_NewPatterns(t *testing.T) {
+	s, err := scanner.NewRegexScanner(scanner.ToolSecretRules())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		content  string
+		ruleName string
+	}{
+		{
+			name:     "stripe secret key",
+			content:  "STRIPE_KEY=sk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+			ruleName: "stripe_api_key",
+		},
+		{
+			name:     "stripe restricted key",
+			content:  "key: rk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZabcd",
+			ruleName: "stripe_restricted_key",
+		},
+		{
+			name:     "npm access token",
+			content:  "NPM_TOKEN=npm_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+			ruleName: "npm_token",
+		},
+		{
+			name:     "azure storage connection string",
+			content:  "DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=abcdefghijklmnopqrstuvwxyz012345==;EndpointSuffix=core.windows.net",
+			ruleName: "azure_connection_string",
+		},
+		{
+			name:     "sendgrid api key",
+			content:  "SENDGRID_KEY=SG.abcdefghijklmnopqrstuv.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr",
+			ruleName: "sendgrid_api_key",
+		},
+		{
+			name:     "digitalocean pat",
+			content:  "DO_TOKEN=dop_v1_abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+			ruleName: "digitalocean_pat",
+		},
+		{
+			name:     "hashicorp vault token",
+			content:  "VAULT_TOKEN=hvs.abcdefghijklmnopqrstuvwxyz012",
+			ruleName: "vault_token",
+		},
+		{
+			name:     "twilio api key",
+			content:  "TWILIO_KEY=SK1234567890abcdef1234567890abcdef",
+			ruleName: "twilio_api_key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := s.Scan(context.Background(), tt.content, scanner.ScanContext{
+				Stage:  scanner.StageTool,
+				Origin: scanner.OriginTool,
+			})
+			require.NoError(t, err)
+			assert.True(t, result.Threat, "expected threat for %s in: %q", tt.ruleName, tt.content)
+
+			ruleFound := false
+			for _, m := range result.Matches {
+				if m.Rule == tt.ruleName {
+					ruleFound = true
+					break
+				}
+			}
+			assert.True(t, ruleFound, "expected rule %q to match, got matches: %v", tt.ruleName, result.Matches)
+		})
+	}
+}
+
+// TestToolSecretRules_IncludesNewPatterns verifies ToolSecretRules includes all 8 new rules.
+func TestToolSecretRules_IncludesNewPatterns(t *testing.T) {
+	rules := scanner.ToolSecretRules()
+	ruleNames := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		ruleNames[r.Name] = true
+	}
+
+	expected := []string{
+		"stripe_api_key",
+		"stripe_restricted_key",
+		"npm_token",
+		"azure_connection_string",
+		"sendgrid_api_key",
+		"digitalocean_pat",
+		"vault_token",
+		"twilio_api_key",
+	}
+
+	for _, name := range expected {
+		assert.True(t, ruleNames[name], "ToolSecretRules missing expected rule %q", name)
+	}
+}
+
 // Finding sigil-7g5.206 — Database connection string detection with URL-encoded passwords and IPv6 hosts.
 func TestSecretRules_DatabaseConnectionString(t *testing.T) {
 	s, err := scanner.NewRegexScanner(scanner.OutputRules())

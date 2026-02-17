@@ -345,7 +345,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	// validation, and status checks for messages that will be rejected.
 	scanned, inputThreat, scanErr := l.scanContent(ctx, msg.Content,
 		scanner.StageInput, scanner.OriginUser, l.scannerModes.Input,
-		"session_id", msg.SessionID, "workspace_id", msg.WorkspaceID,
+		[]slog.Attr{slog.String("session_id", msg.SessionID), slog.String("workspace_id", msg.WorkspaceID)},
 	)
 	if scanErr != nil {
 		return nil, nil, scanErr
@@ -619,7 +619,7 @@ func (l *Loop) runToolLoop(
 			// before persisting to session history.
 			scannedText, intermediateThreat, scanErr := l.scanContent(ctx, text,
 				scanner.StageOutput, scanner.OriginSystem, l.scannerModes.Output,
-				"session_id", msg.SessionID, "workspace_id", msg.WorkspaceID,
+				[]slog.Attr{slog.String("session_id", msg.SessionID), slog.String("workspace_id", msg.WorkspaceID)},
 			)
 			if scanErr != nil {
 				return "", nil, scanErr
@@ -678,7 +678,7 @@ func (l *Loop) runToolLoop(
 			// Tool result scanning — check for instruction injection before persisting.
 			scannedResult, toolThreat, scanErr := l.scanContent(ctx, resultContent,
 				scanner.StageTool, scanner.OriginTool, l.scannerModes.Tool,
-				"tool", tc.Name, "session_id", msg.SessionID, "workspace_id", msg.WorkspaceID,
+				[]slog.Attr{slog.String("tool", tc.Name), slog.String("session_id", msg.SessionID), slog.String("workspace_id", msg.WorkspaceID)},
 			)
 			if scanErr != nil {
 				return "", nil, scanErr
@@ -745,7 +745,7 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 	// Output scanning — filter secrets before persisting/returning.
 	scanned, outputThreat, scanErr := l.scanContent(ctx, text,
 		scanner.StageOutput, scanner.OriginSystem, l.scannerModes.Output,
-		"session_id", sessionID,
+		[]slog.Attr{slog.String("session_id", sessionID)},
 	)
 	if scanErr != nil {
 		return nil, nil, scanErr
@@ -829,10 +829,19 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 // where prompt-injection payloads are most likely to appear.
 const maxToolContentScanSize = 512 * 1024 // 512KB
 
+// attrsToAny converts a []slog.Attr to []any for use with slog's variadic API.
+func attrsToAny(attrs []slog.Attr) []any {
+	result := make([]any, len(attrs))
+	for i, a := range attrs {
+		result[i] = a
+	}
+	return result
+}
+
 // scanContent scans content at the given stage and applies the configured mode.
 // Returns the (possibly redacted) content, threat info (if a threat was detected), or an error
 // if scanning fails or the mode blocks. Scanner is guaranteed non-nil by NewLoop validation.
-func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.Stage, origin scanner.Origin, mode scanner.Mode, logAttrs ...any) (string, *store.ThreatInfo, error) {
+func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.Stage, origin scanner.Origin, mode scanner.Mode, logAttrs []slog.Attr) (string, *store.ThreatInfo, error) {
 	scanResult, scanErr := l.scanner.Scan(ctx, content, scanner.ScanContext{
 		Stage:  stage,
 		Origin: origin,
@@ -856,7 +865,7 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 						"original_size", len(content),
 						"truncated_size", len(truncated),
 						"stage", stage,
-					}, logAttrs...)...,
+					}, attrsToAny(logAttrs)...)...,
 				)
 				reScanResult, reScanErr := l.scanner.Scan(ctx, truncated, scanner.ScanContext{
 					Stage:  stage,
@@ -864,7 +873,7 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 				})
 				if reScanErr == nil {
 					// Re-scan succeeded: apply mode against the truncated+scanned result.
-					return l.applyScannedResult(stage, mode, reScanResult)
+					return l.applyScannedResult(stage, mode, reScanResult, logAttrs)
 				}
 				// Re-scan also failed: fall through to the generic best-effort path.
 				scanErr = reScanErr
@@ -880,7 +889,7 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 					"stage", stage,
 					"error_code", sigilerr.CodeSecurityScannerFailure,
 					"consecutive_failures", consecutive,
-				}, logAttrs...)...,
+				}, attrsToAny(logAttrs)...)...,
 			)
 			return content, nil, nil
 		}
@@ -889,12 +898,12 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		)
 	}
 
-	return l.applyScannedResult(stage, mode, scanResult, logAttrs...)
+	return l.applyScannedResult(stage, mode, scanResult, logAttrs)
 }
 
 // applyScannedResult processes a successful ScanResult: resets failure counters, builds
 // threat info, applies the configured mode, and returns the (possibly redacted) content.
-func (l *Loop) applyScannedResult(stage scanner.Stage, mode scanner.Mode, scanResult scanner.ScanResult, logAttrs ...any) (string, *store.ThreatInfo, error) {
+func (l *Loop) applyScannedResult(stage scanner.Stage, mode scanner.Mode, scanResult scanner.ScanResult, logAttrs []slog.Attr) (string, *store.ThreatInfo, error) {
 	// Reset the scanner fail counter on success for the tool stage.
 	if stage == scanner.StageTool {
 		l.scannerFailCount.Store(0)
@@ -906,7 +915,7 @@ func (l *Loop) applyScannedResult(stage scanner.Stage, mode scanner.Mode, scanRe
 		highestSeverity := scanner.Severity("")
 		for _, m := range scanResult.Matches {
 			rules = append(rules, m.Rule)
-			attrs := append([]any{"rule", m.Rule, "severity", m.Severity, "stage", stage}, logAttrs...)
+			attrs := append([]any{"rule", m.Rule, "severity", m.Severity, "stage", stage}, attrsToAny(logAttrs)...)
 			slog.Warn("security scan threat detected", attrs...)
 			if highestSeverity == "" || severityRank(m.Severity) > severityRank(highestSeverity) {
 				highestSeverity = m.Severity
@@ -926,7 +935,7 @@ func (l *Loop) applyScannedResult(stage scanner.Stage, mode scanner.Mode, scanRe
 					"highest_severity", string(highestSeverity),
 					"scanner_mode", string(mode),
 					"stage", stage,
-				}, logAttrs...)...,
+				}, attrsToAny(logAttrs)...)...,
 			)
 		}
 	}
