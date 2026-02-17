@@ -667,7 +667,7 @@ func (l *Loop) runToolLoop(
 				resultContent = scanned
 			}
 
-			// Persist tool result message (using scanned/possibly-redacted content).
+			// Persist tool result message (using scanned content).
 			toolMsg := &store.Message{
 				ID:         uuid.New().String(),
 				SessionID:  msg.SessionID,

@@ -7,7 +7,6 @@ import (
 	"context"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
@@ -33,9 +32,7 @@ func (s Stage) Valid() bool {
 	}
 }
 
-// Origin indicates the source of content. Reserved for future context-aware rule selection.
-// NOTE: This type intentionally mirrors provider.Origin. A shared package would avoid
-// duplication but is deferred to avoid import cycle complexity.
+// Origin indicates the source of content, used for context-aware logging and future rule selection.
 type Origin string
 
 const (
@@ -131,34 +128,37 @@ func NewRegexScanner(rules []Rule) (*RegexScanner, error) {
 	return &RegexScanner{rules: rules, maxContentLength: DefaultMaxContentLength}, nil
 }
 
+// invisibleCharReplacer strips zero-width and other invisible Unicode characters
+// to reduce evasion via Unicode homoglyphs. Allocated once at package init.
+var invisibleCharReplacer = strings.NewReplacer(
+	"\u200b", "", // zero-width space
+	"\u200c", "", // zero-width non-joiner
+	"\u200d", "", // zero-width joiner
+	"\ufeff", "", // zero-width no-break space / BOM
+	"\u00ad", "", // soft hyphen
+	"\u034f", "", // combining grapheme joiner
+	"\u061c", "", // Arabic letter mark
+	"\u180e", "", // Mongolian vowel separator
+	"\u2060", "", // word joiner
+	"\u2061", "", // invisible function application
+	"\u2062", "", // invisible times
+	"\u2063", "", // invisible separator
+	"\u2064", "", // invisible plus
+	"\u206a", "", // inhibit symmetric swapping
+	"\u206b", "", // activate symmetric swapping
+	"\u206c", "", // inhibit Arabic form shaping
+	"\u206d", "", // activate Arabic form shaping
+	"\u206e", "", // national digit shapes
+	"\u206f", "", // nominal digit shapes
+	"\ufff9", "", // interlinear annotation anchor
+	"\ufffa", "", // interlinear annotation separator
+	"\ufffb", "", // interlinear annotation terminator
+)
+
 // normalize applies NFKC normalization and strips zero-width characters
 // to reduce evasion via Unicode homoglyphs.
 func normalize(s string) string {
-	// Strip zero-width characters and other invisible Unicode characters.
-	s = strings.NewReplacer(
-		"\u200b", "", // zero-width space
-		"\u200c", "", // zero-width non-joiner
-		"\u200d", "", // zero-width joiner
-		"\ufeff", "", // zero-width no-break space / BOM
-		"\u00ad", "", // soft hyphen
-		"\u034f", "", // combining grapheme joiner
-		"\u061c", "", // Arabic letter mark
-		"\u180e", "", // Mongolian vowel separator
-		"\u2060", "", // word joiner
-		"\u2061", "", // invisible function application
-		"\u2062", "", // invisible times
-		"\u2063", "", // invisible separator
-		"\u2064", "", // invisible plus
-		"\u206a", "", // inhibit symmetric swapping
-		"\u206b", "", // activate symmetric swapping
-		"\u206c", "", // inhibit Arabic form shaping
-		"\u206d", "", // activate Arabic form shaping
-		"\u206e", "", // national digit shapes
-		"\u206f", "", // nominal digit shapes
-		"\ufff9", "", // interlinear annotation anchor
-		"\ufffa", "", // interlinear annotation separator
-		"\ufffb", "", // interlinear annotation terminator
-	).Replace(s)
+	s = invisibleCharReplacer.Replace(s)
 	// NFKC normalization collapses compatibility equivalents.
 	return norm.NFKC.String(s)
 }
@@ -174,15 +174,6 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 			Rule:     "content_too_large",
 			Severity: SeverityHigh,
 		}}}, nil
-	}
-
-	// Defensive copy of metadata to prevent mutation of caller's map.
-	if opts.Metadata != nil {
-		copied := make(map[string]string, len(opts.Metadata))
-		for k, v := range opts.Metadata {
-			copied[k] = v
-		}
-		opts.Metadata = copied
 	}
 
 	content = normalize(content)
@@ -426,9 +417,7 @@ func redact(content string, matches []Match) string {
 	// Sort by location ascending.
 	sorted := make([]Match, len(matches))
 	copy(sorted, matches)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Location < sorted[j].Location
-	})
+	slices.SortFunc(sorted, func(a, b Match) int { return a.Location - b.Location })
 
 	// Merge overlapping ranges.
 	type span struct{ start, end int }
