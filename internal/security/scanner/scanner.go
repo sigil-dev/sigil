@@ -33,7 +33,7 @@ func (s Stage) Valid() bool {
 	}
 }
 
-// Origin indicates the source of content, used for context-aware logging and future rule selection.
+// Origin indicates the source of content (user input, system, or tool output).
 // Aliased from pkg/types for backward compatibility.
 type Origin = types.Origin
 
