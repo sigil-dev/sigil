@@ -868,13 +868,13 @@ Existing tokens and client authentication headers MUST be reviewed after enablin
 
 **Scanner error handling:** The scanner distinguishes between two error categories with different handling paths:
 
-1. **Scanner internal errors** (all stages) — context cancellation, regex panic, compilation errors, etc. These are failures of the scanner itself, not threat detection results. All three stages fail closed and return the error to the caller, blocking execution. This enforces the default-deny security principle: if we cannot scan, we cannot proceed.
+1. **Scanner internal errors** — context cancellation, regex panic, compilation errors, etc. These are failures of the scanner itself, not threat detection results. Error handling differs by stage:
+   - **Input and output stages**: fail closed — return the error to the caller, blocking execution. This enforces the default-deny security principle.
+   - **Tool stage**: best-effort — log a warning and continue with unscanned content to preserve availability. Tool results are less security-sensitive than user input (they cannot inject system prompts), and blocking on transient scanner failures would degrade the user experience. Content-too-large errors are an exception: oversized tool results are truncated and re-scanned to prevent bypass (see sigil-7g5.184).
 
 2. **Threat detection** (per-hook behavior) — when the scanner successfully detects a pattern (prompt injection, secret, etc.):
    - **Input hook**: `block` — reject the message and return error to caller (prompt injection is high-severity).
    - **Tool hook**: `flag` — log a warning and continue (tool results may legitimately contain credential-shaped strings and injection-like patterns).
    - **Output hook**: `redact` — replace matched content with `[REDACTED]` and continue to the user.
-
-These are distinct cases: scanner internal errors always fail closed (all stages), while threat detection behaviors differ per stage as described above.
 
 **Ref:** `internal/security/scanner/`, `docs/design/03-security-model.md` Steps 1/6/7
