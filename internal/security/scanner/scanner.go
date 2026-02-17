@@ -34,23 +34,14 @@ func (s Stage) Valid() bool {
 }
 
 // Origin indicates the source of content, used for context-aware logging and future rule selection.
-type Origin string
+// Aliased from pkg/types for backward compatibility.
+type Origin = types.Origin
 
 const (
-	OriginUser   Origin = "user_input"
-	OriginSystem Origin = "system"
-	OriginTool   Origin = "tool_output"
+	OriginUser   = types.OriginUserInput
+	OriginSystem = types.OriginSystem
+	OriginTool   = types.OriginToolOutput
 )
-
-// Valid reports whether the origin is a known content origin.
-func (o Origin) Valid() bool {
-	switch o {
-	case OriginUser, OriginSystem, OriginTool:
-		return true
-	default:
-		return false
-	}
-}
 
 // Severity indicates how critical a detection is.
 type Severity string

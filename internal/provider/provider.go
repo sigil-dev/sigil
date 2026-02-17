@@ -8,6 +8,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 )
 
 // Provider is the core interface for LLM providers.
@@ -78,12 +79,13 @@ type ChatOptions struct {
 
 // Origin indicates the source of a message. Used to label conversation
 // history entries for downstream processing.
-type Origin string
+// Aliased from pkg/types for backward compatibility.
+type Origin = types.Origin
 
 const (
-	OriginUser   Origin = "user_input"
-	OriginSystem Origin = "system"
-	OriginTool   Origin = "tool_output"
+	OriginUser   = types.OriginUserInput
+	OriginSystem = types.OriginSystem
+	OriginTool   = types.OriginToolOutput
 )
 
 // Message represents a conversation message.

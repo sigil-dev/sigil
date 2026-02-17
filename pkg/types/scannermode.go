@@ -37,3 +37,26 @@ func ParseScannerMode(s string) (ScannerMode, error) {
 	}
 	return m, nil
 }
+
+// Origin indicates the source of content being scanned or the source of a
+// conversation message. Used for context-aware logging and rule selection.
+type Origin string
+
+const (
+	// OriginUserInput indicates content originating from a human user.
+	OriginUserInput Origin = "user_input"
+	// OriginSystem indicates content originating from the system (assistant responses).
+	OriginSystem Origin = "system"
+	// OriginToolOutput indicates content originating from a tool call result.
+	OriginToolOutput Origin = "tool_output"
+)
+
+// Valid reports whether the origin is a known content origin.
+func (o Origin) Valid() bool {
+	switch o {
+	case OriginUserInput, OriginSystem, OriginToolOutput:
+		return true
+	default:
+		return false
+	}
+}
