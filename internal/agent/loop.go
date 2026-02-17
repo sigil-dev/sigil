@@ -626,11 +626,23 @@ func (l *Loop) runToolLoop(
 		// If the LLM emitted text alongside tool calls, persist it as an
 		// assistant message so the conversation history stays coherent.
 		if text != "" {
+			// Output scanning — filter secrets from intermediate assistant text
+			// before persisting to session history.
+			scannedText, intermediateThreat, scanErr := l.scanContent(ctx, text,
+				scanner.StageOutput, scanner.OriginSystem, l.scannerModes.Output,
+				"session_id", msg.SessionID, "workspace_id", msg.WorkspaceID,
+			)
+			if scanErr != nil {
+				return "", nil, scanErr
+			}
+			text = scannedText
+
 			assistantMsg := &store.Message{
 				ID:        uuid.New().String(),
 				SessionID: msg.SessionID,
 				Role:      store.MessageRoleAssistant,
 				Content:   text,
+				Threat:    intermediateThreat,
 				CreatedAt: time.Now(),
 			}
 			if err := l.sessions.AppendMessage(ctx, msg.SessionID, assistantMsg); err != nil {

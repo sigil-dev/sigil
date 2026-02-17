@@ -3106,3 +3106,85 @@ func TestAgentLoop_ThreatInfoPersistedOnDetection(t *testing.T) {
 	assert.True(t, assistantMsg.Threat.Detected, "Threat.Detected must be true")
 	assert.NotEmpty(t, assistantMsg.Threat.Rules, "Threat.Rules must be non-empty")
 }
+
+// Finding sigil-7g5.181 — Intermediate text scanning: secrets emitted alongside
+// tool calls must be scanned and redacted before persisting to session history.
+func TestAgentLoop_IntermediateTextScannedBeforePersist(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	const rawSecret = "AKIAIOSFODNN7EXAMPLE"
+
+	// Provider that emits text containing a secret alongside a tool call on the
+	// first call (intermediate turn), then returns clean text on the second call.
+	intermediateProvider := &mockProviderIntermediateTextWithSecret{
+		secret: rawSecret,
+		toolCall: &provider.ToolCall{
+			ID:        "tc-intermediate",
+			Name:      "get_info",
+			Arguments: `{}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("some tool output"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: intermediateProvider},
+		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
+		ToolDispatcher: dispatcher,
+		Scanner:        newDefaultScanner(t),
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "Do something with a tool",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Retrieve full session history and find the intermediate assistant message.
+	history, err := ss.GetActiveWindow(ctx, session.ID, 20)
+	require.NoError(t, err)
+
+	// Find the first assistant message (the intermediate one with the secret).
+	var intermediateMsg *store.Message
+	for _, m := range history {
+		if m.Role == store.MessageRoleAssistant {
+			intermediateMsg = m
+			break
+		}
+	}
+	require.NotNil(t, intermediateMsg, "intermediate assistant message must be persisted")
+
+	// The secret must be redacted in the persisted intermediate message.
+	assert.NotContains(t, intermediateMsg.Content, rawSecret,
+		"intermediate assistant message must not contain the raw secret")
+	assert.Contains(t, intermediateMsg.Content, "[REDACTED]",
+		"intermediate assistant message must contain [REDACTED]")
+
+	// ThreatInfo must be set on the intermediate message.
+	require.NotNil(t, intermediateMsg.Threat,
+		"Threat must be non-nil on intermediate message when a secret is detected")
+	assert.True(t, intermediateMsg.Threat.Detected,
+		"Threat.Detected must be true on intermediate message")
+}

@@ -941,6 +941,60 @@ func newMockProviderRouterWithResponse(response string) *mockProviderRouter {
 }
 
 // ---------------------------------------------------------------------------
+// Intermediate text with secret mock (for sigil-7g5.181 test)
+// ---------------------------------------------------------------------------
+
+// mockProviderIntermediateTextWithSecret emits text containing a secret
+// alongside a tool call on the first Chat() call (simulating an intermediate
+// assistant turn), then returns clean text on the second call.
+type mockProviderIntermediateTextWithSecret struct {
+	mu       sync.Mutex
+	callNum  int
+	secret   string
+	toolCall *provider.ToolCall
+}
+
+func (p *mockProviderIntermediateTextWithSecret) Name() string                     { return "mock-intermediate" }
+func (p *mockProviderIntermediateTextWithSecret) Available(_ context.Context) bool { return true }
+func (p *mockProviderIntermediateTextWithSecret) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-intermediate"}, nil
+}
+func (p *mockProviderIntermediateTextWithSecret) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderIntermediateTextWithSecret) Close() error { return nil }
+
+func (p *mockProviderIntermediateTextWithSecret) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	call := p.callNum
+	p.callNum++
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, 4)
+	if call == 0 {
+		// First call: emit text containing a secret alongside a tool call.
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Here is the key " + p.secret + ", let me use the tool."}
+		ch <- provider.ChatEvent{
+			Type:     provider.EventTypeToolCall,
+			ToolCall: p.toolCall,
+		}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5},
+		}
+	} else {
+		// Subsequent calls: emit clean text response.
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "Done."}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 20, OutputTokens: 3},
+		}
+	}
+	close(ch)
+	return ch, nil
+}
+
+// ---------------------------------------------------------------------------
 // Error scanner mock
 // ---------------------------------------------------------------------------
 
