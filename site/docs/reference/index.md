@@ -177,12 +177,13 @@ plugins:
 ### Memory Configuration
 
 ```yaml
-memory:
-  active_window: 20
-  compaction:
-    strategy: summarize
-    summary_model: anthropic/claude-haiku-4-5
-    batch_size: 50
+sessions:
+  memory:
+    active_window: 20
+    compaction:
+      strategy: summarize
+      summary_model: anthropic/claude-haiku-4-5
+      batch_size: 50
 ```
 
 ### Environment Variables
