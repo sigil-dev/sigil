@@ -78,7 +78,7 @@ The agent loop itself has security checks at every step:
    - Timeout enforced (configurable per-tool)
 
 6. **Tool result returned**
-   - Result size capped
+   - Result size capped — *deferred: not yet enforced by scanner; tracked as future work*
    - Result scanned for injection patterns — implemented in `internal/security/scanner/` (D062)
    - Result tagged as `tool_output` (not user input)
 

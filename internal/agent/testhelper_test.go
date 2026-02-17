@@ -12,12 +12,25 @@ import (
 	"sync/atomic"
 	"time"
 
+	"testing"
+
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
+	"github.com/sigil-dev/sigil/internal/security/scanner"
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
+
+// newDefaultScanner creates a RegexScanner with DefaultRules for testing.
+func newDefaultScanner(t *testing.T) *scanner.RegexScanner {
+	t.Helper()
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	if err != nil {
+		t.Fatalf("NewRegexScanner: %v", err)
+	}
+	return s
+}
 
 // ---------------------------------------------------------------------------
 // Session store mock

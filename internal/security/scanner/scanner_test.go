@@ -146,7 +146,8 @@ func TestRegexScanner_Scan(t *testing.T) {
 		},
 	}
 
-	s := scanner.NewRegexScanner(scanner.DefaultRules())
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	for _, tt := range tests {
@@ -163,7 +164,8 @@ func TestRegexScanner_Scan(t *testing.T) {
 }
 
 func TestRegexScanner_StageFiltering(t *testing.T) {
-	s := scanner.NewRegexScanner(scanner.DefaultRules())
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	require.NoError(t, err)
 	ctx := context.Background()
 
 	// AWS key should only trigger on output stage, not input

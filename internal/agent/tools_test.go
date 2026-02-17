@@ -15,6 +15,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security"
+	"github.com/sigil-dev/sigil/internal/security/scanner"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1038,6 +1039,8 @@ func TestToolDispatcher_ResolvesPluginFromRegistry(t *testing.T) {
 		AuditStore:     newMockAuditStore(),
 		ToolDispatcher: dispatcher,
 		ToolRegistry:   registry,
+		Scanner:        newDefaultScanner(t),
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
 	})
 	require.NoError(t, err)
 
@@ -1099,6 +1102,8 @@ func TestToolDispatcher_FallsBackToBuiltin(t *testing.T) {
 		AuditStore:     newMockAuditStore(),
 		ToolDispatcher: dispatcher,
 		ToolRegistry:   registry,
+		Scanner:        newDefaultScanner(t),
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
 	})
 	require.NoError(t, err)
 

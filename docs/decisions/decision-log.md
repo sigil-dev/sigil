@@ -862,8 +862,10 @@ Existing tokens and client authentication headers MUST be reviewed after enablin
    - Output hook: `redact` — replace matched content with `[REDACTED]` before sending to the user.
 4. **Origin tagging on `provider.Message`** — enables context-aware rule selection (e.g., stricter rules for user input vs. system prompts).
 5. **No PII detection in v1** — false-positive rates for regex-based PII detection (names, addresses, phone numbers) are unacceptably high without ML-based NER. Deferred until a suitable Apache-2.0-compatible library is available.
-6. **Secret pattern scope:** AWS keys, GCP service account keys, OpenAI API keys, Anthropic API keys, Google API keys, bearer tokens, PEM private keys, database connection strings, `keyring://` URIs.
+6. **Secret pattern scope:** AWS keys, Google API keys, OpenAI API keys (including legacy sk- prefix), Anthropic API keys, GitHub PATs, Slack tokens, bearer tokens, PEM private keys, database connection strings, `keyring://` URIs.
 
 **Rationale:** A single scanner engine with per-hook configuration is the simplest correct architecture. The three hooks share 90% of their logic (compile patterns, scan text, report findings) and differ only in what action to take on a match. Separate implementations would triple the test surface and create inconsistency risk. The stdlib regexp choice trades detection sophistication for license compatibility — an acceptable trade-off since the primary goal is catching accidental secret exposure, not adversarial obfuscation.
+
+**Scanner error handling:** Input scanning fails closed (returns error to caller) because it guards against prompt injection before any processing. Tool and output scanning also fail closed for consistency with the default-deny security principle. All three stages now treat scanner internal errors as blocking failures.
 
 **Ref:** `internal/security/scanner/`, `docs/design/03-security-model.md` Steps 1/6/7

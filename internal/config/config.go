@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/sigil-dev/sigil/internal/secrets"
+	"github.com/sigil-dev/sigil/internal/security/scanner"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/spf13/viper"
 )
@@ -122,9 +123,10 @@ type SecurityConfig struct {
 
 // ScannerConfig controls per-hook scanner detection modes.
 type ScannerConfig struct {
-	Input  string `mapstructure:"input"`
-	Tool   string `mapstructure:"tool"`
-	Output string `mapstructure:"output"`
+	Input                string `mapstructure:"input"`
+	Tool                 string `mapstructure:"tool"`
+	Output               string `mapstructure:"output"`
+	AllowPermissiveInput bool   `mapstructure:"allow_permissive_input"`
 }
 
 // SetDefaults applies Sigil's default configuration values to v.
@@ -380,17 +382,26 @@ func (c *Config) validateSessions() []error {
 
 func (c *Config) validateSecurity() []error {
 	var errs []error
-	validModes := map[string]bool{"block": true, "flag": true, "redact": true}
 
 	for _, pair := range []struct{ field, value string }{
 		{"security.scanner.input", c.Security.Scanner.Input},
 		{"security.scanner.tool", c.Security.Scanner.Tool},
 		{"security.scanner.output", c.Security.Scanner.Output},
 	} {
-		if err := validateStringInSet(pair.value, pair.field, validModes); err != nil {
-			errs = append(errs, err)
+		if _, err := scanner.ParseMode(pair.value); err != nil {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: %s: %v", pair.field, err))
 		}
 	}
+
+	// Require explicit opt-in to use non-block modes for input scanning.
+	if c.Security.Scanner.Input != "block" && !c.Security.Scanner.AllowPermissiveInput {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: security.scanner.input is %q but only 'block' is allowed without security.scanner.allow_permissive_input=true",
+			c.Security.Scanner.Input,
+		))
+	}
+
 	return errs
 }
 

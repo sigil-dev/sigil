@@ -6,10 +6,12 @@ package scanner
 import (
 	"context"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Stage identifies where in the pipeline scanning occurs.
@@ -21,7 +23,19 @@ const (
 	StageOutput Stage = "output"
 )
 
-// Origin indicates the source of the content being scanned.
+// Valid reports whether the stage is a known pipeline stage.
+func (s Stage) Valid() bool {
+	switch s {
+	case StageInput, StageTool, StageOutput:
+		return true
+	default:
+		return false
+	}
+}
+
+// Origin indicates the source of content. Reserved for future context-aware rule selection.
+// NOTE: This type intentionally mirrors provider.Origin. A shared package would avoid
+// duplication but is deferred to avoid import cycle complexity.
 type Origin string
 
 const (
@@ -38,6 +52,16 @@ const (
 	SeverityMedium Severity = "medium"
 	SeverityLow    Severity = "low"
 )
+
+// Valid reports whether the severity is a known severity level.
+func (s Severity) Valid() bool {
+	switch s {
+	case SeverityHigh, SeverityMedium, SeverityLow:
+		return true
+	default:
+		return false
+	}
+}
 
 // ScanContext provides context for the scan.
 type ScanContext struct {
@@ -62,30 +86,79 @@ type Match struct {
 
 // Scanner scans content for threats.
 type Scanner interface {
-	Scan(ctx context.Context, content string, opts ScanContext) (*ScanResult, error)
+	Scan(ctx context.Context, content string, opts ScanContext) (ScanResult, error)
 }
 
 // Rule defines a detection pattern.
 type Rule struct {
+	// Stage is the pipeline phase this rule applies to; the scanner only evaluates rules whose Stage matches ScanContext.Stage.
+	Stage    Stage
 	Name     string
 	Pattern  *regexp.Regexp
-	Stage    Stage
 	Severity Severity
 }
 
+// DefaultMaxContentLength is the default maximum content size accepted by RegexScanner (1MB).
+const DefaultMaxContentLength = 1 << 20 // 1MB
+
 // RegexScanner implements Scanner using compiled regexes.
 type RegexScanner struct {
-	rules []Rule
+	rules            []Rule
+	maxContentLength int
 }
 
 // NewRegexScanner creates a scanner with the given rules.
-func NewRegexScanner(rules []Rule) *RegexScanner {
-	return &RegexScanner{rules: rules}
+func NewRegexScanner(rules []Rule) (*RegexScanner, error) {
+	for i, r := range rules {
+		if r.Pattern == nil {
+			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has nil pattern", i, r.Name)
+		}
+		if !r.Stage.Valid() {
+			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid stage %q", i, r.Name, r.Stage)
+		}
+	}
+	return &RegexScanner{rules: rules, maxContentLength: DefaultMaxContentLength}, nil
+}
+
+// normalize applies NFKC normalization and strips zero-width characters
+// to reduce evasion via Unicode homoglyphs.
+func normalize(s string) string {
+	// Strip zero-width characters.
+	s = strings.NewReplacer(
+		"\u200b", "", // zero-width space
+		"\u200c", "", // zero-width non-joiner
+		"\u200d", "", // zero-width joiner
+		"\ufeff", "", // zero-width no-break space / BOM
+	).Replace(s)
+	// NFKC normalization collapses compatibility equivalents.
+	return norm.NFKC.String(s)
 }
 
 // Scan checks content against rules matching the given stage.
-func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext) (*ScanResult, error) {
-	result := &ScanResult{}
+func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext) (ScanResult, error) {
+	if !opts.Stage.Valid() {
+		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan stage %q", opts.Stage)
+	}
+
+	if len(content) > s.maxContentLength {
+		return ScanResult{Threat: true, Matches: []Match{{
+			Rule:     "content_too_large",
+			Severity: SeverityHigh,
+		}}}, nil
+	}
+
+	// Defensive copy of metadata to prevent mutation of caller's map.
+	if opts.Metadata != nil {
+		copied := make(map[string]string, len(opts.Metadata))
+		for k, v := range opts.Metadata {
+			copied[k] = v
+		}
+		opts.Metadata = copied
+	}
+
+	content = normalize(content)
+
+	result := ScanResult{}
 
 	for _, rule := range s.rules {
 		if rule.Stage != opts.Stage {
@@ -108,11 +181,7 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 
 // DefaultRules returns the built-in rule set for all three stages.
 func DefaultRules() []Rule {
-	rules := make([]Rule, 0, len(InputRules())+len(ToolRules())+len(OutputRules()))
-	rules = append(rules, InputRules()...)
-	rules = append(rules, ToolRules()...)
-	rules = append(rules, OutputRules()...)
-	return rules
+	return slices.Concat(InputRules(), ToolRules(), ToolSecretRules(), OutputRules())
 }
 
 // InputRules returns prompt injection detection patterns.
@@ -144,17 +213,26 @@ func ToolRules() []Rule {
 	return []Rule{
 		{
 			Name:     "system_prompt_leak",
-			Pattern:  regexp.MustCompile(`(?i)^SYSTEM:\s`),
+			Pattern:  regexp.MustCompile(`(?im)^SYSTEM:\s`),
 			Stage:    StageTool,
 			Severity: SeverityHigh,
 		},
 		{
 			Name:     "role_impersonation",
-			Pattern:  regexp.MustCompile(`(?i)\[INST\].*\[/INST\]`),
+			Pattern:  regexp.MustCompile(`(?is)\[INST\].*\[/INST\]`),
 			Stage:    StageTool,
 			Severity: SeverityHigh,
 		},
 	}
+}
+
+// ToolSecretRules returns secret detection patterns for tool output stage.
+func ToolSecretRules() []Rule {
+	rules := OutputRules()
+	for i := range rules {
+		rules[i].Stage = StageTool
+	}
+	return rules
 }
 
 // OutputRules returns secret/credential detection patterns.
@@ -169,6 +247,30 @@ func OutputRules() []Rule {
 		{
 			Name:     "openai_api_key",
 			Pattern:  regexp.MustCompile(`sk-proj-[A-Za-z0-9_-]{20,}`),
+			Stage:    StageOutput,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "openai_legacy_key",
+			Pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`),
+			Stage:    StageOutput,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "github_pat",
+			Pattern:  regexp.MustCompile(`ghp_[A-Za-z0-9]{36}`),
+			Stage:    StageOutput,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "github_fine_grained_pat",
+			Pattern:  regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`),
+			Stage:    StageOutput,
+			Severity: SeverityHigh,
+		},
+		{
+			Name:     "slack_token",
+			Pattern:  regexp.MustCompile(`xox[bpas]-[A-Za-z0-9-]+`),
 			Stage:    StageOutput,
 			Severity: SeverityHigh,
 		},
@@ -236,45 +338,76 @@ func ParseMode(s string) (Mode, error) {
 
 // ApplyMode applies the detection mode to the scan result.
 // For block: returns error if threat detected.
-// For flag: returns content unchanged (caller should log).
+// For flag: returns content unchanged (threat already logged by caller).
 // For redact: replaces matched regions with [REDACTED].
-func ApplyMode(mode Mode, content string, result *ScanResult) (string, error) {
+func ApplyMode(mode Mode, content string, result ScanResult) (string, error) {
 	if !result.Threat {
 		return content, nil
 	}
 
 	switch mode {
 	case ModeBlock:
+		firstRule := "unknown"
+		if len(result.Matches) > 0 {
+			firstRule = result.Matches[0].Rule
+		}
 		return "", sigilerr.New(sigilerr.CodeSecurityScannerInputBlocked,
 			"content blocked by security scanner",
 			sigilerr.Field("matches", len(result.Matches)),
-			sigilerr.Field("first_rule", result.Matches[0].Rule),
+			sigilerr.Field("first_rule", firstRule),
 		)
 	case ModeFlag:
 		return content, nil
 	case ModeRedact:
 		return redact(content, result.Matches), nil
 	default:
-		return content, nil
+		return "", sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "unknown scanner mode %q", mode)
 	}
 }
 
 // redact replaces matched regions in content with [REDACTED].
-// Processes matches in reverse order to preserve byte offsets.
+// Handles overlapping matches by merging ranges before substitution.
 func redact(content string, matches []Match) string {
+	if len(matches) == 0 {
+		return content
+	}
+
+	// Sort by location ascending.
 	sorted := make([]Match, len(matches))
 	copy(sorted, matches)
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Location > sorted[j].Location
+		return sorted[i].Location < sorted[j].Location
 	})
 
-	result := content
-	for _, m := range sorted {
+	// Merge overlapping ranges.
+	type span struct{ start, end int }
+	spans := []span{{sorted[0].Location, sorted[0].Location + sorted[0].Length}}
+	for _, m := range sorted[1:] {
+		last := &spans[len(spans)-1]
 		end := m.Location + m.Length
-		if end > len(result) {
-			end = len(result)
+		if m.Location <= last.end {
+			if end > last.end {
+				last.end = end
+			}
+		} else {
+			spans = append(spans, span{m.Location, end})
 		}
-		result = result[:m.Location] + "[REDACTED]" + result[end:]
 	}
-	return result
+
+	// Build result with forward scan.
+	var b strings.Builder
+	b.Grow(len(content))
+	pos := 0
+	for _, s := range spans {
+		start := s.start
+		end := s.end
+		if end > len(content) {
+			end = len(content)
+		}
+		b.WriteString(content[pos:start])
+		b.WriteString("[REDACTED]")
+		pos = end
+	}
+	b.WriteString(content[pos:])
+	return b.String()
 }

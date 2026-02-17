@@ -121,6 +121,12 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if cfg.ProviderRouter == nil {
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ProviderRouter is required")
 	}
+	if cfg.Scanner == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Scanner is required")
+	}
+	if cfg.ScannerModes.Input == "" || cfg.ScannerModes.Tool == "" || cfg.ScannerModes.Output == "" {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes must specify modes for all stages when Scanner is provided")
+	}
 
 	maxCalls := cfg.MaxToolCallsPerTurn
 	if maxCalls <= 0 {
@@ -141,8 +147,8 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	}, nil
 }
 
-// ProcessMessage executes the 6-step agent pipeline:
-// RECEIVE → PREPARE → CALL_LLM → PROCESS → RESPOND → AUDIT.
+// ProcessMessage executes the 7-step agent pipeline:
+// RECEIVE → PREPARE → CALL_LLM → PROCESS → TOOL_LOOP → RESPOND → AUDIT.
 func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*OutboundMessage, error) {
 	// Step 1: RECEIVE — validate input.
 	if err := l.validateInput(msg); err != nil {
@@ -339,6 +345,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 					"rule", m.Rule,
 					"severity", m.Severity,
 					"session_id", msg.SessionID,
+					"workspace_id", msg.WorkspaceID,
 				)
 			}
 		}
@@ -653,7 +660,38 @@ func (l *Loop) runToolLoop(
 				resultContent = result.Content
 			}
 
-			// Persist tool result message.
+			// Tool result scanning — check for instruction injection before persisting.
+			if l.scanner != nil {
+				scanResult, scanErr := l.scanner.Scan(ctx, resultContent, scanner.ScanContext{
+					Stage:  scanner.StageTool,
+					Origin: scanner.OriginTool,
+				})
+				if scanErr != nil {
+					return "", nil, sigilerr.Wrap(scanErr, sigilerr.CodeSecurityScannerFailure,
+						"tool result scan failed",
+						sigilerr.Field("tool", tc.Name),
+						sigilerr.FieldSessionID(msg.SessionID),
+					)
+				}
+				if scanResult.Threat {
+					for _, m := range scanResult.Matches {
+						slog.Warn("tool result injection detected",
+							"rule", m.Rule,
+							"severity", m.Severity,
+							"tool", tc.Name,
+							"session_id", msg.SessionID,
+							"workspace_id", msg.WorkspaceID,
+						)
+					}
+				}
+				var modeErr error
+				resultContent, modeErr = scanner.ApplyMode(l.scannerModes.Tool, resultContent, scanResult)
+				if modeErr != nil {
+					return "", nil, modeErr
+				}
+			}
+
+			// Persist tool result message (using scanned/possibly-redacted content).
 			toolMsg := &store.Message{
 				ID:         uuid.New().String(),
 				SessionID:  msg.SessionID,
@@ -667,30 +705,6 @@ func (l *Loop) runToolLoop(
 				return "", nil, sigilerr.Wrapf(appendErr, sigilerr.CodeAgentLoopFailure, "persisting tool result: session %s", msg.SessionID)
 			}
 
-			// Tool result scanning — check for instruction injection.
-			if l.scanner != nil {
-				scanResult, scanErr := l.scanner.Scan(ctx, resultContent, scanner.ScanContext{
-					Stage:  scanner.StageTool,
-					Origin: scanner.OriginTool,
-				})
-				if scanErr != nil {
-					slog.Warn("tool scan error", "error", scanErr, "tool", tc.Name)
-				} else if scanResult.Threat {
-					for _, m := range scanResult.Matches {
-						slog.Warn("tool result injection detected",
-							"rule", m.Rule,
-							"severity", m.Severity,
-							"tool", tc.Name,
-							"session_id", msg.SessionID,
-						)
-					}
-					var modeErr error
-					resultContent, modeErr = scanner.ApplyMode(l.scannerModes.Tool, resultContent, scanResult)
-					if modeErr != nil {
-						return "", nil, modeErr
-					}
-				}
-			}
 			currentMessages = append(currentMessages, provider.Message{
 				Role:       store.MessageRoleTool,
 				Content:    resultContent,
@@ -740,13 +754,15 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 			Origin: scanner.OriginSystem,
 		})
 		if scanErr != nil {
-			slog.Warn("output scan error", "error", scanErr, "session_id", sessionID)
-		} else {
-			var modeErr error
-			text, modeErr = scanner.ApplyMode(l.scannerModes.Output, text, scanResult)
-			if modeErr != nil {
-				return nil, modeErr
-			}
+			return nil, sigilerr.Wrap(scanErr, sigilerr.CodeSecurityScannerFailure,
+				"output scan failed: cannot guarantee secret-free response",
+				sigilerr.FieldSessionID(sessionID),
+			)
+		}
+		var modeErr error
+		text, modeErr = scanner.ApplyMode(l.scannerModes.Output, text, scanResult)
+		if modeErr != nil {
+			return nil, modeErr
 		}
 	}
 

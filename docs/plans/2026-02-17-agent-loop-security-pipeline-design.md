@@ -39,7 +39,7 @@ Implementation uses Go stdlib `regexp` (compiled at init). TruffleHog was consid
 |----------|----------|-------------|
 | Input | Prompt injection: instruction override, role confusion, delimiter abuse | block |
 | Tool | Instruction injection in tool results: system prompt leaks, role impersonation | flag |
-| Output | Secrets: AWS keys, GCP keys, OpenAI/Anthropic/Google API keys, bearer tokens, PEM keys, DB connection strings, keyring:// URIs | redact |
+| Output | Secrets: AWS keys, Google API keys, OpenAI API keys (incl. legacy), Anthropic API keys, GitHub PATs, Slack tokens, bearer tokens, PEM keys, DB connection strings, keyring:// URIs | redact |
 
 PII detection (SSNs, emails, phones) excluded from v1 due to false-positive risk.
 
