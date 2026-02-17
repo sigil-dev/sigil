@@ -72,39 +72,49 @@ When and how capabilities are enforced during execution.
 
 Complete list of available capabilities and their meanings.
 
-### Channel Capabilities
+### Session Capabilities
 
-- `channel.send` - Send messages to channels
-- `channel.receive` - Receive messages from channels
-- `channel.list` - List available channels
-- `channel.manage` - Create or delete channels
+- `sessions.read` - Read any session
+- `sessions.read.self` - Read only sessions this plugin handles
+- `sessions.write.self` - Write only own sessions
+
+### Message Capabilities
+
+- `messages.send.<channel>` - Send messages via a specific channel
+- `messages.send.*` - Send messages via any channel
+
+### Execution Capabilities
+
+- `exec.run` - Execute commands (high privilege)
+- `exec.run.sandboxed` - Execute in sandbox only
+
+### Configuration Capabilities
+
+- `config.read.self` - Read own plugin configuration
+- `config.read.*` - Read all configuration (admin only)
+
+### Filesystem Capabilities
+
+- `filesystem.read./data/*` - Read files in a specific path
+- `filesystem.write./data/plugins/self/*` - Write files to own plugin directory
 
 ### Tool Capabilities
 
-- `tool.exec` - Execute arbitrary tools
-- `tool.file.read` - Read files from disk
-- `tool.file.write` - Write files to disk
-- `tool.network.http` - Make HTTP requests
-- `tool.network.websocket` - Open WebSocket connections
+- `tool.<name>` - Dispatch a specific named tool
+- `tool.*` - Dispatch any tool
+
+### Key-Value Capabilities
+
+- `kv.*` - Full key-value access (plugin-scoped automatically)
 
 ### Provider Capabilities
 
-- `provider.llm.call` - Invoke LLM APIs
-- `provider.llm.stream` - Stream LLM responses
-- `provider.embedding` - Generate embeddings
+- `provider.chat` - Invoke LLM providers
 
 ### Storage Capabilities
 
-- `storage.workspace.read` - Read workspace data
-- `storage.workspace.write` - Write workspace data
-- `storage.memory.read` - Read agent memory
-- `storage.memory.write` - Write agent memory
-
-### System Capabilities
-
-- `system.config.read` - Read Sigil configuration
-- `system.plugin.list` - List installed plugins
-- `system.node.connect` - Connect to remote nodes
+- `storage.volumes.*` - Volume management (future)
+- `storage.memory.*` - Memory collections (future)
 
 ## Isolation Tiers
 

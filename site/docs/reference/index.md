@@ -178,14 +178,11 @@ plugins:
 
 ```yaml
 memory:
-  max_context_messages: 100
-  summarization:
-    enabled: true
-    threshold: 50
-    model: claude-opus-4.6
-  vector:
-    enabled: true
-    dimensions: 1024
+  active_window: 20
+  compaction:
+    strategy: summarize
+    summary_model: anthropic/claude-haiku-4-5
+    batch_size: 50
 ```
 
 ### Environment Variables
