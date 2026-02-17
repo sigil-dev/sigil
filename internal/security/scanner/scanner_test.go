@@ -401,19 +401,19 @@ func TestSecretRules_SlackTokenDetection(t *testing.T) {
 	}{
 		{
 			name:    "bot token xoxb",
-			content: "SLACK_TOKEN=xoxb-1234567890-abcdefghijklmnop",
+			content: "SLACK_TOKEN=xoxb-FAKE0TOKEN-abcdefghijklmnop",
 		},
 		{
 			name:    "user token xoxp",
-			content: "token: xoxp-9876543210-ABCDEFGHIJKLMNO",
+			content: "token: xoxp-FAKE0TOKEN-ABCDEFGHIJKLMNO",
 		},
 		{
 			name:    "app token xoxa",
-			content: "xoxa-some-app-token-value",
+			content: "xoxa-FAKE00app-token-value",
 		},
 		{
 			name:    "workspace token xoxs",
-			content: "xoxs-workspace-token-here",
+			content: "xoxs-FAKE00workspace-here",
 		},
 	}
 
@@ -721,7 +721,7 @@ func TestSecretRules_SlackTokenBounded(t *testing.T) {
 	}{
 		{
 			name:        "real-length bot token matches",
-			content:     "SLACK_TOKEN=xoxb-1234567890-abcdefghijklmnop",
+			content:     "SLACK_TOKEN=xoxb-FAKE0TOKEN-abcdefghijklmnop",
 			shouldMatch: true,
 		},
 		{
@@ -769,12 +769,12 @@ func TestSecretRules_NewPatterns(t *testing.T) {
 	}{
 		{
 			name:     "stripe secret key",
-			content:  "STRIPE_KEY=sk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+			content:  "STRIPE_KEY=sk_live_00FAKE00TEST00FAKE00TEST00",
 			ruleName: "stripe_api_key",
 		},
 		{
 			name:     "stripe restricted key",
-			content:  "key: rk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZabcd",
+			content:  "key: rk_live_00FAKE00TEST00FAKE00TEST00abcd",
 			ruleName: "stripe_restricted_key",
 		},
 		{
@@ -794,7 +794,7 @@ func TestSecretRules_NewPatterns(t *testing.T) {
 		},
 		{
 			name:     "digitalocean pat",
-			content:  "DO_TOKEN=dop_v1_abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+			content:  "DO_TOKEN=dop_v1_0000000000000000000000000000000000000000000000000000000000000000",
 			ruleName: "digitalocean_pat",
 		},
 		{
@@ -804,7 +804,7 @@ func TestSecretRules_NewPatterns(t *testing.T) {
 		},
 		{
 			name:     "twilio api key",
-			content:  "TWILIO_KEY=SK1234567890abcdef1234567890abcdef",
+			content:  "TWILIO_KEY=SK00000000000000000000000000000000",
 			ruleName: "twilio_api_key",
 		},
 	}
