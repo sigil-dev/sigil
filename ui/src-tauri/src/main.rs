@@ -3,16 +3,17 @@
 
 use tauri::{
     image::Image,
-    menu::{MenuBuilder, MenuItemBuilder},
+    menu::{MenuBuilder, MenuItem, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, RunEvent, WindowEvent,
+    Wry,
 };
 
 #[cfg(desktop)]
 use tauri_plugin_updater::UpdaterExt;
 
 use log::{error, info, warn};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -52,6 +53,63 @@ mod sidecar_phase {
     }
 }
 
+/// Gateway health status values for the tray status indicator.
+///
+/// Stored as an atomic u8 so the polling thread and tray event handler can
+/// share it without a mutex.
+mod gateway_status {
+    pub const UNKNOWN: u8 = 0;
+    pub const HEALTHY: u8 = 1;
+    pub const UNHEALTHY: u8 = 2;
+
+    pub fn label(v: u8) -> &'static str {
+        match v {
+            UNKNOWN => "Unknown",
+            HEALTHY => "Running",
+            UNHEALTHY => "Unreachable",
+            _ => "Unknown",
+        }
+    }
+}
+
+/// Poll interval for gateway health checks from the tray status indicator.
+const TRAY_HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Agent paused state — tracked locally in the Tauri process.
+///
+/// The gateway does not yet expose a pause/resume endpoint (see sigil-xb7 backend
+/// note). The Tauri app toggles this flag and calls `POST /api/v1/agent/pause`
+/// or `DELETE /api/v1/agent/pause` when those routes exist. Until then the call
+/// is best-effort and the menu item reflects the optimistic local state.
+struct AgentPausedState {
+    paused: AtomicBool,
+}
+
+impl AgentPausedState {
+    fn new() -> Self {
+        Self {
+            paused: AtomicBool::new(false),
+        }
+    }
+}
+
+/// Holds the "Pause Agent" / "Resume Agent" menu item so its label can be
+/// updated dynamically when the user toggles pause state.
+///
+/// Tauri's `TrayIcon` has no `menu()` getter after construction, so we store
+/// the specific item we need to update in app state.
+struct PauseMenuItemState {
+    item: Mutex<Option<MenuItem<Wry>>>,
+}
+
+impl PauseMenuItemState {
+    fn new() -> Self {
+        Self {
+            item: Mutex::new(None),
+        }
+    }
+}
+
 /// Errors that can occur during sidecar lifecycle management
 #[derive(Debug, thiserror::Error)]
 enum SidecarError {
@@ -74,9 +132,13 @@ enum SidecarError {
 ///
 /// `phase` is an atomic state machine that prevents concurrent start/stop
 /// races without holding the mutex across long-running operations.
+///
+/// `gateway_health` tracks the last-known health status from the polling loop,
+/// used to update the tray tooltip.
 struct SidecarState {
     process: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     phase: AtomicU8,
+    gateway_health: AtomicU8,
 }
 
 impl SidecarState {
@@ -84,6 +146,7 @@ impl SidecarState {
         Self {
             process: Mutex::new(None),
             phase: AtomicU8::new(sidecar_phase::STOPPED),
+            gateway_health: AtomicU8::new(gateway_status::UNKNOWN),
         }
     }
 }
@@ -385,8 +448,8 @@ fn stop_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
 
         if let Some(process) = process_lock.take() {
             let pid = process.pid();
-            // Log PID at Error level before kill attempt to ensure it's available for manual cleanup if kill fails
-            error!("Attempting to terminate Sigil gateway process with PID {}", pid);
+            // Log PID before kill attempt to ensure it's available for manual cleanup if kill fails
+            info!("Attempting to terminate Sigil gateway process with PID {}", pid);
 
             // Drop lock immediately after taking the process. The atomic phase
             // prevents new starts. Holding the lock during graceful shutdown polling
@@ -463,13 +526,29 @@ fn restart_sidecar(app: &AppHandle) -> Result<(), SidecarError> {
     Ok(())
 }
 
-/// Create the system tray menu
+/// Create the system tray menu.
+///
+/// Menu structure per design doc 09 §Desktop App:
+///   Open Sigil
+///   ----
+///   Pause Agent   (toggles to Resume Agent when paused)
+///   Restart Gateway
+///   ----
+///   Quit
+///
+/// Returns both the menu and the pause menu item so the caller can store the
+/// item in app state for later dynamic label updates.
 fn create_tray_menu(
     app: &AppHandle,
-) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
+) -> Result<(tauri::menu::Menu<tauri::Wry>, MenuItem<Wry>), Box<dyn std::error::Error>> {
+    let pause_item = MenuItemBuilder::new("Pause Agent")
+        .id("pause-agent")
+        .build(app)?;
+
     let menu = MenuBuilder::new(app)
         .item(&MenuItemBuilder::new("Open Sigil").id("open").build(app)?)
         .separator()
+        .item(&pause_item)
         .item(
             &MenuItemBuilder::new("Restart Gateway")
                 .id("restart")
@@ -479,7 +558,128 @@ fn create_tray_menu(
         .item(&MenuItemBuilder::new("Quit").id("quit").build(app)?)
         .build()?;
 
-    Ok(menu)
+    Ok((menu, pause_item))
+}
+
+/// Update the tray tooltip to reflect the current gateway health status.
+///
+/// Format: "Sigil — Running" / "Sigil — Unreachable" / "Sigil — Unknown"
+///
+/// The tray icon ID is "main" (set in setup).
+#[cfg(desktop)]
+fn update_tray_tooltip(app: &AppHandle, status_label: &str) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let tooltip = format!("Sigil \u{2014} {}", status_label);
+        if let Err(e) = tray.set_tooltip(Some(tooltip)) {
+            warn!("Failed to update tray tooltip: {}", e);
+        }
+    }
+}
+
+/// Spawn a background thread that polls the gateway health endpoint every
+/// `TRAY_HEALTH_POLL_INTERVAL` and updates the tray tooltip.
+///
+/// The thread runs for the lifetime of the application. It is intentionally
+/// not joined on exit — Tauri's process exit will clean it up.
+#[cfg(desktop)]
+fn spawn_tray_health_poller(app: AppHandle) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(TRAY_HEALTH_POLL_INTERVAL);
+
+            // Skip polling when the sidecar is not running to avoid
+            // connection errors during shutdown or before startup.
+            let state = app.state::<SidecarState>();
+            if state.phase.load(Ordering::SeqCst) != sidecar_phase::RUNNING {
+                continue;
+            }
+
+            let new_status = match health_check_sidecar() {
+                Ok(true) => gateway_status::HEALTHY,
+                Ok(false) => gateway_status::UNHEALTHY,
+                Err(_) => gateway_status::UNHEALTHY,
+            };
+
+            // Update stored health status
+            let state = app.state::<SidecarState>();
+            state
+                .gateway_health
+                .store(new_status, Ordering::SeqCst);
+
+            // Update tray tooltip
+            update_tray_tooltip(&app, gateway_status::label(new_status));
+        }
+    });
+}
+
+/// Call the gateway agent pause/resume endpoint (best-effort).
+///
+/// NOTE: The gateway does not yet implement `POST /api/v1/agent/pause` or
+/// `DELETE /api/v1/agent/pause`. This function sends the request and tolerates
+/// failure gracefully so the tray item can be wired up now. The backend endpoint
+/// is tracked separately — see sigil-xb7 implementation note.
+fn call_agent_pause_endpoint(pausing: bool) -> Result<(), String> {
+    let url = format!(
+        "http://localhost:{}/api/v1/agent/pause",
+        DEFAULT_GATEWAY_PORT
+    );
+    let method = if pausing { "POST" } else { "DELETE" };
+
+    let result = if pausing {
+        ureq::post(&url)
+            .timeout(std::time::Duration::from_secs(3))
+            .call()
+    } else {
+        ureq::delete(&url)
+            .timeout(std::time::Duration::from_secs(3))
+            .call()
+    };
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, _)) => {
+            // 404 means endpoint not yet implemented — acceptable, log a warning
+            if code == 404 {
+                warn!(
+                    "Agent {} endpoint not implemented (404) — backend endpoint pending (sigil-xb7)",
+                    method
+                );
+                Ok(())
+            } else {
+                Err(format!("agent {} failed with status {}", method, code))
+            }
+        }
+        Err(ureq::Error::Transport(e)) => {
+            // Gateway unreachable — not fatal for the tray toggle
+            warn!(
+                "Agent {} endpoint unreachable (gateway down?): {}",
+                method, e
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Update the "Pause Agent" / "Resume Agent" menu item text to match current state.
+///
+/// Retrieves the stored `MenuItem` from `PauseMenuItemState` and calls
+/// `set_text` to update the label shown in the tray menu.
+#[cfg(desktop)]
+fn update_pause_menu_item(app: &AppHandle, paused: bool) {
+    let state = app.state::<PauseMenuItemState>();
+    match state.item.lock() {
+        Ok(guard) => {
+            if let Some(item) = guard.as_ref() {
+                let label = if paused { "Resume Agent" } else { "Pause Agent" };
+                if let Err(e) = item.set_text(label) {
+                    warn!("Failed to update pause menu item text: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            warn!("PauseMenuItemState lock poisoned: {}", e);
+        }
+    }
 }
 
 /// Handle tray menu events
@@ -511,6 +711,40 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
                     }
                 }
             }
+            "pause-agent" => {
+                let paused_state = app.state::<AgentPausedState>();
+                // Atomically toggle: false -> true (pause) or true -> false (resume)
+                let was_paused = paused_state.paused.fetch_xor(true, Ordering::SeqCst);
+                let now_paused = !was_paused;
+
+                info!(
+                    "Agent {} requested via tray menu",
+                    if now_paused { "pause" } else { "resume" }
+                );
+
+                // Call gateway endpoint best-effort (404 tolerated until backend is ready)
+                if let Err(e) = call_agent_pause_endpoint(now_paused) {
+                    error!("Agent pause/resume API call failed: {}", e);
+                    // Roll back the toggle on hard failure
+                    paused_state.paused.fetch_xor(true, Ordering::SeqCst);
+                    if let Err(emit_err) = app.emit(
+                        "agent-pause-error",
+                        format!("Agent pause/resume failed: {}", e),
+                    ) {
+                        error!("Failed to emit agent-pause-error: {}", emit_err);
+                    }
+                    return;
+                }
+
+                // Update menu item label to reflect new state
+                #[cfg(desktop)]
+                update_pause_menu_item(app, now_paused);
+
+                // Notify UI so it can update any pause indicators
+                if let Err(e) = app.emit("agent-pause-changed", now_paused) {
+                    warn!("Failed to emit agent-pause-changed: {}", e);
+                }
+            }
             "restart" => {
                 if let Err(e) = restart_sidecar(app) {
                     error!("Failed to restart gateway: {}", e);
@@ -518,6 +752,13 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
                         error!("Failed to emit restart error notification: {}", emit_err);
                     }
                 }
+                // After restart, reset health status to unknown pending the next poll
+                let state = app.state::<SidecarState>();
+                state
+                    .gateway_health
+                    .store(gateway_status::UNKNOWN, Ordering::SeqCst);
+                #[cfg(desktop)]
+                update_tray_tooltip(app, gateway_status::label(gateway_status::UNKNOWN));
             }
             "quit" => {
                 if let Err(e) = stop_sidecar(app) {
@@ -532,6 +773,49 @@ fn handle_tray_event(app: &AppHandle, event: TrayIconEvent) {
         },
         _ => {}
     }
+}
+
+/// Result of an agent pause/resume toggle, returned to the frontend.
+#[derive(Debug, Clone, serde::Serialize)]
+struct AgentPauseResult {
+    paused: bool,
+}
+
+/// Toggle agent pause/resume state.
+///
+/// This command can be invoked from the SvelteKit UI (e.g., via a pause button
+/// in the header). It reuses the same logic as the tray menu item.
+///
+/// NOTE: The gateway `POST /api/v1/agent/pause` and `DELETE /api/v1/agent/pause`
+/// endpoints are not yet implemented. This command calls them best-effort and
+/// returns the new local paused state regardless (optimistic toggle). The backend
+/// implementation is tracked in sigil-xb7.
+#[cfg(desktop)]
+#[tauri::command]
+fn pause_agent(app: AppHandle) -> Result<AgentPauseResult, String> {
+    let paused_state = app.state::<AgentPausedState>();
+    let was_paused = paused_state.paused.fetch_xor(true, Ordering::SeqCst);
+    let now_paused = !was_paused;
+
+    info!(
+        "Agent {} requested via Tauri command",
+        if now_paused { "pause" } else { "resume" }
+    );
+
+    if let Err(e) = call_agent_pause_endpoint(now_paused) {
+        error!("Agent pause/resume API call failed: {}", e);
+        // Roll back
+        paused_state.paused.fetch_xor(true, Ordering::SeqCst);
+        return Err(e);
+    }
+
+    update_pause_menu_item(&app, now_paused);
+
+    if let Err(e) = app.emit("agent-pause-changed", now_paused) {
+        warn!("Failed to emit agent-pause-changed: {}", e);
+    }
+
+    Ok(AgentPauseResult { paused: now_paused })
 }
 
 /// Result of a manual update check, returned to the frontend.
@@ -588,53 +872,66 @@ pub fn run() {
         builder = builder
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init())
-            .invoke_handler(tauri::generate_handler![check_for_update]);
+            .invoke_handler(tauri::generate_handler![check_for_update, pause_agent]);
     }
 
     builder
         .manage(SidecarState::new())
+        .manage(AgentPausedState::new())
+        .manage(PauseMenuItemState::new())
         .setup(|app| {
-            // Create tray menu and icon with graceful degradation
+            // Create tray menu and icon with graceful degradation.
+            // create_tray_menu returns (menu, pause_item) so we can store the
+            // pause item for dynamic label updates.
             match create_tray_menu(&app.handle()) {
-                Ok(menu) => match Image::from_bytes(include_bytes!("../icons/icon.png")) {
-                    Ok(icon) => {
-                        match TrayIconBuilder::with_id("main")
-                            .icon(icon)
-                            .menu(&menu)
-                            .menu_on_left_click(false)
-                            .title("Sigil")
-                            .on_tray_icon_event(|tray, event| {
-                                handle_tray_event(tray.app_handle(), event);
-                            })
-                            .build(app)
-                        {
-                            Ok(_tray) => {
-                                info!("System tray initialized");
-                            }
-                            Err(e) => {
-                                warn!("System tray not available, continuing without tray: {}", e);
-                                if let Err(emit_err) = app.emit(
-                                    "tray-unavailable",
-                                    format!("System tray initialization failed: {}", e),
-                                ) {
-                                    error!(
-                                        "Failed to emit tray-unavailable notification: {}",
-                                        emit_err
-                                    );
+                Ok((menu, pause_item)) => {
+                    // Store pause item in app state for later label updates
+                    let pause_state = app.state::<PauseMenuItemState>();
+                    match pause_state.item.lock() {
+                        Ok(mut guard) => *guard = Some(pause_item),
+                        Err(e) => warn!("Failed to store pause menu item: {}", e),
+                    }
+
+                    match Image::from_bytes(include_bytes!("../icons/icon.png")) {
+                        Ok(icon) => {
+                            match TrayIconBuilder::with_id("main")
+                                .icon(icon)
+                                .menu(&menu)
+                                .menu_on_left_click(false)
+                                .tooltip("Sigil \u{2014} Starting")
+                                .on_tray_icon_event(|tray, event| {
+                                    handle_tray_event(tray.app_handle(), event);
+                                })
+                                .build(app)
+                            {
+                                Ok(_tray) => {
+                                    info!("System tray initialized");
+                                }
+                                Err(e) => {
+                                    warn!("System tray not available, continuing without tray: {}", e);
+                                    if let Err(emit_err) = app.emit(
+                                        "tray-unavailable",
+                                        format!("System tray initialization failed: {}", e),
+                                    ) {
+                                        error!(
+                                            "Failed to emit tray-unavailable notification: {}",
+                                            emit_err
+                                        );
+                                    }
                                 }
                             }
                         }
-                    }
-                    Err(e) => {
-                        warn!("Failed to load tray icon, continuing without tray: {}", e);
-                        if let Err(emit_err) = app.emit(
-                            "tray-unavailable",
-                            format!("Failed to load tray icon: {}", e),
-                        ) {
-                            error!("Failed to emit tray-unavailable notification: {}", emit_err);
+                        Err(e) => {
+                            warn!("Failed to load tray icon, continuing without tray: {}", e);
+                            if let Err(emit_err) = app.emit(
+                                "tray-unavailable",
+                                format!("Failed to load tray icon: {}", e),
+                            ) {
+                                error!("Failed to emit tray-unavailable notification: {}", emit_err);
+                            }
                         }
                     }
-                },
+                }
                 Err(e) => {
                     warn!("Failed to create tray menu, continuing without tray: {}", e);
                     if let Err(emit_err) = app.emit(
@@ -658,6 +955,10 @@ pub fn run() {
                     }
                 }
             });
+
+            // Start background health polling for tray status indicator (desktop only)
+            #[cfg(desktop)]
+            spawn_tray_health_poller(app.handle().clone());
 
             Ok(())
         })
@@ -1153,6 +1454,167 @@ mod tests {
             "poll interval ({:?}) must be less than timeout ({:?})",
             SHUTDOWN_POLL_INTERVAL,
             GRACEFUL_SHUTDOWN_TIMEOUT
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // gateway_status: constants, name(), and SidecarState.gateway_health
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn gateway_status_constants_are_distinct() {
+        let statuses = [
+            gateway_status::UNKNOWN,
+            gateway_status::HEALTHY,
+            gateway_status::UNHEALTHY,
+        ];
+        for i in 0..statuses.len() {
+            for j in (i + 1)..statuses.len() {
+                assert_ne!(
+                    statuses[i], statuses[j],
+                    "gateway status constants must be unique"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gateway_status_label_returns_correct_strings() {
+        assert_eq!(gateway_status::label(gateway_status::UNKNOWN), "Unknown");
+        assert_eq!(gateway_status::label(gateway_status::HEALTHY), "Running");
+        assert_eq!(gateway_status::label(gateway_status::UNHEALTHY), "Unreachable");
+    }
+
+    #[test]
+    fn gateway_status_label_unknown_value_returns_unknown() {
+        assert_eq!(gateway_status::label(99), "Unknown");
+        assert_eq!(gateway_status::label(255), "Unknown");
+    }
+
+    #[test]
+    fn sidecar_state_gateway_health_starts_unknown() {
+        let state = SidecarState::new();
+        assert_eq!(
+            state.gateway_health.load(Ordering::SeqCst),
+            gateway_status::UNKNOWN,
+            "initial gateway_health must be UNKNOWN"
+        );
+    }
+
+    #[test]
+    fn sidecar_state_gateway_health_can_be_updated() {
+        let state = SidecarState::new();
+        state
+            .gateway_health
+            .store(gateway_status::HEALTHY, Ordering::SeqCst);
+        assert_eq!(
+            state.gateway_health.load(Ordering::SeqCst),
+            gateway_status::HEALTHY
+        );
+
+        state
+            .gateway_health
+            .store(gateway_status::UNHEALTHY, Ordering::SeqCst);
+        assert_eq!(
+            state.gateway_health.load(Ordering::SeqCst),
+            gateway_status::UNHEALTHY
+        );
+    }
+
+    #[test]
+    fn tray_health_poll_interval_is_positive() {
+        assert!(
+            TRAY_HEALTH_POLL_INTERVAL > Duration::ZERO,
+            "tray health poll interval must be positive"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // AgentPausedState: construction and toggle logic
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn agent_paused_state_starts_unpaused() {
+        let state = AgentPausedState::new();
+        assert!(
+            !state.paused.load(Ordering::SeqCst),
+            "agent must start in unpaused state"
+        );
+    }
+
+    #[test]
+    fn agent_paused_state_toggle_via_fetch_xor() {
+        let state = AgentPausedState::new();
+
+        // First toggle: false -> true (pause)
+        let was = state.paused.fetch_xor(true, Ordering::SeqCst);
+        assert!(!was, "initial state must be false (unpaused)");
+        assert!(
+            state.paused.load(Ordering::SeqCst),
+            "after first toggle: should be paused"
+        );
+
+        // Second toggle: true -> false (resume)
+        let was2 = state.paused.fetch_xor(true, Ordering::SeqCst);
+        assert!(was2, "second toggle: was_paused must be true");
+        assert!(
+            !state.paused.load(Ordering::SeqCst),
+            "after second toggle: should be unpaused"
+        );
+    }
+
+    #[test]
+    fn agent_paused_state_rollback_via_fetch_xor() {
+        // Simulate the rollback path: toggle then immediately toggle back
+        let state = AgentPausedState::new();
+
+        // Pause (optimistic)
+        state.paused.fetch_xor(true, Ordering::SeqCst);
+        assert!(state.paused.load(Ordering::SeqCst), "should be paused after optimistic toggle");
+
+        // Rollback on API failure
+        state.paused.fetch_xor(true, Ordering::SeqCst);
+        assert!(
+            !state.paused.load(Ordering::SeqCst),
+            "rollback must restore unpaused state"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // PauseMenuItemState: construction
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn pause_menu_item_state_starts_none() {
+        let state = PauseMenuItemState::new();
+        let guard = state.item.lock().expect("lock must not be poisoned");
+        assert!(guard.is_none(), "PauseMenuItemState must start with None");
+    }
+
+    // -------------------------------------------------------------------------
+    // call_agent_pause_endpoint: tolerates unreachable gateway
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn call_agent_pause_endpoint_tolerates_unreachable_gateway() {
+        // With no gateway running, the endpoint should return Ok(()) (transport
+        // errors are treated as non-fatal best-effort failures).
+        let result = call_agent_pause_endpoint(true);
+        // Should be Ok regardless of connectivity
+        assert!(
+            result.is_ok(),
+            "pause endpoint call must tolerate unreachable gateway, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn call_agent_resume_endpoint_tolerates_unreachable_gateway() {
+        let result = call_agent_pause_endpoint(false);
+        assert!(
+            result.is_ok(),
+            "resume endpoint call must tolerate unreachable gateway, got: {:?}",
+            result
         );
     }
 }
