@@ -170,8 +170,10 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 	}
 
 	if len(content) > s.maxContentLength {
-		return ScanResult{Threat: true, Matches: []Match{{
+		return ScanResult{Threat: true, Content: content, Matches: []Match{{
 			Rule:     "content_too_large",
+			Location: 0,
+			Length:   len(content),
 			Severity: SeverityHigh,
 		}}}, nil
 	}
@@ -181,6 +183,8 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 	if len(content) > s.maxContentLength {
 		return ScanResult{Threat: true, Content: content, Matches: []Match{{
 			Rule:     "content_too_large",
+			Location: 0,
+			Length:   len(content),
 			Severity: SeverityHigh,
 		}}}, nil
 	}
@@ -216,7 +220,7 @@ func InputRules() []Rule {
 	return []Rule{
 		{
 			Name:     "instruction_override",
-			Pattern:  regexp.MustCompile(`(?i)ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
+			Pattern:  regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
 			Stage:    StageInput,
 			Severity: SeverityHigh,
 		},

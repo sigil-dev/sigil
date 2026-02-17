@@ -76,7 +76,8 @@ type ChatOptions struct {
 	Stream        bool
 }
 
-// Origin indicates the source of a message for context-aware security scanning.
+// Origin indicates the source of a message. Used to label conversation
+// history entries for downstream processing.
 type Origin string
 
 const (
