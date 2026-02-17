@@ -3,7 +3,9 @@
 
 package store
 
-import "time"
+import (
+	"time"
+)
 
 // --- Session types ---
 

@@ -88,7 +88,6 @@ const (
 	CodeSecurityCapabilityInvalid   Code = "security.capability.invalid"
 	CodeSecurityInvalidInput        Code = "security.input.invalid"
 	CodeSecurityScannerInputBlocked     Code = "security.scanner.input_blocked"
-	CodeSecurityScannerBlocked          Code = "security.scanner.blocked"
 	CodeSecurityScannerToolBlocked      Code = "security.scanner.tool_blocked"
 	CodeSecurityScannerOutputBlocked    Code = "security.scanner.output_blocked"
 	CodeSecurityScannerContentTooLarge  Code = "security.scanner.content_too_large"
