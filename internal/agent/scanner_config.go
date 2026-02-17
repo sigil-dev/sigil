@@ -19,28 +19,33 @@ var defaultScannerModes = ScannerModes{
 	Output: scanner.ModeRedact,
 }
 
+// parseModeField parses a single scanner mode config field.
+// If raw is empty, fallback is returned. Otherwise the value is validated.
+func parseModeField(raw scanner.Mode, name string, fallback scanner.Mode) (scanner.Mode, error) {
+	if raw == "" {
+		return fallback, nil
+	}
+	if !raw.Valid() {
+		return "", sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner %s mode: %q", name, raw)
+	}
+	return scanner.Mode(raw), nil
+}
+
 // NewScannerModesFromConfig converts config.ScannerConfig to agent.ScannerModes.
 // Empty fields fall back to defaultScannerModes. Non-empty fields are validated.
 func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
-	modes := defaultScannerModes
-
-	if cfg.Input != "" {
-		if !cfg.Input.Valid() {
-			return ScannerModes{}, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner input mode: %q", cfg.Input)
-		}
-		modes.Input = scanner.Mode(cfg.Input)
+	var (
+		modes ScannerModes
+		err   error
+	)
+	if modes.Input, err = parseModeField(cfg.Input, "input", defaultScannerModes.Input); err != nil {
+		return ScannerModes{}, err
 	}
-	if cfg.Tool != "" {
-		if !cfg.Tool.Valid() {
-			return ScannerModes{}, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner tool mode: %q", cfg.Tool)
-		}
-		modes.Tool = scanner.Mode(cfg.Tool)
+	if modes.Tool, err = parseModeField(cfg.Tool, "tool", defaultScannerModes.Tool); err != nil {
+		return ScannerModes{}, err
 	}
-	if cfg.Output != "" {
-		if !cfg.Output.Valid() {
-			return ScannerModes{}, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner output mode: %q", cfg.Output)
-		}
-		modes.Output = scanner.Mode(cfg.Output)
+	if modes.Output, err = parseModeField(cfg.Output, "output", defaultScannerModes.Output); err != nil {
+		return ScannerModes{}, err
 	}
 	return modes, nil
 }

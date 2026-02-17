@@ -410,6 +410,10 @@ func (c *Config) validateSecurity() []error {
 	// to prevent env injection from weakening security scanning in production.
 	// All scanner mode fields (input, tool, output, allow_permissive_input_mode)
 	// must be configured exclusively via the config file.
+	// NOTE: os.Getenv is called after AutomaticEnv, creating a theoretical
+	// TOCTOU window of microseconds between env reads. The practical risk is
+	// negligible — an attacker would need process-level access to exploit it.
+	// Accepted tradeoff: env-var guard is defense-in-depth, not the primary control.
 	blockedScannerEnvVars := []struct {
 		envVar string
 		field  string

@@ -33,11 +33,11 @@ func openTestDB(t *testing.T) *sql.DB {
 
 func TestAddColumnIfMissing_Validation(t *testing.T) {
 	tests := []struct {
-		name      string
-		table     string
-		column    string
-		columnDef string
-		wantErr   bool
+		name        string
+		table       string
+		column      string
+		columnDef   string
+		wantErr     bool
 		errContains string
 	}{
 		{
@@ -62,59 +62,59 @@ func TestAddColumnIfMissing_Validation(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name:      "unsafe table name with semicolon",
-			table:     "t;DROP TABLE t--",
-			column:    "col",
-			columnDef: "TEXT",
-			wantErr:   true,
+			name:        "unsafe table name with semicolon",
+			table:       "t;DROP TABLE t--",
+			column:      "col",
+			columnDef:   "TEXT",
+			wantErr:     true,
 			errContains: "unsafe table name",
 		},
 		{
-			name:      "unsafe column name with injection",
-			table:     "t",
-			column:    "col--drop",
-			columnDef: "TEXT",
-			wantErr:   true,
+			name:        "unsafe column name with injection",
+			table:       "t",
+			column:      "col--drop",
+			columnDef:   "TEXT",
+			wantErr:     true,
 			errContains: "unsafe column name",
 		},
 		{
-			name:      "unsafe token in middle of columnDef",
-			table:     "t",
-			column:    "col",
-			columnDef: "TEXT NOT; NULL",
-			wantErr:   true,
+			name:        "unsafe token in middle of columnDef",
+			table:       "t",
+			column:      "col",
+			columnDef:   "TEXT NOT; NULL",
+			wantErr:     true,
 			errContains: "unsafe token",
 		},
 		{
-			name:      "unsafe token with SQL comment injection",
-			table:     "t",
-			column:    "col",
-			columnDef: "TEXT --comment",
-			wantErr:   true,
+			name:        "unsafe token with SQL comment injection",
+			table:       "t",
+			column:      "col",
+			columnDef:   "TEXT --comment",
+			wantErr:     true,
 			errContains: "unsafe token",
 		},
 		{
-			name:      "unsafe token with semicolon in columnDef",
-			table:     "t",
-			column:    "col",
-			columnDef: "TEXT; DROP TABLE t",
-			wantErr:   true,
+			name:        "unsafe token with semicolon in columnDef",
+			table:       "t",
+			column:      "col",
+			columnDef:   "TEXT; DROP TABLE t",
+			wantErr:     true,
 			errContains: "unsafe token",
 		},
 		{
-			name:      "unsafe quoted default with embedded quote",
-			table:     "t",
-			column:    "col",
-			columnDef: "TEXT DEFAULT 'x''y'",
-			wantErr:   true,
+			name:        "unsafe quoted default with embedded quote",
+			table:       "t",
+			column:      "col",
+			columnDef:   "TEXT DEFAULT 'x''y'",
+			wantErr:     true,
 			errContains: "unsafe token",
 		},
 		{
-			name:      "empty columnDef",
-			table:     "t",
-			column:    "col",
-			columnDef: "",
-			wantErr:   true,
+			name:        "empty columnDef",
+			table:       "t",
+			column:      "col",
+			columnDef:   "",
+			wantErr:     true,
 			errContains: "empty column definition",
 		},
 	}

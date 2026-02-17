@@ -22,33 +22,31 @@ import (
 )
 
 // ScannerModes holds the per-stage detection modes.
+// The zero value is intentionally invalid (all fields empty strings).
+// Per Go convention, validation occurs at use-site: LoopConfig.Validate and
+// NewLoopConfig both call Validate() and reject zero-value ScannerModes.
 type ScannerModes struct {
 	Input  scanner.Mode
 	Tool   scanner.Mode
 	Output scanner.Mode
 }
 
-// validateMode checks that a single ScannerModes field is non-empty and valid.
-// field is the scanner.Mode value; name is the field name used in error messages.
-func validateMode(field scanner.Mode, name string) error {
-	if field == "" {
-		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes."+name+" is required")
-	}
-	if !field.Valid() {
-		return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.%s: %q", name, field)
-	}
-	return nil
-}
-
 // Validate checks that all scanner mode fields are non-empty and valid.
 func (m ScannerModes) Validate() error {
-	if err := validateMode(m.Input, "Input"); err != nil {
-		return err
+	for _, f := range []struct {
+		mode scanner.Mode
+		name string
+	}{
+		{m.Input, "Input"}, {m.Tool, "Tool"}, {m.Output, "Output"},
+	} {
+		if f.mode == "" {
+			return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes."+f.name+" is required")
+		}
+		if !f.mode.Valid() {
+			return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.%s: %q", f.name, f.mode)
+		}
 	}
-	if err := validateMode(m.Tool, "Tool"); err != nil {
-		return err
-	}
-	return validateMode(m.Output, "Output")
+	return nil
 }
 
 // defaultMaxToolCallsPerTurn is the default maximum number of tool calls
@@ -388,6 +386,16 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 		l.auditInputBlocked(ctx, msg, inputThreat)
 		return nil, nil, scanErr
 	}
+	// Log a SHA-256 hash of the original content at DEBUG level for forensic
+	// traceability before replacing it with the normalized form. This allows
+	// security teams to correlate normalized content back to the original
+	// input without persisting the raw user data.
+	origHash := sha256.Sum256([]byte(msg.Content))
+	slog.DebugContext(ctx, "input content normalized",
+		"original_sha256", fmt.Sprintf("%x", origHash[:]),
+		"session_id", msg.SessionID,
+		"workspace_id", msg.WorkspaceID,
+	)
 	// Note: msg.Content is replaced with the scanner-normalized form
 	// (NFKC + zero-width stripped). The normalized content is persisted,
 	// not the original user input.
@@ -414,6 +422,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 		SessionID: msg.SessionID,
 		Role:      store.MessageRoleUser,
 		Content:   msg.Content,
+		Origin:    string(provider.OriginUser),
 		Threat:    inputThreat,
 		CreatedAt: time.Now(),
 	}
@@ -433,12 +442,17 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	// providers (Anthropic, Google, OpenAI) handle it through their native mechanism.
 	var messages []provider.Message
 	for _, m := range history {
+		origin := provider.Origin(m.Origin)
+		if !origin.Valid() {
+			// Fallback for messages stored before Origin was persisted.
+			origin = originFromRole(m.Role)
+		}
 		messages = append(messages, provider.Message{
 			Role:       m.Role,
 			Content:    m.Content,
 			ToolCallID: m.ToolCallID,
 			ToolName:   m.ToolName,
-			Origin:     originFromRole(m.Role),
+			Origin:     origin,
 		})
 	}
 
@@ -669,6 +683,7 @@ func (l *Loop) runToolLoop(
 				SessionID: msg.SessionID,
 				Role:      store.MessageRoleAssistant,
 				Content:   text,
+				Origin:    string(provider.OriginSystem),
 				Threat:    intermediateThreat,
 				CreatedAt: time.Now(),
 			}
@@ -731,6 +746,7 @@ func (l *Loop) runToolLoop(
 				Content:    resultContent,
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
+				Origin:     string(provider.OriginTool),
 				Threat:     toolThreat,
 				CreatedAt:  time.Now(),
 			}
@@ -796,6 +812,7 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 		SessionID: sessionID,
 		Role:      store.MessageRoleAssistant,
 		Content:   text,
+		Origin:    string(provider.OriginSystem),
 		Threat:    outputThreat,
 		CreatedAt: time.Now(),
 	}
@@ -847,6 +864,10 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 	}
 
 	// Best-effort audit; do not fail the response on audit errors.
+	// Design tension: the security principle "MUST audit security-relevant operations"
+	// conflicts with availability here. D062 accepts this tradeoff: a failed audit
+	// log should not block the user response. Consecutive failures escalate log level
+	// (warn → error) to ensure operator visibility without impacting availability.
 	if err := l.auditStore.Append(ctx, entry); err != nil {
 		consecutive := l.auditFailCount.Add(1)
 		logLevel := slog.LevelWarn
@@ -893,11 +914,19 @@ func (l *Loop) auditInputBlocked(ctx context.Context, msg InboundMessage, threat
 	}
 
 	if err := l.auditStore.Append(ctx, entry); err != nil {
-		slog.Warn("audit store append failed for input_blocked",
+		consecutive := l.auditFailCount.Add(1)
+		logLevel := slog.LevelWarn
+		if consecutive >= 3 {
+			logLevel = slog.LevelError
+		}
+		slog.Log(ctx, logLevel, "audit store append failed for input_blocked",
 			"error", err,
 			"workspace_id", msg.WorkspaceID,
 			"session_id", msg.SessionID,
+			"consecutive_failures", consecutive,
 		)
+	} else {
+		l.auditFailCount.Store(0)
 	}
 }
 
@@ -978,8 +1007,13 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 					Origin: origin,
 				})
 				if reScanErr == nil {
-					// Re-scan succeeded: apply mode against the truncated+scanned result.
-					return l.applyScannedResult(stage, mode, reScanResult, logAttrs)
+					// Re-scan succeeded: apply mode against the truncated+scanned result,
+					// then append a truncation marker so the LLM is informed the result was cut.
+					result, threatInfo, applyErr := l.applyScannedResult(stage, mode, reScanResult, logAttrs)
+					if applyErr != nil {
+						return result, threatInfo, applyErr
+					}
+					return result + "\n[TRUNCATED: tool result exceeded scan limit]", threatInfo, nil
 				}
 				// Re-scan also failed: fall through to the generic best-effort path.
 				// Preserve the original content_too_large error in originalErr so both

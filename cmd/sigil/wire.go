@@ -95,7 +95,8 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	enforcer := security.NewEnforcer(gs.AuditLog())
 
 	// 2b. Security scanner — create regex scanner with default rules and
-	// convert config modes for use by the agent loop when it is wired.
+	// convert config scanner modes (input: block, tool: flag, output: redact by default)
+	// for use by the agent loop.
 	sc, err := scanner.NewRegexScanner(scanner.DefaultRules())
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating security scanner: %w", err)
@@ -241,23 +242,23 @@ func (gw *Gateway) Validate() error {
 // Close tolerates nil fields to avoid leaking resources from partial initialization.
 func (gw *Gateway) Close() error {
 	var errs []error
-	if gw.Server != nil {
-		if err := gw.Server.Close(); err != nil {
+	if gw.server != nil {
+		if err := gw.server.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if gw.ProviderRegistry != nil {
-		if err := gw.ProviderRegistry.Close(); err != nil {
+	if gw.providerRegistry != nil {
+		if err := gw.providerRegistry.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if gw.WorkspaceManager != nil {
-		if err := gw.WorkspaceManager.Close(); err != nil {
+	if gw.workspaceManager != nil {
+		if err := gw.workspaceManager.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if gw.GatewayStore != nil {
-		if err := gw.GatewayStore.Close(); err != nil {
+	if gw.gatewayStore != nil {
+		if err := gw.gatewayStore.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -522,4 +523,3 @@ func (v *configTokenValidator) ValidateToken(_ context.Context, token string) (*
 	slog.Debug("token validation failed: no configured token matched")
 	return nil, sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid token")
 }
-

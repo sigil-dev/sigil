@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/stretchr/testify/assert"
@@ -37,12 +38,12 @@ func TestWireGateway(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
-	assert.NotNil(t, gw.Server)
-	assert.NotNil(t, gw.WorkspaceManager)
-	assert.NotNil(t, gw.PluginManager)
-	assert.NotNil(t, gw.ProviderRegistry)
-	assert.NotNil(t, gw.Enforcer)
-	assert.NotNil(t, gw.GatewayStore)
+	assert.NotNil(t, gw.Server())
+	assert.NotNil(t, gw.WorkspaceManager())
+	assert.NotNil(t, gw.PluginManager())
+	assert.NotNil(t, gw.ProviderRegistry())
+	assert.NotNil(t, gw.Enforcer())
+	assert.NotNil(t, gw.GatewayStore())
 }
 
 func TestGateway_GracefulShutdown(t *testing.T) {
@@ -73,7 +74,7 @@ func TestWireGateway_ChatEndpointReturns503WithoutHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	gw.Server.Handler().ServeHTTP(w, req)
+	gw.Server().Handler().ServeHTTP(w, req)
 
 	// Without a stream handler, the server fails closed with 503.
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
@@ -93,7 +94,7 @@ func TestWireGateway_ChatStreamEndpointReturns503WithoutHandler(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	w := httptest.NewRecorder()
-	gw.Server.Handler().ServeHTTP(w, req)
+	gw.Server().Handler().ServeHTTP(w, req)
 
 	// Without a stream handler, the server fails closed with 503.
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
@@ -111,7 +112,7 @@ func TestWorkspaceServiceAdapter_ListReturnsEmptyArray(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	w := httptest.NewRecorder()
-	gw.Server.Handler().ServeHTTP(w, req)
+	gw.Server().Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	// Must be JSON array "[]", not "null".
@@ -134,7 +135,7 @@ func TestSessionServiceAdapter_ListReturnsEmptyArray(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/test-ws/sessions", nil)
 	w := httptest.NewRecorder()
-	gw.Server.Handler().ServeHTTP(w, req)
+	gw.Server().Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	body := strings.TrimSpace(w.Body.String())
@@ -158,7 +159,7 @@ func TestPluginServiceAdapter_FieldCompleteness(t *testing.T) {
 	// Plugin list with no plugins should return empty array, not null.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins", nil)
 	w := httptest.NewRecorder()
-	gw.Server.Handler().ServeHTTP(w, req)
+	gw.Server().Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	body := strings.TrimSpace(w.Body.String())
@@ -178,7 +179,7 @@ func TestWireGateway_WithWorkspaces(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
-	assert.NotNil(t, gw.WorkspaceManager)
+	assert.NotNil(t, gw.WorkspaceManager())
 }
 
 func TestWireGateway_ProviderRegistration(t *testing.T) {
@@ -196,7 +197,7 @@ func TestWireGateway_ProviderRegistration(t *testing.T) {
 
 	// All three providers should be registered.
 	for _, name := range []string{"anthropic", "openai", "google"} {
-		p, err := gw.ProviderRegistry.Get(name)
+		p, err := gw.ProviderRegistry().Get(name)
 		assert.NoError(t, err, "provider %q should be registered", name)
 		assert.NotNil(t, p, "provider %q should not be nil", name)
 	}
@@ -213,7 +214,7 @@ func TestWireGateway_ProviderSkipsEmptyAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
-	_, err = gw.ProviderRegistry.Get("anthropic")
+	_, err = gw.ProviderRegistry().Get("anthropic")
 	assert.Error(t, err, "provider with empty API key should not be registered")
 }
 
@@ -235,7 +236,7 @@ func TestWireGateway_ProviderCreationFailureSkipped(t *testing.T) {
 	require.NoError(t, err, "provider creation failure should not prevent startup")
 	defer func() { _ = gw.Close() }()
 
-	_, err = gw.ProviderRegistry.Get("anthropic")
+	_, err = gw.ProviderRegistry().Get("anthropic")
 	assert.Error(t, err, "failed provider should not be registered")
 }
 
@@ -250,7 +251,7 @@ func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
 	require.NoError(t, err, "unknown provider should not cause startup failure")
 	defer func() { _ = gw.Close() }()
 
-	_, err = gw.ProviderRegistry.Get("unknown-provider")
+	_, err = gw.ProviderRegistry().Get("unknown-provider")
 	assert.Error(t, err, "unknown provider should not be registered")
 }
 
@@ -378,7 +379,7 @@ func TestGateway_CloseClosesProviderRegistry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the provider is registered before close.
-	_, err = gw.ProviderRegistry.Get("anthropic")
+	_, err = gw.ProviderRegistry().Get("anthropic")
 	require.NoError(t, err, "provider should be registered before close")
 
 	// Close the gateway, which should close the ProviderRegistry.
@@ -400,7 +401,7 @@ func TestWireGateway_RateLimitConfig(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
-	assert.NotNil(t, gw.Server)
+	assert.NotNil(t, gw.Server())
 	// Server was created successfully with rate limit config.
 	// The middleware is tested separately in internal/server/ratelimit_test.go
 }
@@ -426,14 +427,14 @@ func TestWireGateway_RegistryDefaultAndFailoverWired(t *testing.T) {
 	defer func() { _ = gw.Close() }()
 
 	// Route with empty model name should resolve via SetDefault → "anthropic/claude-sonnet-4-5".
-	p, model, err := gw.ProviderRegistry.Route(context.Background(), "", "")
+	p, model, err := gw.ProviderRegistry().Route(context.Background(), "", "")
 	require.NoError(t, err, "routing should succeed with default provider configured")
 	assert.NotNil(t, p)
 	assert.Equal(t, "claude-sonnet-4-5", model)
 	assert.Equal(t, "anthropic", p.Name())
 
 	// MaxAttempts should be 1 (primary) + 1 (failover) = 2.
-	assert.Equal(t, 2, gw.ProviderRegistry.MaxAttempts(),
+	assert.Equal(t, 2, gw.ProviderRegistry().MaxAttempts(),
 		"failover chain should be wired: 1 primary + 1 failover")
 }
 
@@ -459,7 +460,7 @@ func TestWireGateway_HSTSConfig(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
-	assert.NotNil(t, gw.Server)
+	assert.NotNil(t, gw.Server())
 	// Server was created successfully with HSTS enabled.
 	// The middleware is tested separately in internal/server/hsts_test.go
 }
@@ -481,7 +482,7 @@ func TestGateway_CloseCallsServerClose(t *testing.T) {
 	// If Gateway.Close() called Server.Close(), then calling it again should be safe
 	// due to the sync.Once in Server.Close(). We verify this doesn't panic.
 	assert.NotPanics(t, func() {
-		_ = gw.Server.Close()
+		_ = gw.Server().Close()
 	}, "Server.Close should be idempotent, proving Gateway.Close called it")
 }
 
@@ -736,33 +737,43 @@ func TestGateway_ValidateRequiredFields(t *testing.T) {
 	}{
 		{
 			name:      "nil server",
-			mutate:    func(g *Gateway) { g.Server = nil },
+			mutate:    func(g *Gateway) { g.server = nil },
 			expectErr: "gateway server is nil",
 		},
 		{
 			name:      "nil gateway store",
-			mutate:    func(g *Gateway) { g.GatewayStore = nil },
+			mutate:    func(g *Gateway) { g.gatewayStore = nil },
 			expectErr: "gateway store is nil",
 		},
 		{
 			name:      "nil plugin manager",
-			mutate:    func(g *Gateway) { g.PluginManager = nil },
+			mutate:    func(g *Gateway) { g.pluginManager = nil },
 			expectErr: "plugin manager is nil",
 		},
 		{
 			name:      "nil provider registry",
-			mutate:    func(g *Gateway) { g.ProviderRegistry = nil },
+			mutate:    func(g *Gateway) { g.providerRegistry = nil },
 			expectErr: "provider registry is nil",
 		},
 		{
 			name:      "nil workspace manager",
-			mutate:    func(g *Gateway) { g.WorkspaceManager = nil },
+			mutate:    func(g *Gateway) { g.workspaceManager = nil },
 			expectErr: "workspace manager is nil",
 		},
 		{
 			name:      "nil enforcer",
-			mutate:    func(g *Gateway) { g.Enforcer = nil },
+			mutate:    func(g *Gateway) { g.enforcer = nil },
 			expectErr: "enforcer is nil",
+		},
+		{
+			name:      "nil scanner",
+			mutate:    func(g *Gateway) { g.scanner = nil },
+			expectErr: "scanner is nil",
+		},
+		{
+			name:      "invalid scanner modes",
+			mutate:    func(g *Gateway) { g.scannerModes = agent.ScannerModes{} },
+			expectErr: "ScannerModes.Input is required",
 		},
 	}
 
@@ -794,7 +805,7 @@ func TestGateway_CloseToleratesNilFields(t *testing.T) {
 
 	// Simulate partial initialization by nil'ing a field.
 	// Close must still release remaining resources.
-	gw.Server = nil
+	gw.server = nil
 
 	err = gw.Close()
 	assert.NoError(t, err, "Close should skip nil fields, not fail")

@@ -979,6 +979,7 @@ func (p *mockProviderIntermediateTextWithSecret) Available(_ context.Context) bo
 func (p *mockProviderIntermediateTextWithSecret) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-intermediate"}, nil
 }
+
 func (p *mockProviderIntermediateTextWithSecret) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }
@@ -1113,6 +1114,7 @@ func (p *mockProviderRepeatingToolCall) Available(_ context.Context) bool { retu
 func (p *mockProviderRepeatingToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-repeating-tool"}, nil
 }
+
 func (p *mockProviderRepeatingToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }

@@ -3778,10 +3778,10 @@ func TestAgentLoop_OutputScanBlocksOnSecret(t *testing.T) {
 // not block.
 func TestAgentLoop_ThreatInfoPersistedForFlaggedUserInput(t *testing.T) {
 	tests := []struct {
-		name          string
-		content       string
-		wantThreat    bool
-		wantRulesNil  bool
+		name         string
+		content      string
+		wantThreat   bool
+		wantRulesNil bool
 	}{
 		{
 			name:         "injection pattern sets ThreatInfo on user message",

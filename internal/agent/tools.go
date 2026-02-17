@@ -276,13 +276,17 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 
 	// Best-effort audit; do not fail the tool execution on audit errors.
 	if err := d.auditStore.Append(ctx, entry); err != nil {
-		d.auditFailCount.Add(1)
-		slog.Warn("audit store append failed",
+		consecutive := d.auditFailCount.Add(1)
+		logLevel := slog.LevelWarn
+		if consecutive >= 3 {
+			logLevel = slog.LevelError
+		}
+		slog.Log(ctx, logLevel, "audit store append failed",
 			"error", err,
 			"plugin", req.PluginName,
 			"tool", req.ToolName,
 			"session_id", req.SessionID,
-			"consecutive_failures", d.auditFailCount.Load(),
+			"consecutive_failures", consecutive,
 		)
 	} else {
 		d.auditFailCount.Store(0)

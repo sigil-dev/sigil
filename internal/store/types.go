@@ -95,9 +95,13 @@ type Message struct {
 	Content    string
 	ToolCallID string
 	ToolName   string
-	Threat     *ThreatInfo
-	CreatedAt  time.Time
-	Metadata   map[string]string
+	// Origin records the source of the message for audit purposes.
+	// Values: "user_input", "system", "tool_output" (mirrors pkg/types.Origin).
+	// Stored as a plain string to avoid coupling store to provider or types packages.
+	Origin    string
+	Threat    *ThreatInfo
+	CreatedAt time.Time
+	Metadata  map[string]string
 }
 
 // --- Memory types ---

@@ -983,94 +983,94 @@ func TestSecretRules_DatabaseConnectionString(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name    string
-		content string
+		name        string
+		content     string
 		shouldMatch bool
 	}{
 		// Standard formats
 		{
-			name:    "postgres with standard password",
-			content: "postgres://admin:s3cret@db.example.com:5432/mydb",
+			name:        "postgres with standard password",
+			content:     "postgres://admin:s3cret@db.example.com:5432/mydb",
 			shouldMatch: true,
 		},
 		{
-			name:    "mysql with standard password",
-			content: "mysql://root:password@localhost:3306/database",
+			name:        "mysql with standard password",
+			content:     "mysql://root:password@localhost:3306/database",
 			shouldMatch: true,
 		},
 		{
-			name:    "mongodb with standard password",
-			content: "mongodb://user:pass@mongo.local:27017/dbname",
+			name:        "mongodb with standard password",
+			content:     "mongodb://user:pass@mongo.local:27017/dbname",
 			shouldMatch: true,
 		},
 		{
-			name:    "redis with standard password",
-			content: "redis://user:secret@cache.example.com:6379",
+			name:        "redis with standard password",
+			content:     "redis://user:secret@cache.example.com:6379",
 			shouldMatch: true,
 		},
 		{
-			name:    "jdbc connection string",
-			content: "jdbc:mysql://admin:mypass@db.server.com:3306/appdb",
+			name:        "jdbc connection string",
+			content:     "jdbc:mysql://admin:mypass@db.server.com:3306/appdb",
 			shouldMatch: true,
 		},
 		// URL-encoded passwords
 		{
-			name:    "postgres with URL-encoded @ symbol",
-			content: "postgresql://user:p%40ssw0rd@db.example.com/mydb",
+			name:        "postgres with URL-encoded @ symbol",
+			content:     "postgresql://user:p%40ssw0rd@db.example.com/mydb",
 			shouldMatch: true,
 		},
 		{
-			name:    "mysql with URL-encoded : symbol",
-			content: "mysql://admin:pass%3Aword@host.local:3306/db",
+			name:        "mysql with URL-encoded : symbol",
+			content:     "mysql://admin:pass%3Aword@host.local:3306/db",
 			shouldMatch: true,
 		},
 		{
-			name:    "postgres with URL-encoded special chars",
-			content: "postgres://user:p%40ss%3Aw0rd%21@database.com/app",
+			name:        "postgres with URL-encoded special chars",
+			content:     "postgres://user:p%40ss%3Aw0rd%21@database.com/app",
 			shouldMatch: true,
 		},
 		// IPv6 hosts
 		{
-			name:    "postgres with IPv6 localhost",
-			content: "postgres://user:password@[::1]:5432/mydb",
+			name:        "postgres with IPv6 localhost",
+			content:     "postgres://user:password@[::1]:5432/mydb",
 			shouldMatch: true,
 		},
 		{
-			name:    "mysql with IPv6 address",
-			content: "mysql://root:secret@[2001:db8::1]:3306/database",
+			name:        "mysql with IPv6 address",
+			content:     "mysql://root:secret@[2001:db8::1]:3306/database",
 			shouldMatch: true,
 		},
 		{
-			name:    "mongodb with IPv6 and port",
-			content: "mongodb://admin:pass@[fe80::1]:27017/data",
+			name:        "mongodb with IPv6 and port",
+			content:     "mongodb://admin:pass@[fe80::1]:27017/data",
 			shouldMatch: true,
 		},
 		// IPv6 with URL-encoded password
 		{
-			name:    "postgres with IPv6 and URL-encoded password",
-			content: "postgresql://user:p%40ss@[::1]:5432/db",
+			name:        "postgres with IPv6 and URL-encoded password",
+			content:     "postgresql://user:p%40ss@[::1]:5432/db",
 			shouldMatch: true,
 		},
 		// With paths
 		{
-			name:    "postgres with path in connection string",
-			content: "postgres://admin:secret@db.example.com/myapp/schema",
+			name:        "postgres with path in connection string",
+			content:     "postgres://admin:secret@db.example.com/myapp/schema",
 			shouldMatch: true,
 		},
 		{
-			name:    "postgres with query params",
-			content: "postgres://user:pass@localhost:5432/db?sslmode=require",
+			name:        "postgres with query params",
+			content:     "postgres://user:pass@localhost:5432/db?sslmode=require",
 			shouldMatch: true,
 		},
 		// Non-matches (no password)
 		{
-			name:    "postgres without password",
-			content: "postgres://user@localhost/mydb",
+			name:        "postgres without password",
+			content:     "postgres://user@localhost/mydb",
 			shouldMatch: false,
 		},
 		{
-			name:    "postgres in regular text",
-			content: "I use PostgreSQL database for storage",
+			name:        "postgres in regular text",
+			content:     "I use PostgreSQL database for storage",
 			shouldMatch: false,
 		},
 	}

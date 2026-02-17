@@ -450,6 +450,27 @@ func TestChatEvent_Validate(t *testing.T) {
 	}
 }
 
+func TestOriginTag(t *testing.T) {
+	tests := []struct {
+		name   string
+		origin provider.Origin
+		want   string
+	}{
+		{"user origin", provider.OriginUser, "[user_input] "},
+		{"system origin", provider.OriginSystem, "[system] "},
+		{"tool origin", provider.OriginTool, "[tool_output] "},
+		{"unknown origin", provider.Origin("unknown"), ""},
+		{"empty origin", provider.Origin(""), ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := provider.OriginTag(tt.origin)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestProvider_MidStreamFailure_HealthTracking(t *testing.T) {
 	tests := []struct {
 		name                string

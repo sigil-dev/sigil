@@ -92,9 +92,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_
 		return err
 	}
 
-	// Migrate existing databases: add threat_info column if missing.
+	// Migrate existing databases: add columns if missing.
 	// CREATE TABLE IF NOT EXISTS does not add new columns to existing tables.
 	if err := addColumnIfMissing(db, "messages", "threat_info", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "messages", "origin", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 
@@ -403,8 +406,8 @@ func (s *SessionStore) AppendMessage(ctx context.Context, sessionID string, msg 
 		}
 	}
 
-	const q = `INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	const q = `INSERT INTO messages (id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata, origin)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err = s.db.ExecContext(ctx, q,
 		msg.ID,
@@ -416,6 +419,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		string(threatInfo),
 		formatTime(msg.CreatedAt),
 		string(metadata),
+		msg.Origin,
 	)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "appending message %s to session %s: %w", msg.ID, sessionID, err)
@@ -425,9 +429,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 func (s *SessionStore) GetActiveWindow(ctx context.Context, sessionID string, limit int) ([]*store.Message, error) {
 	// Sub-select the N most recent, then re-order chronologically.
-	const q = `SELECT id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata
+	const q = `SELECT id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata, origin
 FROM (
-	SELECT id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata
+	SELECT id, session_id, role, content, tool_call_id, tool_name, threat_info, created_at, metadata, origin
 	FROM messages WHERE session_id = ?
 	ORDER BY created_at DESC LIMIT ?
 ) ORDER BY created_at ASC`
@@ -452,6 +456,7 @@ FROM (
 			&threatJSON,
 			&createdAt,
 			&metaJSON,
+			&msg.Origin,
 		); err != nil {
 			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning message row: %w", err)
 		}

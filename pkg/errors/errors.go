@@ -85,8 +85,8 @@ const (
 	CodeCLISetupFailure      Code = "cli.setup.failure"
 	CodeCLIInputInvalid      Code = "cli.input.invalid"
 
-	CodeSecurityCapabilityInvalid   Code = "security.capability.invalid"
-	CodeSecurityInvalidInput        Code = "security.input.invalid"
+	CodeSecurityCapabilityInvalid         Code = "security.capability.invalid"
+	CodeSecurityInvalidInput              Code = "security.input.invalid"
 	CodeSecurityScannerInputBlocked       Code = "security.scanner.input_blocked"
 	CodeSecurityScannerToolBlocked        Code = "security.scanner.tool_blocked"
 	CodeSecurityScannerOutputBlocked      Code = "security.scanner.output_blocked"

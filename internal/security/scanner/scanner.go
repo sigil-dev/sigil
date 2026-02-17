@@ -61,6 +61,23 @@ type ScanContext struct {
 	Metadata map[string]string
 }
 
+// NewScanContext creates a ScanContext with a deep-copied Metadata map so
+// callers cannot mutate the map after construction.
+func NewScanContext(stage Stage, origin Origin, metadata map[string]string) ScanContext {
+	var copied map[string]string
+	if metadata != nil {
+		copied = make(map[string]string, len(metadata))
+		for k, v := range metadata {
+			copied[k] = v
+		}
+	}
+	return ScanContext{
+		Stage:    stage,
+		Origin:   origin,
+		Metadata: copied,
+	}
+}
+
 // ScanResult holds the outcome of a scan.
 type ScanResult struct {
 	Threat  bool
@@ -235,6 +252,9 @@ func Normalize(s string) string {
 }
 
 // Scan checks content against rules matching the given stage.
+// The context.Context parameter is intentionally discarded: Go RE2 guarantees
+// linear-time matching, so mid-scan cancellation is unnecessary for typical
+// content sizes. The interface accepts context for future Scanner implementations.
 func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext) (ScanResult, error) {
 	if !opts.Stage.Valid() {
 		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan stage: %q", opts.Stage)
@@ -256,13 +276,13 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 
 	if len(content) > s.maxContentLength {
 		return ScanResult{
-			Content: content,
-		}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
-			"content exceeds maximum length",
-			sigilerr.Field("length", len(content)),
-			sigilerr.Field("max_length", s.maxContentLength),
-			sigilerr.Field("stage", string(opts.Stage)),
-		)
+				Content: content,
+			}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+				"content exceeds maximum length",
+				sigilerr.Field("length", len(content)),
+				sigilerr.Field("max_length", s.maxContentLength),
+				sigilerr.Field("stage", string(opts.Stage)),
+			)
 	}
 
 	result := ScanResult{Content: content}
@@ -292,8 +312,8 @@ func DefaultRules() []Rule {
 }
 
 // InputRules returns rules for StageInput: prompt injection, instruction override,
-// and secret detection patterns. Secrets are detected in user input so they can be
-// redacted before reaching the LLM.
+// and secret detection patterns. Secrets in user input are blocked (default mode)
+// before reaching the LLM, preventing accidental credential forwarding.
 func InputRules() []Rule {
 	injection := []Rule{
 		{
@@ -318,6 +338,7 @@ func InputRules() []Rule {
 			Severity: SeverityMedium,
 		},
 		{
+			// NOTE: This pattern uses nested alternatives; safe due to Go RE2 linear-time guarantee.
 			Name:     "new_task_injection",
 			Pattern:  regexp.MustCompile(`(?i)(new\s+task|from\s+now\s+on|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?)\s+(?:do\s+not|don'?t)\s+exist)`),
 			Stage:    StageInput,
@@ -426,7 +447,7 @@ func secretRules(stage Stage) []Rule {
 			Severity: SeverityHigh,
 		},
 		{
-			Name:     "database_connection_string",
+			Name: "database_connection_string",
 			// Matches: protocol://[user[:password]@]host[:port][/path]
 			// Supports:
 			// - URL-encoded passwords (e.g., p%40ssw0rd for p@ssw0rd, p%3Aword for p:word)
@@ -492,7 +513,7 @@ func secretRules(stage Stage) []Rule {
 		},
 		{
 			Name:     "twilio_api_key",
-			Pattern:  regexp.MustCompile(`SK[0-9a-fA-F]{32}`),
+			Pattern:  regexp.MustCompile(`\bSK[0-9a-fA-F]{32}\b`),
 			Stage:    stage,
 			Severity: SeverityHigh,
 		},
