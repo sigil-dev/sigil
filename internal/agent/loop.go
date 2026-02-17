@@ -340,8 +340,9 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	}
 
 	// Input scanning — check for prompt injection before persisting.
+	var inputThreat *store.ThreatInfo
 	{
-		scanned, scanErr := l.scanContent(ctx, msg.Content,
+		scanned, threat, scanErr := l.scanContent(ctx, msg.Content,
 			scanner.StageInput, scanner.OriginUser, l.scannerModes.Input,
 			"session_id", msg.SessionID, "workspace_id", msg.WorkspaceID,
 		)
@@ -349,6 +350,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 			return nil, nil, scanErr
 		}
 		msg.Content = scanned
+		inputThreat = threat
 	}
 
 	// Append the incoming user message to the session store.
@@ -357,6 +359,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 		SessionID: msg.SessionID,
 		Role:      store.MessageRoleUser,
 		Content:   msg.Content,
+		Threat:    inputThreat,
 		CreatedAt: time.Now(),
 	}
 	if err := l.sessions.AppendMessage(ctx, msg.SessionID, userMsg); err != nil {
@@ -656,8 +659,9 @@ func (l *Loop) runToolLoop(
 			}
 
 			// Tool result scanning — check for instruction injection before persisting.
+			var toolThreat *store.ThreatInfo
 			{
-				scanned, scanErr := l.scanContent(ctx, resultContent,
+				scanned, threat, scanErr := l.scanContent(ctx, resultContent,
 					scanner.StageTool, scanner.OriginTool, l.scannerModes.Tool,
 					"tool", tc.Name, "session_id", msg.SessionID, "workspace_id", msg.WorkspaceID,
 				)
@@ -665,6 +669,7 @@ func (l *Loop) runToolLoop(
 					return "", nil, scanErr
 				}
 				resultContent = scanned
+				toolThreat = threat
 			}
 
 			// Persist tool result message (using scanned content).
@@ -675,6 +680,7 @@ func (l *Loop) runToolLoop(
 				Content:    resultContent,
 				ToolCallID: tc.ID,
 				ToolName:   tc.Name,
+				Threat:     toolThreat,
 				CreatedAt:  time.Now(),
 			}
 			if appendErr := l.sessions.AppendMessage(ctx, msg.SessionID, toolMsg); appendErr != nil {
@@ -724,8 +730,9 @@ func (l *Loop) runToolLoop(
 
 func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, error) {
 	// Output scanning — filter secrets before persisting/returning.
+	var outputThreat *store.ThreatInfo
 	{
-		scanned, scanErr := l.scanContent(ctx, text,
+		scanned, threat, scanErr := l.scanContent(ctx, text,
 			scanner.StageOutput, scanner.OriginSystem, l.scannerModes.Output,
 			"session_id", sessionID,
 		)
@@ -733,6 +740,7 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 			return nil, scanErr
 		}
 		text = scanned
+		outputThreat = threat
 	}
 
 	// Persist the assistant response.
@@ -741,6 +749,7 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 		SessionID: sessionID,
 		Role:      store.MessageRoleAssistant,
 		Content:   text,
+		Threat:    outputThreat,
 		CreatedAt: time.Now(),
 	}
 	if err := l.sessions.AppendMessage(ctx, sessionID, assistantMsg); err != nil {
@@ -796,11 +805,11 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 }
 
 // scanContent scans content at the given stage and applies the configured mode.
-// Returns the (possibly redacted) content, or an error if scanning fails or the mode blocks.
-// If no scanner is configured, content is returned unchanged.
-func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.Stage, origin scanner.Origin, mode scanner.Mode, logAttrs ...any) (string, error) {
+// Returns the (possibly redacted) content, threat info (if a threat was detected), or an error
+// if scanning fails or the mode blocks. If no scanner is configured, content is returned unchanged.
+func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.Stage, origin scanner.Origin, mode scanner.Mode, logAttrs ...any) (string, *store.ThreatInfo, error) {
 	if l.scanner == nil {
-		return content, nil
+		return content, nil, nil
 	}
 
 	scanResult, scanErr := l.scanner.Scan(ctx, content, scanner.ScanContext{
@@ -808,25 +817,33 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		Origin: origin,
 	})
 	if scanErr != nil {
-		return "", sigilerr.Wrap(scanErr, sigilerr.CodeSecurityScannerFailure,
+		return "", nil, sigilerr.Wrap(scanErr, sigilerr.CodeSecurityScannerFailure,
 			"security scan failed",
 			sigilerr.Field("stage", stage),
 		)
 	}
 
+	var threat *store.ThreatInfo
 	if scanResult.Threat {
+		rules := make([]string, 0, len(scanResult.Matches))
 		for _, m := range scanResult.Matches {
+			rules = append(rules, m.Rule)
 			attrs := append([]any{"rule", m.Rule, "severity", m.Severity, "stage", stage}, logAttrs...)
 			slog.Warn("security scan threat detected", attrs...)
+		}
+		threat = &store.ThreatInfo{
+			Detected: true,
+			Rules:    rules,
+			Stage:    string(stage),
 		}
 	}
 
 	scanned, modeErr := scanner.ApplyMode(mode, scanResult.Content, scanResult)
 	if modeErr != nil {
-		return "", modeErr
+		return "", nil, modeErr
 	}
 
-	return scanned, nil
+	return scanned, threat, nil
 }
 
 // AuditFailCount returns the current consecutive audit failure count.

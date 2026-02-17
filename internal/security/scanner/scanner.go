@@ -79,10 +79,13 @@ type ScanResult struct {
 }
 
 // Match describes a single pattern match.
+// Location and Length are byte offsets into ScanResult.Content.
+// Invariant: Location >= 0 and Length >= 0. RegexScanner guarantees
+// this; other Scanner implementations must uphold it.
 type Match struct {
 	Rule     string
-	Location int // byte offset
-	Length   int
+	Location int // byte offset into ScanResult.Content
+	Length   int // byte length of the matched region
 	Severity Severity
 }
 
@@ -421,6 +424,15 @@ func redact(content string, matches []Match) string {
 	// Sort by location ascending.
 	sorted := make([]Match, len(matches))
 	copy(sorted, matches)
+
+	// Skip invalid matches (defensive against non-regex Scanner implementations).
+	sorted = slices.DeleteFunc(sorted, func(m Match) bool {
+		return m.Location < 0 || m.Length < 0
+	})
+	if len(sorted) == 0 {
+		return content
+	}
+
 	slices.SortFunc(sorted, func(a, b Match) int { return a.Location - b.Location })
 
 	// Merge overlapping ranges.

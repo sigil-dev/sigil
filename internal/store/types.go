@@ -60,6 +60,13 @@ const (
 	MessageRoleTool      MessageRole = "tool"
 )
 
+// ThreatInfo records security scanner findings for audit persistence.
+type ThreatInfo struct {
+	Detected bool
+	Rules    []string
+	Stage    string
+}
+
 // Message represents a single message in a session conversation.
 type Message struct {
 	ID         string
@@ -68,6 +75,7 @@ type Message struct {
 	Content    string
 	ToolCallID string
 	ToolName   string
+	Threat     *ThreatInfo
 	CreatedAt  time.Time
 	Metadata   map[string]string
 }
