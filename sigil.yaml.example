@@ -90,6 +90,48 @@ sessions:
       batch_size: 50
 
 # ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+# Content scanning and detection modes for user input, tool output, and
+# assistant output. Each hook can operate in one of three modes:
+#   - block   : Reject content flagged by scanner (most restrictive)
+#   - flag    : Allow content but mark it for review/logging (default for tool output)
+#   - redact  : Allow content but strip detected sensitive data (default for output)
+#
+# Default mode set in code: input=block, tool=flag, output=redact
+#
+security:
+  scanner:
+    # User input scanning mode. Default: block
+    # Prevents users from submitting input containing detected sensitive content.
+    # Note: Only 'block' is allowed in production. To use 'flag' or 'redact',
+    # you MUST explicitly set allow_permissive_input_mode=true AND you accept the
+    # security implications. This setting cannot be changed via environment variable.
+    input: block
+
+    # Tool output scanning mode. Default: flag
+    # Controls how tool output containing detected sensitive content is handled.
+    # - block: Plugin tool is rejected if output contains detected secrets
+    # - flag:  Plugin tool output is allowed but marked for review (recommended)
+    # - redact: Detected sensitive patterns are stripped from tool output
+    tool: flag
+
+    # Assistant output scanning mode. Default: redact
+    # Controls how LLM output containing detected sensitive content is handled.
+    # - block:  Reject LLM response if it contains detected secrets
+    # - flag:   Allow LLM response but mark it for review
+    # - redact: Strip detected sensitive patterns from LLM output before returning
+    output: redact
+
+    # Allow non-block input scanning modes. Default: false
+    # Setting this to true allows input scanning in 'flag' or 'redact' modes,
+    # which means user input containing sensitive data would be allowed through
+    # with logging or automatic redaction. This is a security policy decision.
+    # CRITICAL: This setting is NOT overridable via SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE
+    # environment variable to prevent env injection from bypassing input controls.
+    # allow_permissive_input_mode: false
+
+# ---------------------------------------------------------------------------
 # Workspaces
 # ---------------------------------------------------------------------------
 workspaces:
