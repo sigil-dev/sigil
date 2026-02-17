@@ -41,6 +41,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/icon.png"
@@ -87,7 +88,10 @@
       ]
     },
     "updater": {
-      "active": false
+      "endpoints": [
+        "https://github.com/sigil-dev/sigil/releases/latest/download/latest.json"
+      ],
+      "pubkey": "UPDATER_PUBKEY_PLACEHOLDER"
     }
   }
 }
