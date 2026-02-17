@@ -5,9 +5,12 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	"github.com/sigil-dev/sigil/internal/store/sqlite"
@@ -314,6 +317,117 @@ func TestSessionStore_BudgetListSessions(t *testing.T) {
 	assert.Equal(t, 1000, sessions[0].TokenBudget.UsedSession)
 	assert.Equal(t, 5000, sessions[0].TokenBudget.UsedHour)
 	assert.Equal(t, 20000, sessions[0].TokenBudget.UsedDay)
+}
+
+// TestMigrate_AddThreatInfoColumn verifies that migrate() adds the threat_info
+// column to an existing messages table that was created without it. This simulates
+// upgrading a database created before the threat_info column was introduced.
+func TestMigrate_AddThreatInfoColumn(t *testing.T) {
+	ctx := context.Background()
+	dbPath := testDBPath(t, "sessions-migrate-threat")
+
+	// Bootstrap a database with the old schema — messages table without threat_info.
+	{
+		db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+		require.NoError(t, err)
+
+		_, err = db.Exec(`
+CREATE TABLE IF NOT EXISTS sessions (
+	id             TEXT PRIMARY KEY,
+	workspace_id   TEXT NOT NULL,
+	user_id        TEXT NOT NULL,
+	summary        TEXT NOT NULL DEFAULT '',
+	last_compaction TEXT NOT NULL DEFAULT '',
+	model_override TEXT NOT NULL DEFAULT '',
+	status         TEXT NOT NULL DEFAULT 'active',
+	tool_budget_max_calls_per_turn INTEGER NOT NULL DEFAULT 0,
+	tool_budget_max_calls_per_session INTEGER NOT NULL DEFAULT 0,
+	tool_budget_used INTEGER NOT NULL DEFAULT 0,
+	token_budget_per_session_limit INTEGER NOT NULL DEFAULT 0,
+	token_budget_per_hour_limit INTEGER NOT NULL DEFAULT 0,
+	token_budget_per_day_limit INTEGER NOT NULL DEFAULT 0,
+	token_budget_used_session INTEGER NOT NULL DEFAULT 0,
+	token_budget_used_hour INTEGER NOT NULL DEFAULT 0,
+	token_budget_used_day INTEGER NOT NULL DEFAULT 0,
+	created_at     TEXT NOT NULL,
+	updated_at     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (
+	id           TEXT PRIMARY KEY,
+	session_id   TEXT NOT NULL,
+	role         TEXT NOT NULL,
+	content      TEXT NOT NULL DEFAULT '',
+	tool_call_id TEXT NOT NULL DEFAULT '',
+	tool_name    TEXT NOT NULL DEFAULT '',
+	created_at   TEXT NOT NULL,
+	metadata     TEXT NOT NULL DEFAULT '{}',
+	FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+`)
+		require.NoError(t, err, "setting up old schema")
+
+		// Verify threat_info is absent in the baseline schema.
+		rows, err := db.Query("PRAGMA table_info(messages)")
+		require.NoError(t, err)
+		found := false
+		for rows.Next() {
+			var cid int
+			var name, colType string
+			var notNull int
+			var dfltValue sql.NullString
+			var pk int
+			require.NoError(t, rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk))
+			if name == "threat_info" {
+				found = true
+			}
+		}
+		require.NoError(t, rows.Err())
+		_ = rows.Close()
+		require.False(t, found, "threat_info should not exist in the old schema")
+
+		_ = db.Close()
+	}
+
+	// Open via NewSessionStore — this runs migrate() which must add the column.
+	ss, err := sqlite.NewSessionStore(dbPath)
+	require.NoError(t, err, "NewSessionStore should succeed and run migration")
+	defer func() { _ = ss.Close() }()
+
+	// Create a session to satisfy the FK constraint.
+	now := time.Now().UTC().Truncate(time.Second)
+	err = ss.CreateSession(ctx, &store.Session{
+		ID:          "sess-migrate",
+		WorkspaceID: "ws-1",
+		UserID:      "usr-1",
+		Status:      store.SessionStatusActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	require.NoError(t, err)
+
+	// Append a message with threat data to confirm the column is usable.
+	threat := &store.ThreatInfo{
+		Detected: true,
+		Rules:    []string{"rule-injection"},
+	}
+	msg := &store.Message{
+		ID:        "msg-migrate-1",
+		SessionID: "sess-migrate",
+		Role:      store.MessageRoleUser,
+		Content:   "probe",
+		Threat:    threat,
+		CreatedAt: now,
+	}
+	err = ss.AppendMessage(ctx, "sess-migrate", msg)
+	require.NoError(t, err, "AppendMessage should work after migration adds threat_info")
+
+	// Read back and verify threat data round-trips correctly.
+	msgs, err := ss.GetActiveWindow(ctx, "sess-migrate", 10)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.NotNil(t, msgs[0].Threat, "Threat field should be populated after round-trip")
+	assert.True(t, msgs[0].Threat.Detected)
+	assert.Equal(t, []string{"rule-injection"}, msgs[0].Threat.Rules)
 }
 
 // TestParseTime_ErrorPropagation verifies that malformed timestamps cause errors

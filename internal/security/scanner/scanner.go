@@ -255,8 +255,11 @@ func DefaultRules() []Rule {
 func InputRules() []Rule {
 	return []Rule{
 		{
+			// Allow up to 3 optional words between the verb and the target noun phrase.
+			// This catches "Please disregard your previous instructions" and similar
+			// constructions while keeping the regex anchored to known keywords.
 			Name:     "instruction_override",
-			Pattern:  regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
+			Pattern:  regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)(\s+\w+){0,3}\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
 			Stage:    StageInput,
 			Severity: SeverityHigh,
 		},
