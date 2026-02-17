@@ -838,3 +838,32 @@ When no tokens are configured, the gateway operates in development mode: authent
 Existing tokens and client authentication headers MUST be reviewed after enabling auth. Tokens that worked in unauthenticated mode may now be insufficient if clients relied on implicit access to all workspaces or plugin operations. Token permissions should be updated to grant specific `admin:plugins` or workspace-scoped capabilities as needed.
 
 **Ref:** PR #16, auth enforcement hardening during Phase 7 UI distribution
+
+---
+
+## D062: Shared Security Scanner for Agent Loop Integrity Hooks
+
+**Question:** Design/03 specified three deferred security hooks in the agent loop — input scanning (Step 1), tool injection detection (Step 6), and output filtering (Step 7). How should these be architected?
+
+**Options considered:**
+
+- Three separate implementations (one per hook) — rejected: duplicates pattern matching, configuration, and testing across three packages.
+- Single shared `Scanner` interface with per-hook rule configurations (chosen) — one engine, three configs, consistent behavior.
+- TruffleHog integration for secret detection — rejected: AGPL-3.0 license incompatible with Apache-2.0.
+- ML-based PII detection — deferred: false-positive rate too high without ML-based detection; not viable for v1.
+
+**Decision:** Implement a shared `Scanner` interface in `internal/security/scanner/` with three rule configurations, one per hook. Key design choices:
+
+1. **Shared scanner engine** — single `Scanner` interface with three `RuleConfig` sets (input, tool, output) avoids duplication and ensures consistent pattern matching behavior.
+2. **stdlib `regexp` for detection** — TruffleHog (the leading open-source secret scanner) is AGPL-3.0, incompatible with Sigil's Apache-2.0 license. stdlib regexp is zero-dependency and sufficient for pattern-based detection.
+3. **Per-hook configurable modes:**
+   - Input hook: `block` — reject the message on detection (prompt injection is high-severity).
+   - Tool hook: `flag` — log a warning and continue (tool results may legitimately contain patterns).
+   - Output hook: `redact` — replace matched content with `[REDACTED]` before sending to the user.
+4. **Origin tagging on `provider.Message`** — enables context-aware rule selection (e.g., stricter rules for user input vs. system prompts).
+5. **No PII detection in v1** — false-positive rates for regex-based PII detection (names, addresses, phone numbers) are unacceptably high without ML-based NER. Deferred until a suitable Apache-2.0-compatible library is available.
+6. **Secret pattern scope:** AWS keys, GCP service account keys, OpenAI API keys, Anthropic API keys, Google API keys, bearer tokens, PEM private keys, database connection strings, `keyring://` URIs.
+
+**Rationale:** A single scanner engine with per-hook configuration is the simplest correct architecture. The three hooks share 90% of their logic (compile patterns, scan text, report findings) and differ only in what action to take on a match. Separate implementations would triple the test surface and create inconsistency risk. The stdlib regexp choice trades detection sophistication for license compatibility — an acceptable trade-off since the primary goal is catching accidental secret exposure, not adversarial obfuscation.
+
+**Ref:** `internal/security/scanner/`, `docs/design/03-security-model.md` Steps 1/6/7
