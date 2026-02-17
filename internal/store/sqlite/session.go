@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -85,7 +86,51 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 `
 	_, err := db.Exec(ddl)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migrate existing databases: add threat_info column if missing.
+	// CREATE TABLE IF NOT EXISTS does not add new columns to existing tables.
+	if err := addColumnIfMissing(db, "messages", "threat_info", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// addColumnIfMissing checks whether the named column exists in the given table
+// via PRAGMA table_info, and issues ALTER TABLE ADD COLUMN if it does not.
+func addColumnIfMissing(db *sql.DB, table, column, columnDef string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "querying table_info for %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning table_info for %s: %w", table, err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating table_info for %s: %w", table, err)
+	}
+
+	slog.Info("adding missing column to table", "table", table, "column", column)
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + columnDef)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "adding column %s to %s: %w", column, table, err)
+	}
+	return nil
 }
 
 // Close closes the underlying database connection.

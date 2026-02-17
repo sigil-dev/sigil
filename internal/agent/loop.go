@@ -26,6 +26,28 @@ type ScannerModes struct {
 	Output scanner.Mode
 }
 
+// Validate checks that all scanner mode fields are non-empty and valid.
+func (m ScannerModes) Validate() error {
+	for _, pair := range []struct {
+		name string
+		mode scanner.Mode
+	}{
+		{"Input", m.Input},
+		{"Tool", m.Tool},
+		{"Output", m.Output},
+	} {
+		if pair.mode == "" {
+			return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput,
+				"ScannerModes.%s is required", pair.name)
+		}
+		if !pair.mode.Valid() {
+			return sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput,
+				"invalid ScannerModes.%s: %q", pair.name, pair.mode)
+		}
+	}
+	return nil
+}
+
 // defaultMaxToolCallsPerTurn is the default maximum number of tool calls
 // allowed in a single turn when MaxToolCallsPerTurn is not configured.
 const defaultMaxToolCallsPerTurn = 10
@@ -110,7 +132,9 @@ type Loop struct {
 }
 
 // NewLoop creates a Loop with the given dependencies.
-// Returns an error if required dependencies are nil.
+// Required: SessionManager, Enforcer, ProviderRouter, Scanner, and ScannerModes
+// (all three stage modes must be valid). Returns an error if any required
+// dependency is nil or invalid.
 func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if cfg.SessionManager == nil {
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "SessionManager is required")
@@ -124,17 +148,8 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if cfg.Scanner == nil {
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Scanner is required")
 	}
-	if cfg.ScannerModes.Input == "" || cfg.ScannerModes.Tool == "" || cfg.ScannerModes.Output == "" {
-		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "ScannerModes must specify modes for all three stages (input, tool, output)")
-	}
-	if !cfg.ScannerModes.Input.Valid() {
-		return nil, sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Input %q", cfg.ScannerModes.Input)
-	}
-	if !cfg.ScannerModes.Tool.Valid() {
-		return nil, sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Tool %q", cfg.ScannerModes.Tool)
-	}
-	if !cfg.ScannerModes.Output.Valid() {
-		return nil, sigilerr.Errorf(sigilerr.CodeAgentLoopInvalidInput, "invalid ScannerModes.Output %q", cfg.ScannerModes.Output)
+	if err := cfg.ScannerModes.Validate(); err != nil {
+		return nil, err
 	}
 
 	maxCalls := cfg.MaxToolCallsPerTurn
@@ -197,7 +212,7 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 		return nil, sigilerr.Wrapf(streamErr, sigilerr.CodeProviderUpstreamFailure, "stream error: session %s", msg.SessionID)
 	}
 
-	// Step 4b: TOOL LOOP — dispatch tool calls and re-call the LLM.
+	// Step 5: TOOL_LOOP — dispatch tool calls and re-call the LLM.
 	if l.toolDispatcher != nil && len(toolCalls) > 0 {
 		var loopText string
 		var loopUsage *provider.Usage
@@ -209,14 +224,14 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 		usage = loopUsage
 	}
 
-	// Step 5: RESPOND — build outbound message, persist assistant message.
+	// Step 6: RESPOND — build outbound message, persist assistant message.
 	out, err := l.respond(ctx, msg.SessionID, text, usage)
 	if err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "respond: session %s", msg.SessionID)
 	}
 	l.fireHook(l.hooks, hookRespond)
 
-	// Step 6: AUDIT — log the interaction.
+	// Step 7: AUDIT — log the interaction.
 	l.audit(ctx, msg, out)
 	l.fireHook(l.hooks, hookAudit)
 
@@ -327,16 +342,17 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	// Input scanning — reject prompt injection before loading session state.
 	// Scanning first avoids spending resources on session load, boundary
 	// validation, and status checks for messages that will be rejected.
-	var inputThreat *store.ThreatInfo
-	scanned, threat, scanErr := l.scanContent(ctx, msg.Content,
+	scanned, inputThreat, scanErr := l.scanContent(ctx, msg.Content,
 		scanner.StageInput, scanner.OriginUser, l.scannerModes.Input,
 		"session_id", msg.SessionID, "workspace_id", msg.WorkspaceID,
 	)
 	if scanErr != nil {
 		return nil, nil, scanErr
 	}
+	// Note: msg.Content is replaced with the scanner-normalized form
+	// (NFKC + zero-width stripped). The normalized content is persisted,
+	// not the original user input.
 	msg.Content = scanned
-	inputThreat = threat
 
 	session, err := l.sessions.Get(ctx, msg.SessionID)
 	if err != nil {
@@ -745,7 +761,7 @@ func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provi
 		CreatedAt: time.Now(),
 	}
 	if err := l.sessions.AppendMessage(ctx, sessionID, assistantMsg); err != nil {
-		return nil, err
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "persisting assistant response: session %s", sessionID)
 	}
 
 	return &OutboundMessage{
@@ -805,9 +821,18 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		Origin: origin,
 	})
 	if scanErr != nil {
-		return "", nil, sigilerr.Wrap(scanErr, sigilerr.CodeSecurityScannerFailure,
-			"security scan failed",
-			sigilerr.Field("stage", stage),
+		// For tool stage: scanner internal errors (not threat detections) are
+		// best-effort — log and continue with unscanned content to preserve
+		// availability. Threat detections are handled below via ApplyMode.
+		// See D062 decision record for rationale.
+		if stage == scanner.StageTool {
+			slog.Warn("scanner internal error on tool result, continuing with unscanned content",
+				append([]any{"error", scanErr, "stage", stage}, logAttrs...)...,
+			)
+			return content, nil, nil
+		}
+		return "", nil, sigilerr.Wrapf(scanErr, sigilerr.CodeSecurityScannerFailure,
+			"scanning %s content", stage,
 		)
 	}
 
@@ -826,7 +851,7 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		}
 	}
 
-	scanned, modeErr := scanner.ApplyMode(mode, scanResult.Content, scanResult)
+	scanned, modeErr := scanner.ApplyMode(mode, stage, scanResult)
 	if modeErr != nil {
 		return "", nil, modeErr
 	}

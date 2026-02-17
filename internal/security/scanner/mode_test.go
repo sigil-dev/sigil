@@ -71,10 +71,10 @@ func TestApplyMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := s.Scan(ctx, tt.content, scanner.ScanContext{Stage: tt.stage})
+			result, err := s.Scan(ctx, tt.content, scanner.ScanContext{Stage: tt.stage, Origin: scanner.OriginUser})
 			require.NoError(t, err)
 
-			content, err := scanner.ApplyMode(tt.mode, tt.content, result)
+			content, err := scanner.ApplyMode(tt.mode, tt.stage, result)
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.True(t, sigilerr.HasCode(err, tt.wantErrCode))
@@ -119,7 +119,7 @@ func TestApplyMode_UnknownMode(t *testing.T) {
 		Matches: []scanner.Match{{Rule: "test", Location: 0, Length: 4, Severity: scanner.SeverityHigh}},
 	}
 
-	_, err := scanner.ApplyMode(scanner.Mode("unknown"), "some content", result)
+	_, err := scanner.ApplyMode(scanner.Mode("unknown"), scanner.StageInput, result)
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
 		"expected CodeSecurityScannerFailure, got: %v", err)

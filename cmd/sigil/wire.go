@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/plugin"
 	"github.com/sigil-dev/sigil/internal/provider"
@@ -20,6 +21,7 @@ import (
 	openaiprov "github.com/sigil-dev/sigil/internal/provider/openai"
 	openrouterprov "github.com/sigil-dev/sigil/internal/provider/openrouter"
 	"github.com/sigil-dev/sigil/internal/security"
+	"github.com/sigil-dev/sigil/internal/security/scanner"
 	"github.com/sigil-dev/sigil/internal/server"
 	"github.com/sigil-dev/sigil/internal/store"
 	_ "github.com/sigil-dev/sigil/internal/store/sqlite" // register sqlite backend
@@ -36,6 +38,8 @@ type Gateway struct {
 	ProviderRegistry *provider.Registry
 	WorkspaceManager *workspace.Manager
 	Enforcer         *security.Enforcer
+	Scanner          scanner.Scanner
+	ScannerModes     agent.ScannerModes
 }
 
 // WireGateway creates all subsystems and wires them together.
@@ -56,6 +60,17 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 
 	// 2. Security enforcer.
 	enforcer := security.NewEnforcer(gs.AuditLog())
+
+	// 2b. Security scanner — create regex scanner with default rules and
+	// convert config modes for use by the agent loop when it is wired.
+	sc, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	if err != nil {
+		if closeErr := gs.Close(); closeErr != nil {
+			slog.Warn("gateway store close error during initialization", "error", closeErr)
+		}
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating security scanner: %w", err)
+	}
+	scannerModes := agent.NewScannerModesFromConfig(cfg.Security.Scanner)
 
 	// 3. Plugin manager — discover plugins in the plugins directory.
 	pluginMgr := plugin.NewManager(filepath.Join(dataDir, "plugins"), enforcer)
@@ -171,6 +186,8 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		ProviderRegistry: provReg,
 		WorkspaceManager: wsMgr,
 		Enforcer:         enforcer,
+		Scanner:          sc,
+		ScannerModes:     scannerModes,
 	}, nil
 }
 
@@ -199,6 +216,12 @@ func (gw *Gateway) Validate() error {
 	}
 	if gw.Enforcer == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "enforcer is nil")
+	}
+	if gw.Scanner == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "scanner is nil")
+	}
+	if err := gw.ScannerModes.Validate(); err != nil {
+		return sigilerr.Wrap(err, sigilerr.CodeCLISetupFailure, "invalid scanner modes")
 	}
 	return nil
 }

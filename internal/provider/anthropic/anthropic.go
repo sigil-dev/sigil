@@ -180,18 +180,19 @@ func convertMessages(msgs []provider.Message) ([]anthropicsdk.MessageParam, erro
 	var result []anthropicsdk.MessageParam
 
 	for _, msg := range msgs {
+		tag := provider.OriginTag(msg.Origin)
 		switch msg.Role {
 		case store.MessageRoleUser:
 			result = append(result, anthropicsdk.NewUserMessage(
-				anthropicsdk.NewTextBlock(msg.Content),
+				anthropicsdk.NewTextBlock(tag+msg.Content),
 			))
 		case store.MessageRoleAssistant:
 			result = append(result, anthropicsdk.NewAssistantMessage(
-				anthropicsdk.NewTextBlock(msg.Content),
+				anthropicsdk.NewTextBlock(tag+msg.Content),
 			))
 		case store.MessageRoleTool:
 			result = append(result, anthropicsdk.NewUserMessage(
-				anthropicsdk.NewToolResultBlock(msg.ToolCallID, msg.Content, false),
+				anthropicsdk.NewToolResultBlock(msg.ToolCallID, tag+msg.Content, false),
 			))
 		case store.MessageRoleSystem:
 			// System messages are handled via the top-level system param,

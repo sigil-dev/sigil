@@ -13,6 +13,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/secrets"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/spf13/viper"
 )
 
@@ -388,7 +389,7 @@ func (c *Config) validateSecurity() []error {
 		{"security.scanner.tool", c.Security.Scanner.Tool},
 		{"security.scanner.output", c.Security.Scanner.Output},
 	} {
-		if !isValidScannerMode(pair.value) {
+		if !types.ScannerMode(pair.value).Valid() {
 			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 				"config: %s: invalid scanner mode %q (valid: block, flag, redact)", pair.field, pair.value))
 		}
@@ -418,21 +419,6 @@ func providerFromModel(model string) string {
 		return model[:idx]
 	}
 	return model
-}
-
-// validScannerModes lists the accepted scanner mode strings.
-// These MUST be kept in sync with scanner.Mode constants in
-// internal/security/scanner/scanner.go. Duplicated here to avoid
-// importing scanner from config (which would invert the dependency direction).
-var validScannerModes = map[string]bool{
-	"block":  true,
-	"flag":   true,
-	"redact": true,
-}
-
-// isValidScannerMode checks if a mode string is one of the known scanner modes.
-func isValidScannerMode(mode string) bool {
-	return validScannerModes[mode]
 }
 
 // validateStringInSet checks if a value is in a set of valid options.

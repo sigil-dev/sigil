@@ -82,9 +82,9 @@ func (s ScanStage) Valid() bool {
 
 // ThreatInfo records security scanner findings for audit persistence.
 type ThreatInfo struct {
-	Detected bool
-	Rules    []string
-	Stage    ScanStage
+	Detected bool      `json:"detected"`
+	Rules    []string  `json:"rules"`
+	Stage    ScanStage `json:"stage"`
 }
 
 // Message represents a single message in a session conversation.

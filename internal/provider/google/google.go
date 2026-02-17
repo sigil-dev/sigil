@@ -176,19 +176,20 @@ func convertMessages(msgs []provider.Message) ([]*genai.Content, error) {
 	var result []*genai.Content
 
 	for _, msg := range msgs {
+		tag := provider.OriginTag(msg.Origin)
 		switch msg.Role {
 		case store.MessageRoleUser:
 			result = append(result, &genai.Content{
 				Role: "user",
 				Parts: []*genai.Part{
-					{Text: msg.Content},
+					{Text: tag + msg.Content},
 				},
 			})
 		case store.MessageRoleAssistant:
 			result = append(result, &genai.Content{
 				Role: "model",
 				Parts: []*genai.Part{
-					{Text: msg.Content},
+					{Text: tag + msg.Content},
 				},
 			})
 		case store.MessageRoleTool:
@@ -198,7 +199,7 @@ func convertMessages(msgs []provider.Message) ([]*genai.Content, error) {
 					{
 						FunctionResponse: &genai.FunctionResponse{
 							Name:     msg.ToolName,
-							Response: map[string]any{"result": msg.Content},
+							Response: map[string]any{"result": tag + msg.Content},
 						},
 					},
 				},

@@ -292,7 +292,7 @@ func TestScan_OverlappingRedaction(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Threat, "overlapping patterns should detect a threat")
 
-	redacted, err := scanner.ApplyMode(scanner.ModeRedact, content, result)
+	redacted, err := scanner.ApplyMode(scanner.ModeRedact, scanner.StageOutput, result)
 	require.NoError(t, err)
 
 	// The overlapping region must be collapsed into exactly one [REDACTED].
@@ -301,7 +301,7 @@ func TestScan_OverlappingRedaction(t *testing.T) {
 	assert.NotContains(t, redacted, "AKIA", "original secret must not appear in redacted output")
 }
 
-// Finding .77 — Content length limit.
+// Finding .77 — Content length limit: oversized content returns a CodeSecurityScannerContentTooLarge error.
 func TestScan_ContentTooLarge(t *testing.T) {
 	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
 	require.NoError(t, err)
@@ -309,38 +309,29 @@ func TestScan_ContentTooLarge(t *testing.T) {
 	// Build content larger than DefaultMaxContentLength (1MB).
 	content := strings.Repeat("a", scanner.DefaultMaxContentLength+1)
 
-	result, err := s.Scan(context.Background(), content, scanner.ScanContext{
+	_, err = s.Scan(context.Background(), content, scanner.ScanContext{
 		Stage:  scanner.StageInput,
 		Origin: scanner.OriginUser,
 	})
-	require.NoError(t, err)
-	assert.True(t, result.Threat, "oversized content must be flagged as a threat")
-	require.NotEmpty(t, result.Matches, "oversized content must produce at least one match")
-
-	ruleNames := make([]string, 0, len(result.Matches))
-	for _, m := range result.Matches {
-		ruleNames = append(ruleNames, m.Rule)
-	}
-	assert.Contains(t, ruleNames, "content_too_large", "matches must include content_too_large rule")
+	require.Error(t, err, "oversized content must return an error")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
+		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
 }
 
-// Finding .90 — content_too_large redact mode must replace entire content.
-func TestScan_ContentTooLargeRedact(t *testing.T) {
+// Finding .90 — content_too_large returns a distinct error code.
+func TestScan_ContentTooLargeReturnsError(t *testing.T) {
 	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
 	require.NoError(t, err)
 
 	content := strings.Repeat("a", scanner.DefaultMaxContentLength+1)
 
-	result, err := s.Scan(context.Background(), content, scanner.ScanContext{
+	_, err = s.Scan(context.Background(), content, scanner.ScanContext{
 		Stage:  scanner.StageInput,
 		Origin: scanner.OriginUser,
 	})
-	require.NoError(t, err)
-	require.True(t, result.Threat)
-
-	redacted, err := scanner.ApplyMode(scanner.ModeRedact, content, result)
-	require.NoError(t, err)
-	assert.Equal(t, "[REDACTED]", redacted, "redact mode on oversized content must replace entire content")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
+		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
 }
 
 // Finding .78 — Unicode normalization bypass.
@@ -487,6 +478,50 @@ func TestToolSecretRules_ScanDetection(t *testing.T) {
 	}
 }
 
+// Finding .153 — Invalid stage returns CodeSecurityScannerFailure.
+func TestScan_InvalidStageReturnsError(t *testing.T) {
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	require.NoError(t, err)
+
+	_, err = s.Scan(context.Background(), "hello", scanner.ScanContext{
+		Stage:  scanner.Stage("invalid"),
+		Origin: scanner.OriginUser,
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"expected CodeSecurityScannerFailure, got: %v", err)
+}
+
+// Finding .161 — Non-secret strings do not trigger false-positive detections.
+func TestScan_FalsePositiveNegatives(t *testing.T) {
+	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		content string
+		stage   scanner.Stage
+	}{
+		{"short random string not openai key", "sk-abc123", scanner.StageOutput},
+		{"bearer token too short", "Bearer shorttoken", scanner.StageOutput},
+		{"postgres URL without password", "postgres://user@localhost/mydb", scanner.StageOutput},
+		{"normal text with sk prefix", "You should sk-ip this part", scanner.StageOutput},
+		{"AWS-like but too short", "AKIA1234", scanner.StageOutput},
+		{"normal code with equals signs", "let x = 42; let y = 100", scanner.StageOutput},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := s.Scan(context.Background(), tt.content, scanner.ScanContext{
+				Stage:  tt.stage,
+				Origin: scanner.OriginSystem,
+			})
+			require.NoError(t, err)
+			assert.False(t, result.Threat, "expected no threat for %q", tt.content)
+		})
+	}
+}
+
 // Finding .124 — Redact uses normalized content, not original.
 func TestScan_RedactWithNormalization(t *testing.T) {
 	s, err := scanner.NewRegexScanner(scanner.DefaultRules())
@@ -507,7 +542,7 @@ func TestScan_RedactWithNormalization(t *testing.T) {
 	assert.NotEqual(t, content, result.Content, "normalized content should differ from original")
 
 	// Apply redaction using the normalized content.
-	redacted, err := scanner.ApplyMode(scanner.ModeRedact, result.Content, result)
+	redacted, err := scanner.ApplyMode(scanner.ModeRedact, scanner.StageOutput, result)
 	require.NoError(t, err)
 	assert.NotContains(t, redacted, "AKIA", "redacted output must not contain the AWS key prefix")
 	assert.Contains(t, redacted, "[REDACTED]", "redacted output must contain [REDACTED] marker")

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -99,6 +100,21 @@ type Match struct {
 	Severity Severity
 }
 
+// NewMatch creates a Match with validated invariants.
+// Location and Length must be >= 0.
+func NewMatch(rule string, location, length int, severity Severity) (Match, error) {
+	if location < 0 || length < 0 {
+		return Match{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
+			"invalid match: location=%d, length=%d must be >= 0", location, length)
+	}
+	return Match{
+		Rule:     rule,
+		Location: location,
+		Length:   length,
+		Severity: severity,
+	}, nil
+}
+
 // Scanner scans content for threats.
 type Scanner interface {
 	Scan(ctx context.Context, content string, opts ScanContext) (ScanResult, error)
@@ -138,7 +154,16 @@ func NewRegexScanner(rules []Rule) (*RegexScanner, error) {
 			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid severity %q", i, r.Name, r.Severity)
 		}
 	}
-	return &RegexScanner{rules: rules, maxContentLength: DefaultMaxContentLength}, nil
+	copied := make([]Rule, len(rules))
+	for i, r := range rules {
+		copied[i] = Rule{
+			Stage:    r.Stage,
+			Name:     r.Name,
+			Pattern:  regexp.MustCompile(r.Pattern.String()),
+			Severity: r.Severity,
+		}
+	}
+	return &RegexScanner{rules: copied, maxContentLength: DefaultMaxContentLength}, nil
 }
 
 // invisibleCharReplacer strips zero-width and other invisible Unicode characters
@@ -179,18 +204,34 @@ func normalize(s string) string {
 // Scan checks content against rules matching the given stage.
 func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext) (ScanResult, error) {
 	if !opts.Stage.Valid() {
-		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan stage %q", opts.Stage)
+		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan stage: %q", opts.Stage)
+	}
+	if !opts.Origin.Valid() {
+		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan origin: %q", opts.Origin)
+	}
+
+	if len(content) > s.maxContentLength {
+		return ScanResult{
+			Content: content,
+		}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+			"content exceeds maximum length",
+			sigilerr.Field("length", len(content)),
+			sigilerr.Field("max_length", s.maxContentLength),
+			sigilerr.Field("stage", string(opts.Stage)),
+		)
 	}
 
 	content = normalize(content)
 
 	if len(content) > s.maxContentLength {
-		return ScanResult{Threat: true, Content: content, Matches: []Match{{
-			Rule:     "content_too_large",
-			Location: 0,
-			Length:   len(content),
-			Severity: SeverityHigh,
-		}}}, nil
+		return ScanResult{
+			Content: content,
+		}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+			"content exceeds maximum length after normalization",
+			sigilerr.Field("length", len(content)),
+			sigilerr.Field("max_length", s.maxContentLength),
+			sigilerr.Field("stage", string(opts.Stage)),
+		)
 	}
 
 	result := ScanResult{Content: content}
@@ -201,13 +242,12 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 		}
 		locs := rule.Pattern.FindAllStringIndex(content, -1)
 		for _, loc := range locs {
+			m, err := NewMatch(rule.Name, loc[0], loc[1]-loc[0], rule.Severity)
+			if err != nil {
+				return ScanResult{}, err
+			}
 			result.Threat = true
-			result.Matches = append(result.Matches, Match{
-				Rule:     rule.Name,
-				Location: loc[0],
-				Length:   loc[1] - loc[0],
-				Severity: rule.Severity,
-			})
+			result.Matches = append(result.Matches, m)
 		}
 	}
 
@@ -215,11 +255,12 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 }
 
 // DefaultRules returns the built-in rule set for all three stages.
+// Stage ordering does not affect behavior; the scanner filters rules by Stage during Scan().
 func DefaultRules() []Rule {
 	return slices.Concat(InputRules(), ToolRules(), ToolSecretRules(), OutputRules())
 }
 
-// InputRules returns prompt injection detection patterns.
+// InputRules returns rules for StageInput: prompt injection and instruction override patterns.
 func InputRules() []Rule {
 	return []Rule{
 		{
@@ -255,7 +296,7 @@ func InputRules() []Rule {
 	}
 }
 
-// ToolRules returns tool result injection detection patterns.
+// ToolRules returns rules for StageTool: tool call injection and system command patterns.
 func ToolRules() []Rule {
 	return []Rule{
 		{
@@ -288,6 +329,11 @@ func secretRules(stage Stage) []Rule {
 			Stage:    stage,
 			Severity: SeverityHigh,
 		},
+		// openai_legacy_key: matches sk-[40+ chars]. Intentionally broad —
+		// overlaps with anthropic_api_key and openai_api_key patterns.
+		// Redundant matches are safe: redaction merge handles overlapping spans.
+		// Go's RE2 engine lacks lookaheads, so exclusion requires post-match
+		// filtering. Accepted as defense-in-depth for v1.
 		{
 			Name:     "openai_legacy_key",
 			Pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{40,}`),
@@ -357,55 +403,34 @@ func secretRules(stage Stage) []Rule {
 	}
 }
 
-// OutputRules returns secret/credential detection patterns for the output stage.
+// OutputRules returns rules for StageOutput: secret/credential detection patterns.
 func OutputRules() []Rule { return secretRules(StageOutput) }
 
-// ToolSecretRules returns secret/credential detection patterns for the tool stage.
+// ToolSecretRules returns rules for StageTool: secret/credential detection patterns.
 func ToolSecretRules() []Rule { return secretRules(StageTool) }
 
-// Mode defines how the scanner result is handled.
-type Mode string
+// Mode is the scanner detection mode. Aliased from pkg/types for backward compatibility.
+type Mode = types.ScannerMode
 
 const (
-	ModeBlock  Mode = "block"
-	ModeFlag   Mode = "flag"
-	ModeRedact Mode = "redact"
+	ModeBlock  = types.ScannerModeBlock
+	ModeFlag   = types.ScannerModeFlag
+	ModeRedact = types.ScannerModeRedact
 )
 
-// Valid reports whether the mode is a known scanner mode.
-func (m Mode) Valid() bool {
-	switch m {
-	case ModeBlock, ModeFlag, ModeRedact:
-		return true
-	default:
-		return false
-	}
-}
-
-// ParseMode parses a mode string (case-insensitive).
+// ParseMode parses a case-insensitive string into a Mode.
 func ParseMode(s string) (Mode, error) {
-	switch strings.ToLower(s) {
-	case "block":
-		return ModeBlock, nil
-	case "flag":
-		return ModeFlag, nil
-	case "redact":
-		return ModeRedact, nil
-	default:
-		return "", sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner mode: %q", s)
-	}
+	return types.ParseScannerMode(s)
 }
 
 // ApplyMode applies the detection mode to the scan result.
-// For block: returns error if threat detected.
-// For flag: returns the content argument as-is (threat already logged by caller).
-//
-//	Note: callers typically pass ScanResult.Content (normalized), not the original input.
-//
+// For block: returns an error with a stage-specific error code if threat detected.
+// For flag: returns the content unchanged. Callers are responsible for
+// logging or recording the threat details from ScanResult.Matches.
 // For redact: replaces matched regions with [REDACTED] using ScanResult.Content offsets.
-func ApplyMode(mode Mode, content string, result ScanResult) (string, error) {
+func ApplyMode(mode Mode, stage Stage, result ScanResult) (string, error) {
 	if !result.Threat {
-		return content, nil
+		return result.Content, nil
 	}
 
 	switch mode {
@@ -414,13 +439,21 @@ func ApplyMode(mode Mode, content string, result ScanResult) (string, error) {
 		if len(result.Matches) > 0 {
 			firstRule = result.Matches[0].Rule
 		}
-		return "", sigilerr.New(sigilerr.CodeSecurityScannerInputBlocked,
+		code := sigilerr.CodeSecurityScannerInputBlocked
+		switch stage {
+		case StageTool:
+			code = sigilerr.CodeSecurityScannerToolBlocked
+		case StageOutput:
+			code = sigilerr.CodeSecurityScannerOutputBlocked
+		}
+		return "", sigilerr.New(code,
 			"content blocked by security scanner",
 			sigilerr.Field("matches", len(result.Matches)),
 			sigilerr.Field("first_rule", firstRule),
+			sigilerr.Field("stage", string(stage)),
 		)
 	case ModeFlag:
-		return content, nil
+		return result.Content, nil
 	case ModeRedact:
 		// Always use the normalized content from the scan result for redaction.
 		// Match offsets are computed against the normalized string; applying

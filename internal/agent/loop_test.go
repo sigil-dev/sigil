@@ -2354,6 +2354,85 @@ func TestNewLoop_ValidatesDependencies(t *testing.T) {
 	}
 }
 
+func TestNewLoop_ValidatesScannerModes(t *testing.T) {
+	baseCfg := func() agent.LoopConfig {
+		return agent.LoopConfig{
+			SessionManager: newMockSessionManager(),
+			Enforcer:       &security.Enforcer{},
+			ProviderRouter: newMockProviderRouter(),
+			Scanner:        newDefaultScanner(t),
+		}
+	}
+
+	tests := []struct {
+		name    string
+		modes   agent.ScannerModes
+		wantErr bool
+		wantMsg string
+	}{
+		{
+			name:    "empty Input mode",
+			modes:   agent.ScannerModes{Input: "", Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+			wantErr: true,
+			wantMsg: "ScannerModes.Input is required",
+		},
+		{
+			name:    "empty Tool mode",
+			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: "", Output: scanner.ModeRedact},
+			wantErr: true,
+			wantMsg: "ScannerModes.Tool is required",
+		},
+		{
+			name:    "empty Output mode",
+			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: ""},
+			wantErr: true,
+			wantMsg: "ScannerModes.Output is required",
+		},
+		{
+			name:    "invalid Input mode",
+			modes:   agent.ScannerModes{Input: "invalid", Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+			wantErr: true,
+			wantMsg: `invalid ScannerModes.Input: "invalid"`,
+		},
+		{
+			name:    "invalid Tool mode",
+			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: "invalid", Output: scanner.ModeRedact},
+			wantErr: true,
+			wantMsg: `invalid ScannerModes.Tool: "invalid"`,
+		},
+		{
+			name:    "invalid Output mode",
+			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: "invalid"},
+			wantErr: true,
+			wantMsg: `invalid ScannerModes.Output: "invalid"`,
+		},
+		{
+			name:    "all valid modes",
+			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseCfg()
+			cfg.ScannerModes = tt.modes
+			loop, err := agent.NewLoop(cfg)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, loop)
+				assert.Contains(t, err.Error(), tt.wantMsg)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopInvalidInput),
+					"expected CodeAgentLoopInvalidInput, got: %v", err)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, loop)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // MaxToolCallsPerTurn default value tests
 // ---------------------------------------------------------------------------
@@ -2791,6 +2870,9 @@ func TestAgentLoop_OutputScannerErrorPropagates(t *testing.T) {
 }
 
 func TestAgentLoop_ToolScannerErrorPropagates(t *testing.T) {
+	// Tool-stage scanner internal errors are best-effort (D062): the loop
+	// logs a warning and continues with unscanned content to preserve
+	// availability. The turn should succeed, not propagate the error.
 	sm := newMockSessionManager()
 	ctx := context.Background()
 	session, err := sm.Create(ctx, "ws-1", "user-1")
@@ -2815,8 +2897,9 @@ func TestAgentLoop_ToolScannerErrorPropagates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// mockToolErrorScanner passes input scans but errors on tool stage,
-	// so ProcessMessage reaches the tool scanning path before surfacing the error.
+	// mockToolErrorScanner passes input scans but errors on tool stage.
+	// With D062, tool-stage scanner internal errors are best-effort: the
+	// loop continues with unscanned content rather than failing the turn.
 	loop, err := agent.NewLoop(agent.LoopConfig{
 		SessionManager: sm,
 		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
@@ -2828,7 +2911,7 @@ func TestAgentLoop_ToolScannerErrorPropagates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
 		SessionID:       session.ID,
 		WorkspaceID:     "ws-1",
 		UserID:          "user-1",
@@ -2836,9 +2919,8 @@ func TestAgentLoop_ToolScannerErrorPropagates(t *testing.T) {
 		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
 		UserPermissions: security.NewCapabilitySet("tool.*"),
 	})
-	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
-		"expected CodeSecurityScannerFailure, got: %v", err)
+	require.NoError(t, err, "tool-stage scanner errors should be best-effort, not fail the turn")
+	assert.NotNil(t, out)
 }
 
 func TestAgentLoop_ToolScanDetectsInjection(t *testing.T) {
@@ -2933,4 +3015,94 @@ func TestAgentLoop_BlockedInputNotPersisted(t *testing.T) {
 	// scanner rejected the input before any store write.
 	assert.Equal(t, int32(0), trackingStore.appendCount.Load(),
 		"AppendMessage must not be called when scanner blocks the input")
+}
+
+// Finding .150 — Store redaction: persisted assistant message is also redacted.
+func TestAgentLoop_StoredOutputRedactsSecrets(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	const rawSecret = "AKIAIOSFODNN7EXAMPLE1234567890123456"
+
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouterWithResponse("Your key is " + rawSecret + " ok?"),
+		Enforcer:       newMockEnforcer(),
+		AuditStore:     newMockAuditStore(),
+		Scanner:        newDefaultScanner(t),
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "Show me the AWS key",
+	})
+	require.NoError(t, err)
+	// Confirm the returned output is redacted.
+	assert.Contains(t, out.Content, "[REDACTED]")
+	assert.NotContains(t, out.Content, rawSecret)
+
+	// Retrieve the persisted messages and verify the assistant message is also redacted.
+	history, err := ss.GetActiveWindow(ctx, session.ID, 10)
+	require.NoError(t, err)
+
+	var assistantMsg *store.Message
+	for _, msg := range history {
+		if msg.Role == store.MessageRoleAssistant {
+			assistantMsg = msg
+			break
+		}
+	}
+	require.NotNil(t, assistantMsg, "assistant message must be persisted")
+	assert.Contains(t, assistantMsg.Content, "[REDACTED]",
+		"persisted assistant message must contain [REDACTED]")
+	assert.NotContains(t, assistantMsg.Content, rawSecret,
+		"persisted assistant message must not contain the raw secret")
+}
+
+// Finding .157 — ThreatInfo persistence: Threat field is set on persisted messages when a threat is detected.
+func TestAgentLoop_ThreatInfoPersistedOnDetection(t *testing.T) {
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// A response containing an AWS key triggers output redaction and threat persistence.
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouterWithResponse("Your key is AKIAIOSFODNN7EXAMPLE ok?"),
+		Enforcer:       newMockEnforcer(),
+		AuditStore:     newMockAuditStore(),
+		Scanner:        newDefaultScanner(t),
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+	})
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "Show me the AWS key",
+	})
+	require.NoError(t, err)
+
+	history, err := ss.GetActiveWindow(ctx, session.ID, 10)
+	require.NoError(t, err)
+
+	var assistantMsg *store.Message
+	for _, msg := range history {
+		if msg.Role == store.MessageRoleAssistant {
+			assistantMsg = msg
+			break
+		}
+	}
+	require.NotNil(t, assistantMsg, "assistant message must be persisted")
+	require.NotNil(t, assistantMsg.Threat, "Threat must be non-nil when a scan threat is detected")
+	assert.True(t, assistantMsg.Threat.Detected, "Threat.Detected must be true")
+	assert.NotEmpty(t, assistantMsg.Threat.Rules, "Threat.Rules must be non-empty")
 }

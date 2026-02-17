@@ -268,6 +268,20 @@ type ProviderStatus struct {
 	Message   string
 }
 
+// OriginTag returns the text marker for the given origin, or empty string if unknown.
+func OriginTag(origin Origin) string {
+	switch origin {
+	case OriginUser:
+		return "[user_input] "
+	case OriginSystem:
+		return "[system] "
+	case OriginTool:
+		return "[tool_output] "
+	default:
+		return ""
+	}
+}
+
 // HealthReporter is an optional interface that providers can implement to
 // expose circuit-breaker health signals.
 //

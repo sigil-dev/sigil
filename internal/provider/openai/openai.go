@@ -206,15 +206,16 @@ func convertMessages(msgs []provider.Message, systemPrompt string) ([]openaisdk.
 	}
 
 	for _, msg := range msgs {
+		tag := provider.OriginTag(msg.Origin)
 		switch msg.Role {
 		case store.MessageRoleUser:
-			result = append(result, openaisdk.UserMessage(msg.Content))
+			result = append(result, openaisdk.UserMessage(tag+msg.Content))
 		case store.MessageRoleAssistant:
-			result = append(result, openaisdk.AssistantMessage(msg.Content))
+			result = append(result, openaisdk.AssistantMessage(tag+msg.Content))
 		case store.MessageRoleTool:
-			result = append(result, openaisdk.ToolMessage(msg.Content, msg.ToolCallID))
+			result = append(result, openaisdk.ToolMessage(tag+msg.Content, msg.ToolCallID))
 		case store.MessageRoleSystem:
-			result = append(result, openaisdk.SystemMessage(msg.Content))
+			result = append(result, openaisdk.SystemMessage(tag+msg.Content))
 		default:
 			return nil, sigilerr.Errorf(sigilerr.CodeProviderRequestInvalid, "openai: unsupported message role %q", msg.Role)
 		}
