@@ -522,6 +522,52 @@ func TestScan_FalsePositiveNegatives(t *testing.T) {
 	}
 }
 
+// Finding sigil-7g5.183 — redact() panic when match Location >= len(content).
+func TestRedact_OutOfBoundsLocation(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		matches []scanner.Match
+	}{
+		{
+			name:    "match Location equals len(content)",
+			content: "hello",
+			matches: []scanner.Match{
+				{Rule: "test", Location: 5, Length: 3, Severity: scanner.SeverityHigh},
+			},
+		},
+		{
+			name:    "match Location exceeds len(content)",
+			content: "hello",
+			matches: []scanner.Match{
+				{Rule: "test", Location: 100, Length: 5, Severity: scanner.SeverityHigh},
+			},
+		},
+		{
+			name:    "overlapping matches where second start is before previous end",
+			content: "hello world",
+			matches: []scanner.Match{
+				{Rule: "first", Location: 0, Length: 8, Severity: scanner.SeverityHigh},
+				{Rule: "second", Location: 3, Length: 5, Severity: scanner.SeverityHigh},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := scanner.ScanResult{
+				Threat:  true,
+				Matches: tt.matches,
+				Content: tt.content,
+			}
+			// Must not panic.
+			redacted, err := scanner.ApplyMode(scanner.ModeRedact, scanner.StageOutput, result)
+			require.NoError(t, err)
+			assert.NotEmpty(t, redacted, "redacted output must not be empty")
+		})
+	}
+}
+
 // Finding .124 — Redact uses normalized content, not original.
 func TestScan_RedactWithNormalization(t *testing.T) {
 	s, err := scanner.NewRegexScanner(scanner.DefaultRules())

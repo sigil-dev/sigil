@@ -511,6 +511,12 @@ func redact(content string, matches []Match) string {
 		if end > len(content) {
 			end = len(content)
 		}
+		if start > len(content) {
+			start = len(content)
+		}
+		if start < pos {
+			start = pos
+		}
 		b.WriteString(content[pos:start])
 		b.WriteString("[REDACTED]")
 		pos = end
