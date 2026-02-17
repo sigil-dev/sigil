@@ -134,12 +134,30 @@ func NewRegexScanner(rules []Rule) (*RegexScanner, error) {
 // normalize applies NFKC normalization and strips zero-width characters
 // to reduce evasion via Unicode homoglyphs.
 func normalize(s string) string {
-	// Strip zero-width characters.
+	// Strip zero-width characters and other invisible Unicode characters.
 	s = strings.NewReplacer(
 		"\u200b", "", // zero-width space
 		"\u200c", "", // zero-width non-joiner
 		"\u200d", "", // zero-width joiner
 		"\ufeff", "", // zero-width no-break space / BOM
+		"\u00ad", "", // soft hyphen
+		"\u034f", "", // combining grapheme joiner
+		"\u061c", "", // Arabic letter mark
+		"\u180e", "", // Mongolian vowel separator
+		"\u2060", "", // word joiner
+		"\u2061", "", // invisible function application
+		"\u2062", "", // invisible times
+		"\u2063", "", // invisible separator
+		"\u2064", "", // invisible plus
+		"\u206a", "", // inhibit symmetric swapping
+		"\u206b", "", // activate symmetric swapping
+		"\u206c", "", // inhibit Arabic form shaping
+		"\u206d", "", // activate Arabic form shaping
+		"\u206e", "", // national digit shapes
+		"\u206f", "", // nominal digit shapes
+		"\ufff9", "", // interlinear annotation anchor
+		"\ufffa", "", // interlinear annotation separator
+		"\ufffb", "", // interlinear annotation terminator
 	).Replace(s)
 	// NFKC normalization collapses compatibility equivalents.
 	return norm.NFKC.String(s)
@@ -336,6 +354,16 @@ const (
 	ModeFlag   Mode = "flag"
 	ModeRedact Mode = "redact"
 )
+
+// Valid reports whether the mode is a known scanner mode.
+func (m Mode) Valid() bool {
+	switch m {
+	case ModeBlock, ModeFlag, ModeRedact:
+		return true
+	default:
+		return false
+	}
+}
 
 // ParseMode parses a mode string (case-insensitive).
 func ParseMode(s string) (Mode, error) {
