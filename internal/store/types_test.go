@@ -286,6 +286,8 @@ func TestThreatInfo_Validate(t *testing.T) {
 		{"detected with rules", store.ThreatInfo{Detected: true, Rules: []string{"rule-1"}}, false},
 		{"detected no rules", store.ThreatInfo{Detected: true, Rules: nil}, false},
 		{"not detected with rules", store.ThreatInfo{Detected: false, Rules: []string{"rule-1"}}, true},
+		{"bypassed not detected", store.ThreatInfo{Detected: false, Bypassed: true, Stage: store.ScanStageTool}, false},
+		{"bypassed and detected is invalid", store.ThreatInfo{Detected: true, Bypassed: true}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

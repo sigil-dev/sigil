@@ -66,27 +66,31 @@ type ScanResult struct {
 	Threat  bool
 	Matches []Match
 	// Content holds the normalized content after Scan processing (NFKC +
-	// zero-width character stripping). Match.Location/Length are byte offsets
+	// zero-width character stripping). Match.Location()/Length() are byte offsets
 	// into this string. Callers MUST use this for redaction to avoid offset
 	// misalignment when the original content contained Unicode evasion chars.
 	Content string
 }
 
 // Match describes a single pattern match.
-// Location and Length are byte offsets into ScanResult.Content.
-// Invariant: Location >= 0 and Length >= 0. Use NewMatch for validated
-// construction. Use NewMatch for all external construction. Within this
-// package, struct literals are acceptable where the caller can statically
-// guarantee non-negative values.
+// location and length are unexported to enforce the invariant that both are >= 0.
+// Use NewMatch for all construction; use Location() and Length() accessors for reads.
+// Invariant: location >= 0 and length >= 0, guaranteed by NewMatch.
 type Match struct {
 	Rule     string
-	Location int // byte offset into ScanResult.Content
-	Length   int // byte length of the matched region
+	location int // byte offset into ScanResult.Content
+	length   int // byte length of the matched region
 	Severity Severity
 }
 
+// Location returns the byte offset of the match into ScanResult.Content.
+func (m Match) Location() int { return m.location }
+
+// Length returns the byte length of the matched region.
+func (m Match) Length() int { return m.length }
+
 // NewMatch creates a Match with validated invariants.
-// Location and Length must be >= 0.
+// location and length must be >= 0.
 func NewMatch(rule string, location, length int, severity Severity) (Match, error) {
 	if location < 0 || length < 0 {
 		return Match{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
@@ -94,8 +98,8 @@ func NewMatch(rule string, location, length int, severity Severity) (Match, erro
 	}
 	return Match{
 		Rule:     rule,
-		Location: location,
-		Length:   length,
+		location: location,
+		length:   length,
 		Severity: severity,
 	}, nil
 }
@@ -570,26 +574,26 @@ func redact(content string, matches []Match) string {
 
 	// Skip invalid matches (defensive against non-regex Scanner implementations).
 	sorted = slices.DeleteFunc(sorted, func(m Match) bool {
-		return m.Location < 0 || m.Length < 0
+		return m.location < 0 || m.length < 0
 	})
 	if len(sorted) == 0 {
 		return content
 	}
 
-	slices.SortFunc(sorted, func(a, b Match) int { return a.Location - b.Location })
+	slices.SortFunc(sorted, func(a, b Match) int { return a.location - b.location })
 
 	// Merge overlapping ranges.
 	type span struct{ start, end int }
-	spans := []span{{sorted[0].Location, sorted[0].Location + sorted[0].Length}}
+	spans := []span{{sorted[0].location, sorted[0].location + sorted[0].length}}
 	for _, m := range sorted[1:] {
 		last := &spans[len(spans)-1]
-		end := m.Location + m.Length
-		if m.Location <= last.end {
+		end := m.location + m.length
+		if m.location <= last.end {
 			if end > last.end {
 				last.end = end
 			}
 		} else {
-			spans = append(spans, span{m.Location, end})
+			spans = append(spans, span{m.location, end})
 		}
 	}
 

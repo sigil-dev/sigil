@@ -31,16 +31,42 @@ import (
 )
 
 // Gateway holds all wired subsystems and manages their lifecycle.
+// All fields are unexported to enforce construction through WireGateway,
+// preventing partially-initialized Gateway{} values with nil fields.
 type Gateway struct {
-	Server           *server.Server
-	GatewayStore     store.GatewayStore
-	PluginManager    *plugin.Manager
-	ProviderRegistry *provider.Registry
-	WorkspaceManager *workspace.Manager
-	Enforcer         *security.Enforcer
-	Scanner          scanner.Scanner
-	ScannerModes     agent.ScannerModes
+	server           *server.Server
+	gatewayStore     store.GatewayStore
+	pluginManager    *plugin.Manager
+	providerRegistry *provider.Registry
+	workspaceManager *workspace.Manager
+	enforcer         *security.Enforcer
+	scanner          scanner.Scanner
+	scannerModes     agent.ScannerModes
 }
+
+// Server returns the HTTP server.
+func (gw *Gateway) Server() *server.Server { return gw.server }
+
+// GatewayStore returns the gateway store (users, pairings, audit log).
+func (gw *Gateway) GatewayStore() store.GatewayStore { return gw.gatewayStore }
+
+// PluginManager returns the plugin manager.
+func (gw *Gateway) PluginManager() *plugin.Manager { return gw.pluginManager }
+
+// ProviderRegistry returns the provider registry.
+func (gw *Gateway) ProviderRegistry() *provider.Registry { return gw.providerRegistry }
+
+// WorkspaceManager returns the workspace manager.
+func (gw *Gateway) WorkspaceManager() *workspace.Manager { return gw.workspaceManager }
+
+// Enforcer returns the security enforcer.
+func (gw *Gateway) Enforcer() *security.Enforcer { return gw.enforcer }
+
+// Scanner returns the security scanner.
+func (gw *Gateway) Scanner() scanner.Scanner { return gw.scanner }
+
+// ScannerModes returns the scanner mode configuration.
+func (gw *Gateway) ScannerModes() agent.ScannerModes { return gw.scannerModes }
 
 // WireGateway creates all subsystems and wires them together.
 // The dataDir is the root directory for all persistent state.
@@ -165,47 +191,47 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	}
 
 	return &Gateway{
-		Server:           srv,
-		GatewayStore:     gs,
-		PluginManager:    pluginMgr,
-		ProviderRegistry: provReg,
-		WorkspaceManager: wsMgr,
-		Enforcer:         enforcer,
-		Scanner:          sc,
-		ScannerModes:     scannerModes,
+		server:           srv,
+		gatewayStore:     gs,
+		pluginManager:    pluginMgr,
+		providerRegistry: provReg,
+		workspaceManager: wsMgr,
+		enforcer:         enforcer,
+		scanner:          sc,
+		scannerModes:     scannerModes,
 	}, nil
 }
 
 // Start runs the HTTP server and blocks until the context is cancelled.
 func (gw *Gateway) Start(ctx context.Context) error {
-	return gw.Server.Start(ctx)
+	return gw.server.Start(ctx)
 }
 
 // Validate checks that all required Gateway fields are non-nil.
 // This method ensures the Gateway was properly initialized by WireGateway.
 func (gw *Gateway) Validate() error {
-	if gw.Server == nil {
+	if gw.server == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "gateway server is nil")
 	}
-	if gw.GatewayStore == nil {
+	if gw.gatewayStore == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "gateway store is nil")
 	}
-	if gw.PluginManager == nil {
+	if gw.pluginManager == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "plugin manager is nil")
 	}
-	if gw.ProviderRegistry == nil {
+	if gw.providerRegistry == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "provider registry is nil")
 	}
-	if gw.WorkspaceManager == nil {
+	if gw.workspaceManager == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "workspace manager is nil")
 	}
-	if gw.Enforcer == nil {
+	if gw.enforcer == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "enforcer is nil")
 	}
-	if gw.Scanner == nil {
+	if gw.scanner == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "scanner is nil")
 	}
-	if err := gw.ScannerModes.Validate(); err != nil {
+	if err := gw.scannerModes.Validate(); err != nil {
 		return sigilerr.Wrap(err, sigilerr.CodeCLISetupFailure, "invalid scanner modes")
 	}
 	return nil

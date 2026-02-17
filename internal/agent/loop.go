@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -991,11 +992,16 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 			if consecutive >= scannerCircuitBreakerThreshold {
 				logLevel = slog.LevelError
 			}
+			// Content hash (first 16 hex chars of SHA-256) for forensic
+			// correlation when content passes through unscanned.
+			h := sha256.Sum256([]byte(content))
+			contentHash := fmt.Sprintf("%x", h[:8])
 			logArgs := []any{
 				"error", scanErr,
 				"stage", stage,
 				"error_code", sigilerr.CodeSecurityScannerFailure,
 				"consecutive_failures", consecutive,
+				"content_hash", contentHash,
 			}
 			if originalErr != nil {
 				logArgs = append(logArgs, "original_error", originalErr.Error())
@@ -1021,7 +1027,16 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 			// even on the best-effort path to ensure consistent unicode handling.
 			// Stage and origin are compile-time constants, so only regex engine
 			// failures can realistically reach here.
-			return scanner.Normalize(content), nil, nil
+			//
+			// Return a bypass ThreatInfo marker so audit queries can distinguish
+			// "content passed unscanned" from "content scanned and found clean".
+			// Detected=false because no threat was detected (no scan occurred).
+			bypassThreat := &store.ThreatInfo{
+				Detected: false,
+				Stage:    store.ScanStageTool,
+				Bypassed: true,
+			}
+			return scanner.Normalize(content), bypassThreat, nil
 		}
 		return "", nil, sigilerr.Wrapf(scanErr, sigilerr.CodeSecurityScannerFailure,
 			"scanning %s content", stage,

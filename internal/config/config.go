@@ -144,7 +144,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("models.budgets.per_hour_usd", 5.00)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
 	v.SetDefault("security.scanner.input", "block")
-	v.SetDefault("security.scanner.tool", "block")
+	v.SetDefault("security.scanner.tool", "flag")
 	v.SetDefault("security.scanner.output", "redact")
 }
 

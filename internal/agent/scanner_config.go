@@ -12,10 +12,10 @@ import (
 )
 
 // defaultScannerModes is the single source of truth for scanner mode defaults.
-// Input: block (reject prompt injection), Tool: block (reject injection payloads), Output: redact (strip secrets).
+// Input: block (reject prompt injection), Tool: flag (log and continue, per D062), Output: redact (strip secrets).
 var defaultScannerModes = ScannerModes{
 	Input:  scanner.ModeBlock,
-	Tool:   scanner.ModeBlock,
+	Tool:   scanner.ModeFlag,
 	Output: scanner.ModeRedact,
 }
 

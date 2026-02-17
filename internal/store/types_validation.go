@@ -116,10 +116,15 @@ func (b TokenBudget) Validate() error {
 	return nil
 }
 
-// Validate checks ThreatInfo invariants: if Detected is false, Rules must be empty.
+// Validate checks ThreatInfo invariants: if Detected is false, Rules must be
+// empty. Bypassed=true is permitted only when Detected=false (bypass markers
+// record that no scan occurred, not that a threat was found).
 func (t ThreatInfo) Validate() error {
 	if !t.Detected && len(t.Rules) > 0 {
 		return sigilerr.New(sigilerr.CodeStoreInvalidInput, "threat info: Rules must be empty when Detected is false")
+	}
+	if t.Bypassed && t.Detected {
+		return sigilerr.New(sigilerr.CodeStoreInvalidInput, "threat info: Bypassed must be false when Detected is true")
 	}
 	return nil
 }

@@ -523,7 +523,7 @@ func TestConfig_ScannerDefaults(t *testing.T) {
 	config.SetDefaults(v)
 
 	assert.Equal(t, "block", v.GetString("security.scanner.input"))
-	assert.Equal(t, "block", v.GetString("security.scanner.tool"))
+	assert.Equal(t, "flag", v.GetString("security.scanner.tool"))
 	assert.Equal(t, "redact", v.GetString("security.scanner.output"))
 }
 

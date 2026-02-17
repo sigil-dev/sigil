@@ -51,11 +51,11 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "empty config uses defaults: block/block/redact",
+			name: "empty config uses defaults: block/flag/redact",
 			cfg:  config.ScannerConfig{},
 			want: agent.ScannerModes{
 				Input:  scanner.ModeBlock,
-				Tool:   scanner.ModeBlock,
+				Tool:   scanner.ModeFlag,
 				Output: scanner.ModeRedact,
 			},
 		},
@@ -73,7 +73,7 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "only tool empty uses default block",
+			name: "only tool empty uses default flag",
 			cfg: config.ScannerConfig{
 				Input:  types.ScannerModeRedact,
 				Tool:   "",
@@ -81,7 +81,7 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 			},
 			want: agent.ScannerModes{
 				Input:  scanner.ModeRedact,
-				Tool:   scanner.ModeBlock,
+				Tool:   scanner.ModeFlag,
 				Output: scanner.ModeBlock,
 			},
 		},

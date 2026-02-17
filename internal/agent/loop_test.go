@@ -3608,9 +3608,13 @@ func (s *mockOutputThreatScanner) Scan(_ context.Context, content string, opts s
 	if opts.Stage == scanner.StageOutput {
 		return scanner.ScanResult{
 			Threat: true,
-			Matches: []scanner.Match{
-				{Rule: "test-rule", Severity: scanner.SeverityHigh, Location: 0, Length: 4},
-			},
+			Matches: func() []scanner.Match {
+				m, err := scanner.NewMatch("test-rule", 0, 4, scanner.SeverityHigh)
+				if err != nil {
+					panic(err)
+				}
+				return []scanner.Match{m}
+			}(),
 			Content: content,
 		}, nil
 	}

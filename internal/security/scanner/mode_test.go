@@ -133,7 +133,7 @@ func TestApplyMode_UnknownMode(t *testing.T) {
 	result := scanner.ScanResult{
 		Threat:  true,
 		Content: "some content",
-		Matches: []scanner.Match{{Rule: "test", Location: 0, Length: 4, Severity: scanner.SeverityHigh}},
+		Matches: []scanner.Match{mustMatch("test", 0, 4, scanner.SeverityHigh)},
 	}
 
 	_, err := scanner.ApplyMode(scanner.Mode("unknown"), scanner.StageInput, result)

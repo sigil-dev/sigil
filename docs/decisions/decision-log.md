@@ -878,3 +878,34 @@ Existing tokens and client authentication headers MUST be reviewed after enablin
    - **Output hook**: `redact` — replace matched content with `[REDACTED]` and continue to the user.
 
 **Ref:** `internal/security/scanner/`, `docs/design/03-security-model.md` Steps 1/6/7
+
+---
+
+## D063: Regex Scanner English-Only Limitation
+
+**Status:** Accepted
+
+**Question:** The regex-based security scanner detects prompt injection patterns using English-language rules only. Non-English prompt injection attacks (e.g., "Ignorez toutes les instructions précédentes", "Ignora todas las instrucciones anteriores") bypass all input scanning rules. How should this limitation be handled?
+
+**Context:** The design doc defense matrix (docs/design/03-security-model.md) lists "Input scanning (Step 1)" as an implemented defense against prompt injection. This is accurate but incomplete — Step 1 only detects English-language patterns. Non-English attacks are undetected at the regex scanner layer. Tests document this explicitly via `currentlyDetected: false` cases for non-English bypass patterns.
+
+**Options considered:**
+
+- Multilingual regex rules — rejected: intractable. Covering even a subset of major languages (Spanish, French, German, Chinese, Arabic, etc.) requires hundreds of patterns that must be maintained across language drift and dialect variation. False-positive rates would be unacceptably high for non-English system prompts.
+- Third-party multilingual NLP libraries — rejected for v1: no Apache-2.0-compatible library provides production-quality multilingual prompt injection detection. Most are Python-only, ML-model-dependent, or carry incompatible licenses.
+- LLM-based semantic classification — deferred: passing each input through a second LLM call for injection detection adds latency and cost but would provide genuine multilingual coverage. Viable as a future enhancement once the provider abstraction supports lightweight classification calls.
+- Accept English-only for v1 (chosen) — acknowledge the limitation formally, document bypasses in tests, and defer multilingual support to a future LLM-based classification layer.
+
+**Decision:** Accept English-only regex coverage for the v1 scanner. Non-English prompt injection bypass is a known, documented limitation — not an oversight.
+
+Specific consequences accepted:
+
+1. The defense matrix entry for Step 1 (input scanning) is accurate for English inputs only.
+2. Non-English prompt injection is undetected by the regex scanner. Users relying on Sigil for multilingual deployments must be aware of this gap.
+3. Test cases for non-English bypass patterns are marked `currentlyDetected: false` and retained as regression anchors — they must remain failing until a multilingual solution is implemented.
+
+**Future enhancement path:** Replace or augment the regex scanner with an LLM-based semantic classifier (e.g., a fast provider call with a classification prompt) that operates language-agnostically. The `Scanner` interface is already abstracted to support this swap without agent loop changes.
+
+**Rationale:** Regex-based multilingual detection is a maintenance burden with high false-positive risk and no clear termination condition. The honest posture is to document the English-only coverage as a known limitation, preserve the bypass test cases as regression anchors, and plan a proper multilingual solution (LLM classification) for a future milestone. This avoids false security claims while keeping v1 scope tractable.
+
+**Ref:** `internal/security/scanner/`, `docs/design/03-security-model.md` Step 1, sigil-7g5.314

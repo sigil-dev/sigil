@@ -532,6 +532,15 @@ func TestScan_FalsePositiveNegatives(t *testing.T) {
 	}
 }
 
+// mustMatch is a test helper that creates a Match via NewMatch, panicking on error.
+func mustMatch(rule string, location, length int, severity scanner.Severity) scanner.Match {
+	m, err := scanner.NewMatch(rule, location, length, severity)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
 // Finding sigil-7g5.183 — redact() panic when match Location >= len(content).
 func TestRedact_OutOfBoundsLocation(t *testing.T) {
 	tests := []struct {
@@ -544,7 +553,7 @@ func TestRedact_OutOfBoundsLocation(t *testing.T) {
 			name:    "match Location equals len(content)",
 			content: "hello",
 			matches: []scanner.Match{
-				{Rule: "test", Location: 5, Length: 3, Severity: scanner.SeverityHigh},
+				mustMatch("test", 5, 3, scanner.SeverityHigh),
 			},
 			want: "hello",
 		},
@@ -552,7 +561,7 @@ func TestRedact_OutOfBoundsLocation(t *testing.T) {
 			name:    "match Location exceeds len(content)",
 			content: "hello",
 			matches: []scanner.Match{
-				{Rule: "test", Location: 100, Length: 5, Severity: scanner.SeverityHigh},
+				mustMatch("test", 100, 5, scanner.SeverityHigh),
 			},
 			want: "hello",
 		},
@@ -560,8 +569,8 @@ func TestRedact_OutOfBoundsLocation(t *testing.T) {
 			name:    "overlapping matches where second start is before previous end",
 			content: "hello world",
 			matches: []scanner.Match{
-				{Rule: "first", Location: 0, Length: 8, Severity: scanner.SeverityHigh},
-				{Rule: "second", Location: 3, Length: 5, Severity: scanner.SeverityHigh},
+				mustMatch("first", 0, 8, scanner.SeverityHigh),
+				mustMatch("second", 3, 5, scanner.SeverityHigh),
 			},
 			want: "[REDACTED]rld",
 		},
@@ -1160,5 +1169,5 @@ func TestNewMatch_NegativeOffsets(t *testing.T) {
 
 	m, err := scanner.NewMatch("rule", 0, 5, scanner.SeverityHigh)
 	require.NoError(t, err)
-	assert.Equal(t, 5, m.Length)
+	assert.Equal(t, 5, m.Length())
 }

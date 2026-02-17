@@ -79,6 +79,12 @@ type ThreatInfo struct {
 	Detected bool      `json:"detected"`
 	Rules    []string  `json:"rules"`
 	Stage    ScanStage `json:"stage"`
+	// Bypassed is true when the scanner was unavailable and content passed
+	// through unscanned (best-effort path below circuit breaker threshold).
+	// Detected will be false because no scan occurred, not because the
+	// content is clean. Audit queries MUST treat Bypassed=true as distinct
+	// from a confirmed clean scan result.
+	Bypassed bool `json:"bypassed,omitempty"`
 }
 
 // Message represents a single message in a session conversation.
