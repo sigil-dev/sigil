@@ -122,15 +122,6 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			wantMsg:     "workspace service not available",
 		},
 		{
-			name:        "nil Workspaces field returns 503",
-			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
-			workspaceID: "ws-1",
-			services:    server.NewServicesForTest(nil, &stubPluginService{}, &stubSessionService{}, &stubUserService{}),
-			wantErr:     true,
-			wantStatus:  503,
-			wantMsg:     "workspace service not available",
-		},
-		{
 			name:        "workspace not found returns 403 to prevent enumeration",
 			user:        mustNewAuthenticatedUser("user-1", "Sean", nil),
 			workspaceID: "nonexistent",

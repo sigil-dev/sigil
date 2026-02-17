@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/sigil-dev/sigil/internal/store"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // Provider is the core interface for LLM providers.
@@ -97,6 +98,87 @@ type ChatEvent struct {
 	ToolCall *ToolCall
 	Usage    *Usage
 	Error    string
+}
+
+// Validate checks that the ChatEvent's Type is consistent with its payload fields.
+// Returns an error if the Type field doesn't match the populated payload fields.
+// Empty payloads are allowed (e.g., EventTypeDone may have no payload).
+func (e ChatEvent) Validate() error {
+	switch e.Type {
+	case EventTypeTextDelta:
+		// TextDelta should have Text, but other fields should be empty
+		if e.ToolCall != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "text_delta event cannot have ToolCall payload")
+		}
+		if e.Usage != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "text_delta event cannot have Usage payload")
+		}
+		if e.Error != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "text_delta event cannot have Error payload")
+		}
+
+	case EventTypeToolCall:
+		// ToolCall should have ToolCall, but other fields should be empty
+		if e.ToolCall == nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "tool_call event must have ToolCall payload")
+		}
+		if e.Text != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "tool_call event cannot have Text payload")
+		}
+		if e.Usage != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "tool_call event cannot have Usage payload")
+		}
+		if e.Error != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "tool_call event cannot have Error payload")
+		}
+
+	case EventTypeUsage:
+		// Usage should have Usage, but other fields should be empty
+		if e.Usage == nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "usage event must have Usage payload")
+		}
+		if e.Text != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "usage event cannot have Text payload")
+		}
+		if e.ToolCall != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "usage event cannot have ToolCall payload")
+		}
+		if e.Error != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "usage event cannot have Error payload")
+		}
+
+	case EventTypeDone:
+		// Done may have Usage (final usage), but other fields should be empty
+		if e.Text != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "done event cannot have Text payload")
+		}
+		if e.ToolCall != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "done event cannot have ToolCall payload")
+		}
+		if e.Error != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "done event cannot have Error payload")
+		}
+
+	case EventTypeError:
+		// Error should have Error, but other fields should be empty
+		if e.Error == "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "error event must have Error payload")
+		}
+		if e.Text != "" {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "error event cannot have Text payload")
+		}
+		if e.ToolCall != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "error event cannot have ToolCall payload")
+		}
+		if e.Usage != nil {
+			return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "error event cannot have Usage payload")
+		}
+
+	default:
+		return sigilerr.New(sigilerr.CodeProviderInvalidEvent, "unknown event type: "+string(e.Type))
+	}
+
+	return nil
 }
 
 // EventType defines the type of chat event.

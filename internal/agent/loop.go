@@ -479,6 +479,11 @@ func (l *Loop) processEvents(eventCh <-chan provider.ChatEvent) (string, []*prov
 	var streamErr error
 
 	for ev := range eventCh {
+		// Validate event Type/payload consistency at the consumption boundary.
+		if err := ev.Validate(); err != nil {
+			return "", nil, nil, sigilerr.Wrap(err, sigilerr.CodeProviderResponseInvalid, "invalid event from provider")
+		}
+
 		switch ev.Type {
 		case provider.EventTypeTextDelta:
 			buf.WriteString(ev.Text)

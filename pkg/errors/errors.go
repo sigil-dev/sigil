@@ -51,6 +51,7 @@ const (
 	CodeProviderAllUnavailable  Code = "provider.routing.all_unavailable"
 	CodeProviderNoDefault       Code = "provider.routing.no_default"
 	CodeProviderInvalidModelRef Code = "provider.routing.invalid_model_ref"
+	CodeProviderInvalidEvent    Code = "provider.event.invalid"
 
 	CodeAgentLoopInvalidInput        Code = "agent.loop.invalid_input"
 	CodeAgentLoopFailure             Code = "agent.loop.failure"

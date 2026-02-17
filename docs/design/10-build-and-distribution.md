@@ -205,5 +205,5 @@ Key differences from holomush:
 | Tailscale | tailscale.com/tsnet                       | Embedded Tailscale node            |
 | LLM SDKs  | anthropic-sdk-go, openai-go, Google genai | Official SDKs                      |
 | Logging   | log/slog                                  | stdlib, structured                 |
-| Errors    | samber/oops                               | Structured error context           |
+| Errors    | pkg/errors (sigilerr)                     | Structured error codes, classification, observability fields (see D056) |
 | Testing   | stdlib + testify                          | Keep it simple                     |

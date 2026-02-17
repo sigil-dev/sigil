@@ -165,14 +165,14 @@ type UserSummary struct {
 	Name string `json:"name" doc:"Display name"`
 }
 
-// NewServicesForTest creates a Services instance for testing, bypassing validation.
+// NewServicesForTest creates a Services instance for testing.
+// It delegates to NewServices to enforce the same validation invariants as production code.
 // This is exported for use in server_test package where unexported fields are inaccessible.
-// Production code should use NewServices which enforces validation.
+// Panics if any required service is nil (same validation as NewServices).
 func NewServicesForTest(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService) *Services {
-	return &Services{
-		workspaces: ws,
-		plugins:    plugins,
-		sessions:   sessions,
-		users:      users,
+	svc, err := NewServices(ws, plugins, sessions, users)
+	if err != nil {
+		panic(err) // Test setup should provide all required services
 	}
+	return svc
 }

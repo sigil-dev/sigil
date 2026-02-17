@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/provider"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -196,6 +197,257 @@ func TestProviderInterface_RouterContract(t *testing.T) {
 		type closeFunc func() error
 		_ = closeFunc(nil)
 	})
+}
+
+func TestChatEvent_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   provider.ChatEvent
+		wantErr bool
+		errCode sigilerr.Code
+	}{
+		// Valid events
+		{
+			name:    "valid text_delta with Text",
+			event:   provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "hello"},
+			wantErr: false,
+		},
+		{
+			name:    "valid text_delta with empty Text",
+			event:   provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: ""},
+			wantErr: false,
+		},
+		{
+			name: "valid tool_call with ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid usage with Usage",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeUsage,
+				Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "valid done with no payload",
+			event:   provider.ChatEvent{Type: provider.EventTypeDone},
+			wantErr: false,
+		},
+		{
+			name: "valid done with Usage",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeDone,
+				Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "valid error with Error",
+			event:   provider.ChatEvent{Type: provider.EventTypeError, Error: "connection failed"},
+			wantErr: false,
+		},
+
+		// Invalid events - text_delta with wrong payloads
+		{
+			name: "text_delta cannot have ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeTextDelta,
+				Text:     "hello",
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "text_delta cannot have Usage",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeTextDelta,
+				Text:  "hello",
+				Usage: &provider.Usage{InputTokens: 10},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "text_delta cannot have Error",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeTextDelta,
+				Text:  "hello",
+				Error: "some error",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid events - tool_call with wrong payloads
+		{
+			name:    "tool_call must have ToolCall",
+			event:   provider.ChatEvent{Type: provider.EventTypeToolCall},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "tool_call cannot have Text",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				Text:     "text",
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "tool_call cannot have Usage",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+				Usage:    &provider.Usage{InputTokens: 10},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "tool_call cannot have Error",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				ToolCall: &provider.ToolCall{ID: "tc_1", Name: "search", Arguments: "{}"},
+				Error:    "error",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid events - usage with wrong payloads
+		{
+			name:    "usage must have Usage",
+			event:   provider.ChatEvent{Type: provider.EventTypeUsage},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "usage cannot have Text",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeUsage,
+				Text:  "text",
+				Usage: &provider.Usage{InputTokens: 10},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "usage cannot have ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeUsage,
+				ToolCall: &provider.ToolCall{ID: "tc_1"},
+				Usage:    &provider.Usage{InputTokens: 10},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "usage cannot have Error",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeUsage,
+				Usage: &provider.Usage{InputTokens: 10},
+				Error: "error",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid events - done with wrong payloads
+		{
+			name: "done cannot have Text",
+			event: provider.ChatEvent{
+				Type: provider.EventTypeDone,
+				Text: "text",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "done cannot have ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeDone,
+				ToolCall: &provider.ToolCall{ID: "tc_1"},
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "done cannot have Error",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeDone,
+				Error: "error",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid events - error with wrong payloads
+		{
+			name:    "error must have Error",
+			event:   provider.ChatEvent{Type: provider.EventTypeError},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "error cannot have Text",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeError,
+				Text:  "text",
+				Error: "error message",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "error cannot have ToolCall",
+			event: provider.ChatEvent{
+				Type:     provider.EventTypeError,
+				ToolCall: &provider.ToolCall{ID: "tc_1"},
+				Error:    "error message",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+		{
+			name: "error cannot have Usage",
+			event: provider.ChatEvent{
+				Type:  provider.EventTypeError,
+				Usage: &provider.Usage{InputTokens: 10},
+				Error: "error message",
+			},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+
+		// Invalid event type
+		{
+			name:    "unknown event type",
+			event:   provider.ChatEvent{Type: provider.EventType("unknown")},
+			wantErr: true,
+			errCode: sigilerr.CodeProviderInvalidEvent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.event.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.errCode),
+					"expected error code %s, got %s", tt.errCode, sigilerr.CodeOf(err))
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestProvider_MidStreamFailure_HealthTracking(t *testing.T) {
