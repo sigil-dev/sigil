@@ -1028,3 +1028,32 @@ func (s *mockToolErrorScanner) Scan(_ context.Context, _ string, opts scanner.Sc
 	}
 	return scanner.ScanResult{}, nil
 }
+
+// mockToolContentTooLargeScanner returns CodeSecurityScannerContentTooLarge on the tool
+// stage when the content exceeds sizeThreshold bytes, then succeeds on re-scan with
+// truncated content. This simulates a malicious tool returning oversized content to
+// bypass scanning (sigil-7g5.184).
+type mockToolContentTooLargeScanner struct {
+	sizeThreshold int
+	// scanCount tracks how many tool-stage Scan calls have been made.
+	scanCount int
+	// lastToolContent records the content of the most recent tool-stage scan.
+	lastToolContent string
+}
+
+func (s *mockToolContentTooLargeScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage != scanner.StageTool {
+		return scanner.ScanResult{Content: content}, nil
+	}
+	s.scanCount++
+	s.lastToolContent = content
+	if len(content) > s.sizeThreshold {
+		return scanner.ScanResult{Content: content},
+			sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+				"content exceeds maximum length",
+				sigilerr.Field("length", len(content)),
+				sigilerr.Field("max_length", s.sizeThreshold),
+			)
+	}
+	return scanner.ScanResult{Content: content}, nil
+}

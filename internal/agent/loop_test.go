@@ -2926,6 +2926,80 @@ func TestAgentLoop_ToolScannerErrorPropagates(t *testing.T) {
 	assert.NotNil(t, out)
 }
 
+func TestAgentLoop_ToolScanContentTooLarge_TruncatesAndRescans(t *testing.T) {
+	// sigil-7g5.184: when a tool returns content that exceeds the scanner's
+	// maximum size, the loop must truncate to maxToolContentScanSize and
+	// re-scan rather than passing unscanned content through. This test
+	// verifies:
+	//   1. The loop does not error — the turn succeeds.
+	//   2. The scanner sees a second call with content <= maxToolContentScanSize.
+	//   3. The stored tool result is the truncated content, not the full oversized string.
+
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Build a tool result larger than agent.MaxToolContentScanSize (512KB).
+	// The mock scanner uses MaxToolContentScanSize as its threshold so that
+	// content[:MaxToolContentScanSize] passes on re-scan.
+	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-oversize",
+			Name:      "large_tool",
+			Arguments: `{}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult(oversizedResult),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	sc := &mockToolContentTooLargeScanner{sizeThreshold: agent.MaxToolContentScanSize}
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: &mockProviderRouter{provider: toolCallProvider},
+		AuditStore:     newMockAuditStore(),
+		Enforcer:       newMockEnforcer(),
+		ToolDispatcher: dispatcher,
+		Scanner:        sc,
+		ScannerModes:   agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeFlag},
+	})
+	require.NoError(t, err)
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "run the large tool",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, err, "oversized tool result should be truncated and re-scanned, not fail the turn")
+	assert.NotNil(t, out)
+
+	// The scanner must have been called twice on the tool stage:
+	// once with the oversized content (returns content_too_large), once with the truncated content.
+	assert.Equal(t, 2, sc.scanCount, "expected two tool-stage scan calls: initial + re-scan after truncation")
+
+	// The content seen by the re-scan must be within the truncation limit.
+	assert.LessOrEqual(t, len(sc.lastToolContent), agent.MaxToolContentScanSize,
+		"re-scanned content must be <= maxToolContentScanSize")
+
+	// The scanner fail counter must remain zero — this is not a scanner failure.
+	assert.Equal(t, int64(0), loop.ScannerFailCount(),
+		"content_too_large truncation+rescan must not increment the scanner fail counter")
+}
+
 func TestAgentLoop_ToolScanDetectsInjection(t *testing.T) {
 	sm := newMockSessionManager()
 	ctx := context.Background()

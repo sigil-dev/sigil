@@ -834,6 +834,13 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 	}
 }
 
+// maxToolContentScanSize is the truncation limit applied to oversized tool results
+// before re-scanning. A malicious tool could return content larger than the scanner's
+// maximum (1MB) to trigger a content_too_large error and bypass scanning. Truncating
+// to 512KB and re-scanning closes that bypass while still scanning the leading content
+// where prompt-injection payloads are most likely to appear.
+const maxToolContentScanSize = 512 * 1024 // 512KB
+
 // scanContent scans content at the given stage and applies the configured mode.
 // Returns the (possibly redacted) content, threat info (if a threat was detected), or an error
 // if scanning fails or the mode blocks. Scanner is guaranteed non-nil by NewLoop validation.
@@ -847,7 +854,33 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		// best-effort — log and continue with unscanned content to preserve
 		// availability. Threat detections are handled below via ApplyMode.
 		// See D062 decision record for rationale.
+		//
+		// Exception: content_too_large errors on the tool stage are a security
+		// concern (sigil-7g5.184) — a malicious plugin could deliberately return
+		// >1MB content to trigger this path and bypass scanning. Instead of
+		// passing unscanned content through, truncate to maxToolContentScanSize
+		// and re-scan the truncated content.
 		if stage == scanner.StageTool {
+			if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerContentTooLarge) {
+				truncated := content[:min(len(content), maxToolContentScanSize)]
+				slog.Warn("tool result exceeds scanner limit, truncating and re-scanning",
+					append([]any{
+						"original_size", len(content),
+						"truncated_size", len(truncated),
+						"stage", stage,
+					}, logAttrs...)...,
+				)
+				reScanResult, reScanErr := l.scanner.Scan(ctx, truncated, scanner.ScanContext{
+					Stage:  stage,
+					Origin: origin,
+				})
+				if reScanErr == nil {
+					// Re-scan succeeded: apply mode against the truncated+scanned result.
+					return l.applyScannedResult(stage, mode, reScanResult)
+				}
+				// Re-scan also failed: fall through to the generic best-effort path.
+				scanErr = reScanErr
+			}
 			consecutive := l.scannerFailCount.Add(1)
 			logLevel := slog.LevelWarn
 			if consecutive >= 3 {
@@ -868,6 +901,12 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage scanner.St
 		)
 	}
 
+	return l.applyScannedResult(stage, mode, scanResult, logAttrs...)
+}
+
+// applyScannedResult processes a successful ScanResult: resets failure counters, builds
+// threat info, applies the configured mode, and returns the (possibly redacted) content.
+func (l *Loop) applyScannedResult(stage scanner.Stage, mode scanner.Mode, scanResult scanner.ScanResult, logAttrs ...any) (string, *store.ThreatInfo, error) {
 	// Reset the scanner fail counter on success for the tool stage.
 	if stage == scanner.StageTool {
 		l.scannerFailCount.Store(0)
