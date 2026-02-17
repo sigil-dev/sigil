@@ -57,14 +57,16 @@ function extractErrorDetail(text: string, status: number): string {
   try {
     const errJson = JSON.parse(text) as { detail?: string };
     if (errJson.detail !== undefined) return errJson.detail;
-  } catch {
+  } catch (parseErr) {
     logger.warn("Server returned non-JSON error response", {
       status,
       textPreview: text.substring(0, 200),
+      parseError: parseErr instanceof Error ? parseErr.message : String(parseErr),
     });
     if (text.trim().startsWith("<")) {
       return `Server error (HTTP ${status})`;
     }
+    return text.substring(0, 500);
   }
   return text;
 }

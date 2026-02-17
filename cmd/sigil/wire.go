@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -216,7 +215,7 @@ func (gw *Gateway) Close() error {
 			errs = append(errs, err)
 		}
 	}
-	return errors.Join(errs...)
+	return sigilerr.Join(errs...)
 }
 
 func convertBindings(bindings []config.BindingConfig) []workspace.Binding {
@@ -251,12 +250,13 @@ var builtinProviderFactories = map[string]providerFactory{
 }
 
 // registerBuiltinProviders iterates configured providers and registers
-// matching built-in implementations. Unknown names or empty API keys are
-// logged and skipped — neither is fatal at startup.
+// matching built-in implementations. Providers with no API key are silently
+// skipped at DEBUG level (normal when not configured). Providers with an API
+// key that still fail to initialize are logged at ERROR level (misconfigured).
 func registerBuiltinProviders(cfg *config.Config, reg *provider.Registry) {
 	for name, pc := range cfg.Providers {
 		if pc.APIKey == "" {
-			slog.Warn("skipping provider with empty API key", "provider", name)
+			slog.Debug("provider not configured, skipping", "provider", name)
 			continue
 		}
 		factory, ok := builtinProviderFactories[name]
@@ -266,7 +266,7 @@ func registerBuiltinProviders(cfg *config.Config, reg *provider.Registry) {
 		}
 		p, err := factory(pc)
 		if err != nil {
-			slog.Warn("failed to create provider", "provider", name, "error", err)
+			slog.Error("provider initialization failed", "provider", name, "error", err)
 			continue
 		}
 		reg.Register(name, p)

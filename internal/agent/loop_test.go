@@ -6,6 +6,7 @@ package agent_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1921,6 +1922,34 @@ func TestAgentLoop_AuditFailureDoesNotFailTurn(t *testing.T) {
 	assert.Equal(t, int32(1), failingAuditStore.appendCount.Load(), "audit append should have been attempted")
 }
 
+func TestAgentLoop_NilAuditStore(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	loop, err := agent.NewLoop(agent.LoopConfig{
+		SessionManager: sm,
+		ProviderRouter: newMockProviderRouter(),
+		AuditStore:     nil,
+		Enforcer:       newMockEnforcer(),
+	})
+	require.NoError(t, err)
+
+	out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "test nil audit store",
+	})
+
+	require.NoError(t, err, "ProcessMessage should succeed with nil AuditStore")
+	require.NotNil(t, out)
+	assert.Equal(t, session.ID, out.SessionID)
+	assert.Contains(t, out.Content, "Hello, world!")
+}
+
 func TestAgentLoop_AuditStoreConsecutiveFailures(t *testing.T) {
 	sm := newMockSessionManager()
 	ctx := context.Background()
@@ -2244,6 +2273,179 @@ func TestNewLoop_ValidatesDependencies(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// MaxToolCallsPerTurn default value tests
+// ---------------------------------------------------------------------------
+
+func TestNewLoop_MaxToolCallsPerTurnDefault(t *testing.T) {
+	// maxToolCallsPerTurn is unexported, so we verify the default via behavior:
+	// a loop with MaxToolCallsPerTurn=0 or -1 should apply the default (10),
+	// allowing multiple tool calls without hitting the budget. A loop with
+	// MaxToolCallsPerTurn=1 should reject the second tool call with a budget error.
+	//
+	// Setup: mockProviderMultiToolCall emits tool calls for the first 2 LLM calls,
+	// then returns text on the 3rd. This requires 2 tool call budget slots.
+
+	tests := []struct {
+		name                string
+		maxToolCallsPerTurn int
+		// wantToolErrorInResult indicates whether the second tool call should
+		// receive a budget-exceeded error (true when MaxToolCallsPerTurn=1).
+		wantToolErrorInResult bool
+		// wantMinLLMCalls is the minimum number of LLM calls expected.
+		// With 2 tool calls allowed: 3 calls (tool, tool, text).
+		// With 1 tool call budget: 3 calls (tool, tool-budget-exceeded, text).
+		wantMinLLMCalls int
+	}{
+		{
+			name:                  "zero applies default (10)",
+			maxToolCallsPerTurn:   0,
+			wantToolErrorInResult: false,
+			wantMinLLMCalls:       3,
+		},
+		{
+			name:                  "negative applies default (10)",
+			maxToolCallsPerTurn:   -1,
+			wantToolErrorInResult: false,
+			wantMinLLMCalls:       3,
+		},
+		{
+			name:                  "explicit value kept",
+			maxToolCallsPerTurn:   5,
+			wantToolErrorInResult: false,
+			wantMinLLMCalls:       3,
+		},
+		{
+			name:                  "budget of 1 rejects second tool call",
+			maxToolCallsPerTurn:   1,
+			wantToolErrorInResult: true,
+			wantMinLLMCalls:       3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := newMockSessionManager()
+			ctx := context.Background()
+
+			session, err := sm.Create(ctx, "ws-1", "user-1")
+			require.NoError(t, err)
+
+			// Provider emits tool calls for the first 2 LLM calls, then text.
+			multiProvider := &mockProviderMultiToolCall{toolCallsFor: 2}
+
+			// Capturing router so we can inspect what the provider received.
+			capturedRequests := make([]provider.ChatRequest, 0)
+			var capMu sync.Mutex
+			capturingRouter := &mockProviderRouterCapturingRequests{
+				provider: multiProvider,
+				onChat: func(req provider.ChatRequest) {
+					capMu.Lock()
+					capturedRequests = append(capturedRequests, req)
+					capMu.Unlock()
+				},
+			}
+
+			enforcer := security.NewEnforcer(nil)
+			enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+			dispatcher, dispErr := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+				Enforcer:       enforcer,
+				PluginManager:  newMockPluginManagerWithResult("ok"),
+				AuditStore:     newMockAuditStore(),
+				DefaultTimeout: 5 * time.Second,
+			})
+			require.NoError(t, dispErr)
+
+			loop, err := agent.NewLoop(agent.LoopConfig{
+				SessionManager:      sm,
+				ProviderRouter:      capturingRouter,
+				AuditStore:          newMockAuditStore(),
+				Enforcer:            newMockEnforcer(),
+				ToolDispatcher:      dispatcher,
+				MaxToolCallsPerTurn: tt.maxToolCallsPerTurn,
+			})
+			require.NoError(t, err)
+
+			out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+				SessionID:       session.ID,
+				WorkspaceID:     "ws-1",
+				UserID:          "user-1",
+				Content:         "use tools",
+				WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+				UserPermissions: security.NewCapabilitySet("tool.*"),
+			})
+			require.NoError(t, procErr)
+			require.NotNil(t, out)
+
+			// Check whether any tool result in the captured requests contained a
+			// budget-exceeded error. The second tool call's result is injected into
+			// the message history before the 3rd LLM call.
+			capMu.Lock()
+			reqs := append([]provider.ChatRequest{}, capturedRequests...)
+			capMu.Unlock()
+
+			assert.GreaterOrEqual(t, len(reqs), tt.wantMinLLMCalls,
+				"expected at least %d LLM calls for MaxToolCallsPerTurn=%d",
+				tt.wantMinLLMCalls, tt.maxToolCallsPerTurn)
+
+			var foundBudgetError bool
+			for _, req := range reqs {
+				for _, msg := range req.Messages {
+					if msg.Role == store.MessageRoleTool && strings.Contains(msg.Content, "tool call budget exceeded") {
+						foundBudgetError = true
+					}
+				}
+			}
+
+			assert.Equal(t, tt.wantToolErrorInResult, foundBudgetError,
+				"budget error in tool results should match expectation for MaxToolCallsPerTurn=%d",
+				tt.maxToolCallsPerTurn)
+		})
+	}
+}
+
+// mockProviderRouterCapturingRequests wraps a provider and fires onChat for each Chat call.
+type mockProviderRouterCapturingRequests struct {
+	provider provider.Provider
+	onChat   func(req provider.ChatRequest)
+}
+
+func (r *mockProviderRouterCapturingRequests) Route(_ context.Context, _, _ string) (provider.Provider, string, error) {
+	return &capturingProviderWrapper{inner: r.provider, onChat: r.onChat}, "mock-model", nil
+}
+
+func (r *mockProviderRouterCapturingRequests) RouteWithBudget(_ context.Context, _, _ string, _ *provider.Budget, _ []string) (provider.Provider, string, error) {
+	return &capturingProviderWrapper{inner: r.provider, onChat: r.onChat}, "mock-model", nil
+}
+
+func (r *mockProviderRouterCapturingRequests) RegisterProvider(_ string, _ provider.Provider) error {
+	return nil
+}
+
+func (r *mockProviderRouterCapturingRequests) MaxAttempts() int { return 1 }
+func (r *mockProviderRouterCapturingRequests) Close() error     { return nil }
+
+// capturingProviderWrapper delegates to an inner provider and fires onChat before each call.
+type capturingProviderWrapper struct {
+	inner  provider.Provider
+	onChat func(req provider.ChatRequest)
+}
+
+func (p *capturingProviderWrapper) Name() string                     { return p.inner.Name() }
+func (p *capturingProviderWrapper) Available(ctx context.Context) bool { return p.inner.Available(ctx) }
+func (p *capturingProviderWrapper) Status(ctx context.Context) (provider.ProviderStatus, error) {
+	return p.inner.Status(ctx)
+}
+func (p *capturingProviderWrapper) ListModels(ctx context.Context) ([]provider.ModelInfo, error) {
+	return p.inner.ListModels(ctx)
+}
+func (p *capturingProviderWrapper) Close() error { return p.inner.Close() }
+func (p *capturingProviderWrapper) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.onChat(req)
+	return p.inner.Chat(ctx, req)
 }
 
 // mockProviderRouterMultipleFailures is a router that returns different providers

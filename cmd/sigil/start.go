@@ -26,13 +26,16 @@ func newStartCmd() *cobra.Command {
 	}
 
 	cmd.Flags().String("listen", "", "override listen address (host:port)")
-	_ = viper.BindPFlag("networking.listen", cmd.Flags().Lookup("listen"))
 
 	return cmd
 }
 
 func runStart(cmd *cobra.Command, _ []string) error {
 	v := viper.GetViper()
+
+	if err := viper.BindPFlag("networking.listen", cmd.Flags().Lookup("listen")); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "binding listen flag: %w", err)
+	}
 
 	cfg, err := config.FromViper(v)
 	if err != nil {
@@ -62,7 +65,11 @@ func runStart(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "wiring gateway: %w", err)
 	}
-	defer func() { _ = gw.Close() }()
+	defer func() {
+		if err := gw.Close(); err != nil {
+			slog.Error("gateway shutdown error", "error", err)
+		}
+	}()
 
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Sigil listening on %s\n", cfg.Networking.Listen)
 	if err != nil {

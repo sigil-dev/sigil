@@ -184,6 +184,59 @@ func TestValidate_NetworkingListen(t *testing.T) {
 	}
 }
 
+func TestValidate_TrustedProxies(t *testing.T) {
+	tests := []struct {
+		name            string
+		trustedProxies  []string
+		wantErr         bool
+		errMsgContains  string
+	}{
+		{
+			name:           "empty list",
+			trustedProxies: []string{},
+			wantErr:        false,
+		},
+		{
+			name:           "valid single CIDR",
+			trustedProxies: []string{"10.0.0.0/8"},
+			wantErr:        false,
+		},
+		{
+			name:           "valid multiple CIDRs",
+			trustedProxies: []string{"10.0.0.0/8", "192.168.1.0/24", "172.16.0.0/12"},
+			wantErr:        false,
+		},
+		{
+			name:           "invalid CIDR string",
+			trustedProxies: []string{"not-a-cidr"},
+			wantErr:        true,
+			errMsgContains: "networking.trusted_proxies",
+		},
+		{
+			name:           "mixed valid and invalid entries",
+			trustedProxies: []string{"10.0.0.0/8", "bad-cidr", "192.168.0.0/16"},
+			wantErr:        true,
+			errMsgContains: "networking.trusted_proxies",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Networking.TrustedProxies = tt.trustedProxies
+			errs := cfg.Validate()
+			if tt.wantErr {
+				require.NotEmpty(t, errs)
+				assert.Contains(t, errs[0].Error(), tt.errMsgContains)
+			} else {
+				for _, err := range errs {
+					assert.NotContains(t, err.Error(), "networking.trusted_proxies")
+				}
+			}
+		})
+	}
+}
+
 func TestValidate_StorageBackend(t *testing.T) {
 	tests := []struct {
 		name    string

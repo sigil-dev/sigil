@@ -77,8 +77,12 @@ func initViper(cmd *cobra.Command) error {
 	}
 
 	// Bind persistent flags to viper keys.
-	_ = v.BindPFlag("data_dir", cmd.Root().PersistentFlags().Lookup("data-dir"))
-	_ = v.BindPFlag("verbose", cmd.Root().PersistentFlags().Lookup("verbose"))
+	if err := v.BindPFlag("data_dir", cmd.Root().PersistentFlags().Lookup("data-dir")); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "binding data-dir flag: %w", err)
+	}
+	if err := v.BindPFlag("verbose", cmd.Root().PersistentFlags().Lookup("verbose")); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "binding verbose flag: %w", err)
+	}
 
 	return nil
 }
