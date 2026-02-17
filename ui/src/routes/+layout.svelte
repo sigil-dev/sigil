@@ -2,6 +2,8 @@
 <!-- Copyright 2026 Sigil Contributors -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { detectFirstRun } from '$lib/stores/onboarding.svelte';
 
 	let { children } = $props();
 
@@ -11,6 +13,17 @@
 	let sidecarStatus = $state<string | null>(null);
 
 	onMount(() => {
+		// Check for first-run and redirect to onboarding if needed.
+		// Skip the check if already on the onboarding page.
+		const currentPath = window.location.pathname;
+		if (!currentPath.startsWith('/onboarding')) {
+			detectFirstRun().then((isFirstRun) => {
+				if (isFirstRun) {
+					goto('/onboarding');
+				}
+			});
+		}
+
 		// Only set up Tauri listeners in desktop environment
 		if (typeof window === 'undefined' || !('__TAURI__' in window)) return;
 
