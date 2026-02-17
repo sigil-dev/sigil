@@ -578,12 +578,20 @@ async fn check_for_update(app: AppHandle) -> Result<UpdateCheckResult, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![check_for_update])
+        .plugin(tauri_plugin_shell::init());
+
+    // Desktop-only plugins: updater and process (deps are cfg-gated in Cargo.toml)
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init())
+            .invoke_handler(tauri::generate_handler![check_for_update]);
+    }
+
+    builder
         .manage(SidecarState::new())
         .setup(|app| {
             // Create tray menu and icon with graceful degradation
