@@ -119,7 +119,7 @@ func TestParseMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := scanner.ParseMode(tt.input)
+			got, err := types.ParseScannerMode(tt.input)
 			if tt.err {
 				require.Error(t, err)
 			} else {

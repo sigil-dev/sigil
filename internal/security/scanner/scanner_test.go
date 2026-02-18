@@ -218,6 +218,16 @@ func TestNewRegexScanner_Validation(t *testing.T) {
 			rules:   []scanner.Rule{validRule},
 			wantErr: false,
 		},
+		{
+			name:    "nil rules fails",
+			rules:   nil,
+			wantErr: true,
+		},
+		{
+			name:    "empty rules slice fails",
+			rules:   []scanner.Rule{},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -288,22 +298,6 @@ func TestScan_ContentTooLarge(t *testing.T) {
 		Origin: types.OriginUserInput,
 	})
 	require.Error(t, err, "oversized content must return an error")
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
-		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
-}
-
-// Finding .90 — content_too_large returns a distinct error code.
-func TestScan_ContentTooLargeReturnsError(t *testing.T) {
-	s, err := scanner.NewRegexScanner(mustDefaultRules(t))
-	require.NoError(t, err)
-
-	content := strings.Repeat("a", scanner.DefaultMaxContentLength+1)
-
-	_, err = s.Scan(context.Background(), content, scanner.ScanContext{
-		Stage:  types.ScanStageInput,
-		Origin: types.OriginUserInput,
-	})
-	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
 		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
 }

@@ -119,23 +119,13 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 	}
 
 	// Construct proper Rules with the requested stage.
-	// We must copy and stamp the stage — Rules are immutable once created via NewRule.
+	// We must stamp the stage — Rules are immutable once created via NewRule.
 	out := make([]Rule, 0, len(dbEntries))
 	for _, e := range dbEntries {
-		// Deep-copy the compiled pattern so callers cannot share state.
-		patCopy := regexp.MustCompile(e.pattern.String())
-		r, err := NewRule(e.name, patCopy, stage, SeverityHigh)
+		r, err := NewRule(e.name, e.pattern, stage, SeverityHigh)
 		if err != nil {
-			// This should not happen in practice: dbEntries were validated
-			// during sync.Once initialization (name non-empty, regex compiled,
-			// SeverityHigh is always valid). The continue is deliberate
-			// graceful-degradation: a single rule failing to stamp a new stage
-			// does not justify returning zero rules. The caller (DefaultRules)
-			// already guards against the zero-rules case via loadDBRules
-			// returning dbErr when dbEntries is empty.
-			slog.Warn("skipping DB rule that failed NewRule",
-				"name", e.name, "stage", stage, "error", err)
-			continue
+			return nil, sigilerr.Wrapf(err, sigilerr.CodeSecurityScannerFailure,
+				"creating rule %q for stage %s", e.name, stage)
 		}
 		out = append(out, r)
 	}

@@ -27,7 +27,7 @@ func parseModeField(raw types.ScannerMode, name string, fallback types.ScannerMo
 	}
 	mode, err := types.ParseScannerMode(string(raw))
 	if err != nil {
-		return "", sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner %s mode: %q", name, raw)
+		return "", sigilerr.Wrapf(err, sigilerr.CodeConfigValidateInvalidValue, "scanner %s mode", name)
 	}
 	return mode, nil
 }

@@ -1029,7 +1029,7 @@ func (p *mockProviderIntermediateTextWithSecret) Chat(_ context.Context, _ provi
 type mockErrorScanner struct{}
 
 func (s *mockErrorScanner) Scan(_ context.Context, _ string, _ scanner.ScanContext) (scanner.ScanResult, error) {
-	return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
+	return scanner.ScanResult{}, sigilerr.New(sigilerr.CodeSecurityScannerFailure, "internal scanner failure")
 }
 
 // mockOutputErrorScanner returns an error only when scanning the output stage,
@@ -1038,7 +1038,7 @@ type mockOutputErrorScanner struct{}
 
 func (s *mockOutputErrorScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
 	if opts.Stage == types.ScanStageOutput {
-		return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
+		return scanner.ScanResult{}, sigilerr.New(sigilerr.CodeSecurityScannerFailure, "internal scanner failure")
 	}
 	return scanner.ScanResult{Content: content}, nil
 }
@@ -1050,7 +1050,7 @@ type mockToolErrorScanner struct{}
 
 func (s *mockToolErrorScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
 	if opts.Stage == types.ScanStageTool {
-		return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
+		return scanner.ScanResult{}, sigilerr.New(sigilerr.CodeSecurityScannerFailure, "internal scanner failure")
 	}
 	return scanner.ScanResult{Content: content}, nil
 }

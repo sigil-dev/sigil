@@ -187,6 +187,10 @@ func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error)
 	for _, opt := range opts {
 		opt(s)
 	}
+	if len(copied) == 0 {
+		return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
+			"NewRegexScanner requires at least one rule")
+	}
 	if s.maxContentLength <= 0 {
 		return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
 			"maxContentLength must be > 0, got %d", s.maxContentLength)
@@ -413,11 +417,6 @@ func OutputRules() ([]Rule, error) { return secretRules(types.ScanStageOutput) }
 
 // ToolSecretRules returns rules for StageTool: secret/credential detection patterns.
 func ToolSecretRules() ([]Rule, error) { return secretRules(types.ScanStageTool) }
-
-// ParseMode parses a case-insensitive string into a types.ScannerMode.
-func ParseMode(s string) (types.ScannerMode, error) {
-	return types.ParseScannerMode(s)
-}
 
 // ApplyMode applies the detection mode to the scan result.
 // For block: returns an error with a stage-specific error code if threat detected.
