@@ -31,10 +31,7 @@ import (
 )
 
 // Gateway holds all wired subsystems and manages their lifecycle.
-// Fields are unexported to enforce construction through WireGateway,
-// which initializes all subsystems and validates their dependencies.
-// This prevents callers from constructing a partially-initialized
-// Gateway literal with nil fields that would panic at runtime.
+// Construct via WireGateway; direct struct literals will fail Validate().
 type Gateway struct {
 	server           *server.Server
 	gatewayStore     store.GatewayStore

@@ -395,8 +395,7 @@ func (c *Config) validateSecurity() []error {
 	var errs []error
 
 	// Validate scanner modes using types.ScannerMode.Valid(), which is the
-	// authoritative check in pkg/types and is also used by scanner.Mode.Valid()
-	// (an alias). This avoids duplicating the valid-mode set here.
+	// authoritative check in pkg/types. This avoids duplicating the valid-mode set here.
 	for _, pair := range []struct {
 		field string
 		value types.ScannerMode

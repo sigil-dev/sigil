@@ -19,6 +19,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/security/scanner"
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 )
 
 // newDefaultScanner creates a RegexScanner with DefaultRules for testing.
@@ -39,9 +40,9 @@ func newDefaultScanner(t *testing.T) *scanner.RegexScanner {
 // block input, redact tools, redact output.
 func defaultScannerModes() agent.ScannerModes {
 	return agent.ScannerModes{
-		Input:  scanner.ModeBlock,
-		Tool:   scanner.ModeRedact,
-		Output: scanner.ModeRedact,
+		Input:  types.ScannerModeBlock,
+		Tool:   types.ScannerModeRedact,
+		Output: types.ScannerModeRedact,
 	}
 }
 
@@ -1036,7 +1037,7 @@ func (s *mockErrorScanner) Scan(_ context.Context, _ string, _ scanner.ScanConte
 type mockOutputErrorScanner struct{}
 
 func (s *mockOutputErrorScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
-	if opts.Stage == scanner.StageOutput {
+	if opts.Stage == types.ScanStageOutput {
 		return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
 	}
 	return scanner.ScanResult{Content: content}, nil
@@ -1048,7 +1049,7 @@ func (s *mockOutputErrorScanner) Scan(_ context.Context, content string, opts sc
 type mockToolErrorScanner struct{}
 
 func (s *mockToolErrorScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
-	if opts.Stage == scanner.StageTool {
+	if opts.Stage == types.ScanStageTool {
 		return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
 	}
 	return scanner.ScanResult{Content: content}, nil
@@ -1067,7 +1068,7 @@ type mockToolContentTooLargeScanner struct {
 }
 
 func (s *mockToolContentTooLargeScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
-	if opts.Stage != scanner.StageTool {
+	if opts.Stage != types.ScanStageTool {
 		return scanner.ScanResult{Content: content}, nil
 	}
 	s.scanCount++
@@ -1092,7 +1093,7 @@ type mockToolErrorScannerToggleable struct {
 }
 
 func (s *mockToolErrorScannerToggleable) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
-	if opts.Stage != scanner.StageTool {
+	if opts.Stage != types.ScanStageTool {
 		return scanner.ScanResult{Content: content}, nil
 	}
 	n := s.toolCalls.Add(1)

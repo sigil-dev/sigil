@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -57,7 +58,7 @@ var (
 // (common English words, short hex strings, etc.). Sigil-specific rules in
 // sigilSpecificRules() override DB rules with the same name to provide better
 // precision where the DB regex is known to be overly broad.
-func loadDBRules(stage Stage) ([]Rule, error) {
+func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 	dbOnce.Do(func() {
 		var f dbFile
 		if err := yaml.Unmarshal(rulesStableYAML, &f); err != nil {
@@ -68,6 +69,7 @@ func loadDBRules(stage Stage) ([]Rule, error) {
 
 		seen := make(map[string]bool, len(f.Patterns))
 		var skippedNames []string
+		var duplicateCount int
 		for _, entry := range f.Patterns {
 			p := entry.Pattern
 			if p.Confidence != "high" {
@@ -80,6 +82,7 @@ func loadDBRules(stage Stage) ([]Rule, error) {
 			if seen[name] {
 				slog.Warn("duplicate DB rule name, skipping",
 					"name", name, "original", p.Name)
+				duplicateCount++
 				continue
 			}
 			seen[name] = true
@@ -103,7 +106,8 @@ func loadDBRules(stage Stage) ([]Rule, error) {
 
 		if len(dbEntries) == 0 {
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
-				"zero high-confidence patterns loaded from secrets-patterns-db")
+				"zero high-confidence patterns loaded from secrets-patterns-db (skipped %d compile errors, %d duplicates)",
+				len(skippedNames), duplicateCount)
 		}
 	})
 

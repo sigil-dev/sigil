@@ -3,12 +3,16 @@
 
 package scanner
 
-import "regexp"
+import (
+	"regexp"
+
+	"github.com/sigil-dev/sigil/pkg/types"
+)
 
 // sigilSpecificRules returns secret detection patterns that are either
 // not present in secrets-patterns-db or have better precision than the DB
 // equivalents. These are maintained by the Sigil project.
-func sigilSpecificRules(stage Stage) []Rule {
+func sigilSpecificRules(stage types.ScanStage) []Rule {
 	return []Rule{
 		mustNewRule("bearer_token",
 			regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9_\-.]{20,}`),

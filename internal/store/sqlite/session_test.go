@@ -430,6 +430,55 @@ CREATE TABLE IF NOT EXISTS messages (
 	assert.Equal(t, []string{"rule-injection"}, msgs[0].Threat.Rules)
 }
 
+// TestSessionStore_ThreatInfo_OutputStage verifies that an assistant message with a
+// ScanStageOutput ThreatInfo (Detected=true, Scanned=true, Stage=output) round-trips
+// correctly through the SQLite session store. This complements
+// TestMigrate_AddThreatInfoColumn which only tests ScanStageInput.
+func TestSessionStore_ThreatInfo_OutputStage(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "sessions-threat-output")
+	ss, err := sqlite.NewSessionStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ss.Close() }()
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	err = ss.CreateSession(ctx, &store.Session{
+		ID:          "sess-threat-output",
+		WorkspaceID: "ws-1",
+		UserID:      "usr-1",
+		Status:      store.SessionStatusActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	require.NoError(t, err)
+
+	// Append an assistant message with an output-stage threat detection.
+	threat := store.NewThreatDetected(store.ScanStageOutput, []string{"rule-prompt-leak", "rule-pii"})
+	msg := &store.Message{
+		ID:        "msg-output-threat-1",
+		SessionID: "sess-threat-output",
+		Role:      store.MessageRoleAssistant,
+		Content:   "redacted output",
+		Threat:    threat,
+		CreatedAt: now,
+	}
+	err = ss.AppendMessage(ctx, "sess-threat-output", msg)
+	require.NoError(t, err)
+
+	// Retrieve the message and assert the ThreatInfo round-trips correctly.
+	msgs, err := ss.GetActiveWindow(ctx, "sess-threat-output", 10)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	got := msgs[0]
+	require.NotNil(t, got.Threat, "Threat field must be non-nil after round-trip")
+	assert.True(t, got.Threat.Scanned, "Threat.Scanned should be true")
+	assert.True(t, got.Threat.Detected, "Threat.Detected should be true")
+	assert.Equal(t, store.ScanStageOutput, got.Threat.Stage, "Stage must be ScanStageOutput, not ScanStageInput")
+	assert.Equal(t, []string{"rule-prompt-leak", "rule-pii"}, got.Threat.Rules, "matched rules must be preserved")
+}
+
 // TestParseTime_ErrorPropagation verifies that malformed timestamps cause errors
 // instead of being silently ignored.
 func TestParseTime_ErrorPropagation(t *testing.T) {

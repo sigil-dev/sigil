@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/security/scanner"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -133,8 +134,8 @@ func TestSecretsDB_SpotCheckDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := s.Scan(context.Background(), tt.content, scanner.ScanContext{
-				Stage:  scanner.StageOutput,
-				Origin: scanner.OriginSystem,
+				Stage:  types.ScanStageOutput,
+				Origin: types.OriginSystem,
 			})
 			require.NoError(t, err)
 			assert.True(t, result.Threat, "expected threat for: %q", tt.content)

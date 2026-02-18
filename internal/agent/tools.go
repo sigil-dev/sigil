@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/sigil-dev/sigil/internal/provider"
@@ -262,22 +263,27 @@ func (d *ToolDispatcher) ExecuteForTurn(ctx context.Context, req ToolCallRequest
 }
 
 // auditToolExecution writes a best-effort audit entry for tool dispatch events.
-// It implements its own escalating-log-level behavior (warn → error after 3
-// consecutive failures) independently from the agent loop's logAuditFailure
-// helper in loop.go, because ToolDispatcher has no reference to the agent loop.
-// Both functions use the same escalation threshold (3 consecutive failures) and
-// the same slog-based structured logging convention. If the audit escalation
-// logic changes, update BOTH locations.
+// It implements its own escalating-log-level behavior (warn → error after
+// auditLogEscalationThreshold consecutive failures) independently from the
+// agent loop's logAuditFailure helper in loop.go, because ToolDispatcher has
+// no reference to the agent loop. Both functions share the same threshold
+// constant and the same slog-based structured logging convention.
 func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallRequest, result string) {
 	if d.auditStore == nil {
 		return
 	}
 
-	// Truncate arguments to 1024 chars to bound audit entry size while
-	// retaining enough context for security investigations.
+	// Truncate arguments to 1024 bytes to bound audit entry size while
+	// retaining enough context for security investigations. Walk back to a
+	// valid UTF-8 rune boundary to avoid storing invalid byte sequences.
+	const maxArgLen = 1024
 	args := req.Arguments
-	if len(args) > 1024 {
-		args = args[:1024]
+	if len(args) > maxArgLen {
+		i := maxArgLen
+		for i > 0 && !utf8.RuneStart(args[i]) {
+			i--
+		}
+		args = args[:i]
 	}
 	details := map[string]any{
 		"tool_name":      req.ToolName,
@@ -300,7 +306,7 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 	if err := d.auditStore.Append(ctx, entry); err != nil {
 		consecutive := d.auditFailCount.Add(1)
 		logLevel := slog.LevelWarn
-		if consecutive >= 3 {
+		if consecutive >= auditLogEscalationThreshold {
 			logLevel = slog.LevelError
 		}
 		slog.Log(ctx, logLevel, "audit store append failed",

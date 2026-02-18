@@ -8,7 +8,6 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/config"
-	"github.com/sigil-dev/sigil/internal/security/scanner"
 	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,9 +31,9 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 				Output: types.ScannerModeRedact,
 			},
 			want: agent.ScannerModes{
-				Input:  scanner.ModeBlock,
-				Tool:   scanner.ModeFlag,
-				Output: scanner.ModeRedact,
+				Input:  types.ScannerModeBlock,
+				Tool:   types.ScannerModeFlag,
+				Output: types.ScannerModeRedact,
 			},
 		},
 		{
@@ -45,18 +44,18 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 				Output: types.ScannerModeBlock,
 			},
 			want: agent.ScannerModes{
-				Input:  scanner.ModeFlag,
-				Tool:   scanner.ModeRedact,
-				Output: scanner.ModeBlock,
+				Input:  types.ScannerModeFlag,
+				Tool:   types.ScannerModeRedact,
+				Output: types.ScannerModeBlock,
 			},
 		},
 		{
 			name: "empty config uses defaults: block/flag/redact",
 			cfg:  config.ScannerConfig{},
 			want: agent.ScannerModes{
-				Input:  scanner.ModeBlock,
-				Tool:   scanner.ModeFlag,
-				Output: scanner.ModeRedact,
+				Input:  types.ScannerModeBlock,
+				Tool:   types.ScannerModeFlag,
+				Output: types.ScannerModeRedact,
 				// DisableOriginTagging defaults to false (tagging enabled) — zero-value.
 			},
 		},
@@ -68,9 +67,9 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 				Output: types.ScannerModeBlock,
 			},
 			want: agent.ScannerModes{
-				Input:  scanner.ModeBlock,
-				Tool:   scanner.ModeRedact,
-				Output: scanner.ModeBlock,
+				Input:  types.ScannerModeBlock,
+				Tool:   types.ScannerModeRedact,
+				Output: types.ScannerModeBlock,
 			},
 		},
 		{
@@ -81,9 +80,9 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 				Output: types.ScannerModeBlock,
 			},
 			want: agent.ScannerModes{
-				Input:  scanner.ModeRedact,
-				Tool:   scanner.ModeFlag,
-				Output: scanner.ModeBlock,
+				Input:  types.ScannerModeRedact,
+				Tool:   types.ScannerModeFlag,
+				Output: types.ScannerModeBlock,
 			},
 		},
 		{
@@ -94,9 +93,9 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 				Output: "",
 			},
 			want: agent.ScannerModes{
-				Input:  scanner.ModeBlock,
-				Tool:   scanner.ModeBlock,
-				Output: scanner.ModeRedact,
+				Input:  types.ScannerModeBlock,
+				Tool:   types.ScannerModeBlock,
+				Output: types.ScannerModeRedact,
 			},
 		},
 		{

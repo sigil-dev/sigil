@@ -18,6 +18,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/security/scanner"
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2210,7 +2211,7 @@ func TestNewLoop_ValidatesDependencies(t *testing.T) {
 				Enforcer:       &security.Enforcer{},
 				ProviderRouter: newMockProviderRouter(),
 				Scanner:        newDefaultScanner(t),
-				ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeBlock, Output: scanner.ModeRedact},
+				ScannerModes:   agent.ScannerModes{Input: types.ScannerModeBlock, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact},
 			},
 			wantErr: false,
 		},
@@ -2224,7 +2225,7 @@ func TestNewLoop_ValidatesDependencies(t *testing.T) {
 				ToolDispatcher: nil,
 				ToolRegistry:   nil,
 				Scanner:        newDefaultScanner(t),
-				ScannerModes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeBlock, Output: scanner.ModeRedact},
+				ScannerModes:   agent.ScannerModes{Input: types.ScannerModeBlock, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact},
 			},
 			wantErr: false,
 		},
@@ -2262,43 +2263,43 @@ func TestNewLoop_ValidatesScannerModes(t *testing.T) {
 	}{
 		{
 			name:    "empty Input mode",
-			modes:   agent.ScannerModes{Input: "", Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+			modes:   agent.ScannerModes{Input: "", Tool: types.ScannerModeFlag, Output: types.ScannerModeRedact},
 			wantErr: true,
 			wantMsg: "ScannerModes.Input is required",
 		},
 		{
 			name:    "empty Tool mode",
-			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: "", Output: scanner.ModeRedact},
+			modes:   agent.ScannerModes{Input: types.ScannerModeBlock, Tool: "", Output: types.ScannerModeRedact},
 			wantErr: true,
 			wantMsg: "ScannerModes.Tool is required",
 		},
 		{
 			name:    "empty Output mode",
-			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: ""},
+			modes:   agent.ScannerModes{Input: types.ScannerModeBlock, Tool: types.ScannerModeFlag, Output: ""},
 			wantErr: true,
 			wantMsg: "ScannerModes.Output is required",
 		},
 		{
 			name:    "invalid Input mode",
-			modes:   agent.ScannerModes{Input: "invalid", Tool: scanner.ModeFlag, Output: scanner.ModeRedact},
+			modes:   agent.ScannerModes{Input: "invalid", Tool: types.ScannerModeFlag, Output: types.ScannerModeRedact},
 			wantErr: true,
 			wantMsg: `invalid ScannerModes.Input: "invalid"`,
 		},
 		{
 			name:    "invalid Tool mode",
-			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: "invalid", Output: scanner.ModeRedact},
+			modes:   agent.ScannerModes{Input: types.ScannerModeBlock, Tool: "invalid", Output: types.ScannerModeRedact},
 			wantErr: true,
 			wantMsg: `invalid ScannerModes.Tool: "invalid"`,
 		},
 		{
 			name:    "invalid Output mode",
-			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: "invalid"},
+			modes:   agent.ScannerModes{Input: types.ScannerModeBlock, Tool: types.ScannerModeFlag, Output: "invalid"},
 			wantErr: true,
 			wantMsg: `invalid ScannerModes.Output: "invalid"`,
 		},
 		{
 			name:    "all valid modes",
-			modes:   agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeBlock, Output: scanner.ModeRedact},
+			modes:   agent.ScannerModes{Input: types.ScannerModeBlock, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact},
 			wantErr: false,
 		},
 	}
@@ -2687,7 +2688,7 @@ func TestAgentLoop_InputScannerBlocks(t *testing.T) {
 	audit.mu.Unlock()
 	require.Len(t, entries, 1, "expected one audit entry for input_blocked")
 	assert.Equal(t, "agent_loop.input_blocked", entries[0].Action)
-	assert.Equal(t, "blocked", entries[0].Result)
+	assert.Equal(t, "blocked_threat", entries[0].Result)
 
 	// Verify threat details are present in the audit entry (sigil-7g5.355).
 	details := entries[0].Details
@@ -2796,7 +2797,7 @@ func TestAgentLoop_OutputScannerErrorPropagates(t *testing.T) {
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.Scanner = &mockOutputErrorScanner{}
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeRedact}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeRedact}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -2847,7 +2848,7 @@ func TestAgentLoop_ToolScannerErrorPropagates(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = &mockToolErrorScanner{}
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -2907,7 +2908,7 @@ func TestAgentLoop_ToolScanContentTooLarge_TruncatesAndRescans(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = sc
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeFlag}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeFlag}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -2981,7 +2982,7 @@ func TestAgentLoop_ToolScanTruncation_UTF8Boundary(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = sc
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeFlag}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeFlag}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -3036,7 +3037,7 @@ func TestAgentLoop_ToolScanDetectsInjection(t *testing.T) {
 	cfg.SessionManager = sm
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeFlag}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeFlag}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -3370,7 +3371,7 @@ func TestAgentLoop_ScannerFailCounter_IncrementAndReset(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = toggleScanner
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 	cfg.MaxToolCallsPerTurn = len(toolCalls) + 1
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
@@ -3459,7 +3460,7 @@ func TestAgentLoop_ScannerCircuitBreaker_BlocksAfterThreshold(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = &mockToolErrorScanner{}
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 	// Allow enough tool calls for threshold to be reached in one turn.
 	cfg.MaxToolCallsPerTurn = agent.ScannerCircuitBreakerThreshold + 1
 	loop, err := agent.NewLoop(cfg)
@@ -3523,7 +3524,7 @@ func TestAgentLoop_ScannerCircuitBreaker_ResetsAfterSuccess(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = toggleableScanner
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -3626,7 +3627,7 @@ func TestAgentLoop_AuditWithThreatMetadata_WhenThreatDetected(t *testing.T) {
 	cfg.AuditStore = auditStore
 	cfg.Scanner = s
 	// Output in flag mode — allows content through but records threat.
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeBlock, Tool: scanner.ModeFlag, Output: scanner.ModeFlag}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeBlock, Tool: types.ScannerModeFlag, Output: types.ScannerModeFlag}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -3654,7 +3655,7 @@ func TestAgentLoop_AuditWithThreatMetadata_WhenThreatDetected(t *testing.T) {
 type mockOutputThreatScanner struct{}
 
 func (s *mockOutputThreatScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
-	if opts.Stage == scanner.StageOutput {
+	if opts.Stage == types.ScanStageOutput {
 		return scanner.ScanResult{
 			Threat: true,
 			Matches: func() []scanner.Match {
@@ -3728,7 +3729,7 @@ func TestAgentLoop_ToolScanBlocksOnSecret(t *testing.T) {
 			cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 			cfg.ToolDispatcher = dispatcher
 			// Tool mode is ModeBlock: secret in tool result must block the turn.
-			cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+			cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 			loop, err := agent.NewLoop(cfg)
 			require.NoError(t, err)
 
@@ -3792,7 +3793,7 @@ func TestAgentLoop_OutputScanBlocksOnSecret(t *testing.T) {
 			cfg.SessionManager = sm
 			cfg.ProviderRouter = newMockProviderRouterWithResponse(tt.providerText)
 			// Output mode is ModeBlock: secret in LLM output must block the response.
-			cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeBlock}
+			cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeBlock}
 			loop, err := agent.NewLoop(cfg)
 			require.NoError(t, err)
 
@@ -3856,7 +3857,7 @@ func TestAgentLoop_ThreatInfoPersistedForFlaggedUserInput(t *testing.T) {
 			cfg := newTestLoopConfig(t)
 			cfg.SessionManager = sm
 			// Input mode is ModeFlag: injection is detected but not blocked.
-			cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeRedact}
+			cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeRedact}
 			loop, err := agent.NewLoop(cfg)
 			require.NoError(t, err)
 
@@ -3959,7 +3960,7 @@ func TestAgentLoop_ThreatInfoPersistedForFlaggedToolResult(t *testing.T) {
 			cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 			cfg.ToolDispatcher = dispatcher
 			// Tool mode is ModeFlag: secret is detected but not blocked.
-			cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeFlag}
+			cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeFlag}
 			loop, err := agent.NewLoop(cfg)
 			require.NoError(t, err)
 
@@ -4020,7 +4021,7 @@ type mockToolDoubleFailureScanner struct {
 }
 
 func (s *mockToolDoubleFailureScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
-	if opts.Stage != scanner.StageTool {
+	if opts.Stage != types.ScanStageTool {
 		return scanner.ScanResult{Content: content}, nil
 	}
 	s.mu.Lock()
@@ -4074,7 +4075,7 @@ func TestAgentLoop_ToolScanDoubleFailure_BelowThreshold(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = sc
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -4144,7 +4145,7 @@ func TestAgentLoop_ToolScanDoubleFailure_AtThreshold(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = sc
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 	cfg.MaxToolCallsPerTurn = agent.ScannerCircuitBreakerThreshold + 1
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
@@ -4201,7 +4202,7 @@ func TestAgentLoop_BypassedThreatInfoPersistedForToolScanError(t *testing.T) {
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = &mockToolErrorScanner{}
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -4301,7 +4302,7 @@ type mockOutputBlockScanner struct {
 }
 
 func (s *mockOutputBlockScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
-	if opts.Stage == scanner.StageOutput && strings.Contains(content, s.trigger) {
+	if opts.Stage == types.ScanStageOutput && strings.Contains(content, s.trigger) {
 		m, err := scanner.NewMatch("output-block-rule", 0, len(s.trigger), scanner.SeverityHigh)
 		if err != nil {
 			return scanner.ScanResult{}, fmt.Errorf("scanner internal error: %w", err)
@@ -4353,7 +4354,7 @@ func TestAgentLoop_IntermediateTextBlocked_ModeBlock(t *testing.T) {
 	cfg.ToolDispatcher = dispatcher
 	cfg.Scanner = &mockOutputBlockScanner{trigger: secretTrigger}
 	// Output mode is ModeBlock: intermediate text with secret must block the turn.
-	cfg.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeFlag, Output: scanner.ModeBlock}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeBlock}
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -4520,7 +4521,7 @@ func TestAgentLoop_ScannerCircuitBreaker_FreshAcrossInstances(t *testing.T) {
 	cfg1.ProviderRouter = &mockProviderRouter{provider: toolCallProvider1}
 	cfg1.ToolDispatcher = dispatcher
 	cfg1.Scanner = &mockToolErrorScanner{}
-	cfg1.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
+	cfg1.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
 	loop1, err := agent.NewLoop(cfg1)
 	require.NoError(t, err)
 
@@ -4610,9 +4611,9 @@ func TestAgentLoop_DisableOriginTagging_SuppressesTagsInChatOptions(t *testing.T
 			cfg.SessionManager = sm
 			cfg.ProviderRouter = &mockProviderRouter{provider: capturer}
 			cfg.ScannerModes = agent.ScannerModes{
-				Input:                scanner.ModeBlock,
-				Tool:                 scanner.ModeFlag,
-				Output:               scanner.ModeRedact,
+				Input:                types.ScannerModeBlock,
+				Tool:                 types.ScannerModeFlag,
+				Output:               types.ScannerModeRedact,
 				DisableOriginTagging: tt.disableOriginTagging,
 			}
 			loop, err := agent.NewLoop(cfg)

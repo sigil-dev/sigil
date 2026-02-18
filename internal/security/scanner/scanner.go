@@ -15,26 +15,6 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Stage identifies where in the pipeline scanning occurs.
-// Aliased from pkg/types for backward compatibility.
-type Stage = types.ScanStage
-
-const (
-	StageInput  Stage = types.ScanStageInput
-	StageTool   Stage = types.ScanStageTool
-	StageOutput Stage = types.ScanStageOutput
-)
-
-// Origin indicates the source of content (user input, system, or tool output).
-// Aliased from pkg/types for backward compatibility.
-type Origin = types.Origin
-
-const (
-	OriginUser   = types.OriginUserInput
-	OriginSystem = types.OriginSystem
-	OriginTool   = types.OriginToolOutput
-)
-
 // Severity indicates how critical a detection is.
 type Severity string
 
@@ -56,10 +36,10 @@ func (s Severity) Valid() bool {
 
 // ScanContext provides context for the scan.
 type ScanContext struct {
-	Stage Stage
+	Stage types.ScanStage
 	// Origin is recorded in scan results for audit and logging purposes; it does
 	// not affect which rules are evaluated. Rule filtering uses only Stage.
-	Origin Origin
+	Origin types.Origin
 	// Metadata holds caller-supplied key-value pairs for audit/logging context.
 	// Use NewScanContext for safe construction (deep-copies the map). When
 	// constructing ScanContext directly, the caller retains ownership of the map
@@ -69,7 +49,7 @@ type ScanContext struct {
 
 // NewScanContext creates a ScanContext with a deep-copied Metadata map so
 // callers cannot mutate the map after construction.
-func NewScanContext(stage Stage, origin Origin, metadata map[string]string) ScanContext {
+func NewScanContext(stage types.ScanStage, origin types.Origin, metadata map[string]string) ScanContext {
 	var copied map[string]string
 	if metadata != nil {
 		copied = make(map[string]string, len(metadata))
@@ -140,14 +120,14 @@ type Scanner interface {
 // Use the accessor methods Stage(), Name(), Pattern(), and Severity() for reads.
 type Rule struct {
 	// stage is the pipeline phase this rule applies to; the scanner only evaluates rules whose stage matches ScanContext.Stage.
-	stage    Stage
+	stage    types.ScanStage
 	name     string
 	pattern  *regexp.Regexp
 	severity Severity
 }
 
 // Stage returns the pipeline stage this rule applies to.
-func (r Rule) Stage() Stage { return r.stage }
+func (r Rule) Stage() types.ScanStage { return r.stage }
 
 // Name returns the rule's identifier name.
 func (r Rule) Name() string { return r.name }
@@ -159,7 +139,7 @@ func (r Rule) Pattern() *regexp.Regexp { return r.pattern }
 func (r Rule) Severity() Severity { return r.severity }
 
 // NewRule creates a Rule with validated fields.
-func NewRule(name string, pattern *regexp.Regexp, stage Stage, severity Severity) (Rule, error) {
+func NewRule(name string, pattern *regexp.Regexp, stage types.ScanStage, severity Severity) (Rule, error) {
 	if name == "" {
 		return Rule{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule name must not be empty")
 	}
@@ -341,7 +321,7 @@ func DefaultRules() ([]Rule, error) {
 
 // mustNewRule creates a Rule via NewRule, panicking on error.
 // For use only with compile-time-constant patterns that are known valid.
-func mustNewRule(name string, pattern *regexp.Regexp, stage Stage, severity Severity) Rule {
+func mustNewRule(name string, pattern *regexp.Regexp, stage types.ScanStage, severity Severity) Rule {
 	r, err := NewRule(name, pattern, stage, severity)
 	if err != nil {
 		panic("scanner: invalid built-in rule: " + err.Error())
@@ -367,24 +347,24 @@ func InputRules() ([]Rule, error) {
 		// Allow up to 3 optional words between the verb and the target noun phrase.
 		mustNewRule("instruction_override",
 			regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)(\s+\w+){0,3}\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
-			StageInput, SeverityHigh),
+			types.ScanStageInput, SeverityHigh),
 		mustNewRule("role_confusion",
 			regexp.MustCompile(`(?i)you\s+are\s+now\s+\w+[,.]?\s*(do|ignore|forget|disregard)`),
-			StageInput, SeverityHigh),
+			types.ScanStageInput, SeverityHigh),
 		mustNewRule("delimiter_abuse",
 			regexp.MustCompile("(?i)```system\\b"),
-			StageInput, SeverityMedium),
+			types.ScanStageInput, SeverityMedium),
 		// new_task_injection: 'new task' and 'from now on' require attack-intent
 		// keywords in proximity to avoid false positives on benign messages like
 		// "I have a new task for you" or "From now on, use bullet points".
 		mustNewRule("new_task_injection",
 			regexp.MustCompile(`(?i)((?:new\s+task|from\s+now\s+on)\s*[,:;.!]?\s*(?:ignore|disregard|forget|override|bypass|do\s+not\s+follow|stop\s+following)|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?|guidelines?)\s+(?:do\s+not|don'?t)\s+exist)`),
-			StageInput, SeverityMedium),
+			types.ScanStageInput, SeverityMedium),
 		mustNewRule("system_block_injection",
 			regexp.MustCompile(`(?i)(?:<\|?system\|?>|\[system\]|<<SYS>>)`),
-			StageInput, SeverityHigh),
+			types.ScanStageInput, SeverityHigh),
 	}
-	secrets, err := secretRules(StageInput)
+	secrets, err := secretRules(types.ScanStageInput)
 	if err != nil {
 		return nil, err
 	}
@@ -397,20 +377,20 @@ func ToolRules() []Rule {
 	return []Rule{
 		mustNewRule("system_prompt_leak",
 			regexp.MustCompile(`(?im)^SYSTEM:\s`),
-			StageTool, SeverityHigh),
+			types.ScanStageTool, SeverityHigh),
 		mustNewRule("role_impersonation_open",
 			regexp.MustCompile(`(?i)\[INST\]`),
-			StageTool, SeverityHigh),
+			types.ScanStageTool, SeverityHigh),
 		mustNewRule("role_impersonation_close",
 			regexp.MustCompile(`(?i)\[/INST\]`),
-			StageTool, SeverityHigh),
+			types.ScanStageTool, SeverityHigh),
 	}
 }
 
 // secretRules returns the combined secrets-patterns-db + Sigil-specific secret
 // detection patterns for the given stage. Sigil-specific rules override DB
 // rules with the same name (better precision or coverage).
-func secretRules(stage Stage) ([]Rule, error) {
+func secretRules(stage types.ScanStage) ([]Rule, error) {
 	sigil := sigilSpecificRules(stage)
 	sigilNames := make(map[string]struct{}, len(sigil))
 	for _, r := range sigil {
@@ -434,22 +414,13 @@ func secretRules(stage Stage) ([]Rule, error) {
 }
 
 // OutputRules returns rules for StageOutput: secret/credential detection patterns.
-func OutputRules() ([]Rule, error) { return secretRules(StageOutput) }
+func OutputRules() ([]Rule, error) { return secretRules(types.ScanStageOutput) }
 
 // ToolSecretRules returns rules for StageTool: secret/credential detection patterns.
-func ToolSecretRules() ([]Rule, error) { return secretRules(StageTool) }
+func ToolSecretRules() ([]Rule, error) { return secretRules(types.ScanStageTool) }
 
-// Mode is the scanner detection mode. Aliased from pkg/types for backward compatibility.
-type Mode = types.ScannerMode
-
-const (
-	ModeBlock  = types.ScannerModeBlock
-	ModeFlag   = types.ScannerModeFlag
-	ModeRedact = types.ScannerModeRedact
-)
-
-// ParseMode parses a case-insensitive string into a Mode.
-func ParseMode(s string) (Mode, error) {
+// ParseMode parses a case-insensitive string into a types.ScannerMode.
+func ParseMode(s string) (types.ScannerMode, error) {
 	return types.ParseScannerMode(s)
 }
 
@@ -460,22 +431,22 @@ func ParseMode(s string) (Mode, error) {
 // from the original input if Unicode normalization was applied. Callers are
 // responsible for logging or recording the threat details from ScanResult.Matches.
 // For redact: replaces matched regions with [REDACTED] using ScanResult.Content offsets.
-func ApplyMode(mode Mode, stage Stage, result ScanResult) (string, error) {
+func ApplyMode(mode types.ScannerMode, stage types.ScanStage, result ScanResult) (string, error) {
 	if !result.Threat {
 		return result.Content, nil
 	}
 
 	switch mode {
-	case ModeBlock:
+	case types.ScannerModeBlock:
 		firstRule := "unknown"
 		if len(result.Matches) > 0 {
 			firstRule = result.Matches[0].Rule
 		}
 		code := sigilerr.CodeSecurityScannerInputBlocked
 		switch stage {
-		case StageTool:
+		case types.ScanStageTool:
 			code = sigilerr.CodeSecurityScannerToolBlocked
-		case StageOutput:
+		case types.ScanStageOutput:
 			code = sigilerr.CodeSecurityScannerOutputBlocked
 		}
 		return "", sigilerr.New(code,
@@ -484,9 +455,9 @@ func ApplyMode(mode Mode, stage Stage, result ScanResult) (string, error) {
 			sigilerr.Field("first_rule", firstRule),
 			sigilerr.Field("stage", string(stage)),
 		)
-	case ModeFlag:
+	case types.ScannerModeFlag:
 		return result.Content, nil
-	case ModeRedact:
+	case types.ScannerModeRedact:
 		// Always use the normalized content from the scan result for redaction.
 		// Match offsets are computed against the normalized string; applying
 		// them to the original un-normalized content causes incorrect redaction

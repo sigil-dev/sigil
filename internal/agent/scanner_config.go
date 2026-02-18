@@ -5,30 +5,30 @@ package agent
 
 import (
 	"github.com/sigil-dev/sigil/internal/config"
-	"github.com/sigil-dev/sigil/internal/security/scanner"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 )
 
 // defaultScannerModes is the single source of truth for scanner mode defaults.
 // Input: block (reject prompt injection), Tool: flag (mark for review), Output: redact (strip secrets).
 // DisableOriginTagging defaults to false (tagging enabled) — the zero value is the safe default.
 var defaultScannerModes = ScannerModes{
-	Input:  scanner.ModeBlock,
-	Tool:   scanner.ModeFlag,
-	Output: scanner.ModeRedact,
+	Input:  types.ScannerModeBlock,
+	Tool:   types.ScannerModeFlag,
+	Output: types.ScannerModeRedact,
 	// DisableOriginTagging omitted: false (enabled) is the correct default.
 }
 
 // parseModeField parses a single scanner mode config field.
 // If raw is empty, fallback is returned. Otherwise the value is validated.
-func parseModeField(raw scanner.Mode, name string, fallback scanner.Mode) (scanner.Mode, error) {
+func parseModeField(raw types.ScannerMode, name string, fallback types.ScannerMode) (types.ScannerMode, error) {
 	if raw == "" {
 		return fallback, nil
 	}
 	if !raw.Valid() {
 		return "", sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner %s mode: %q", name, raw)
 	}
-	return scanner.Mode(raw), nil
+	return raw, nil
 }
 
 // NewScannerModesFromConfig converts config.ScannerConfig to agent.ScannerModes.
