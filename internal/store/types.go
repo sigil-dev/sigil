@@ -108,6 +108,24 @@ type ThreatInfo struct {
 	Bypassed bool `json:"bypassed,omitempty"`
 }
 
+// NewCleanScan returns a ThreatInfo for content that was scanned and found clean.
+func NewCleanScan(stage ScanStage) *ThreatInfo {
+	return &ThreatInfo{Scanned: true, Stage: stage}
+}
+
+// NewThreatDetected returns a ThreatInfo for content where a threat was detected.
+// rules must be non-empty.
+func NewThreatDetected(stage ScanStage, rules []string) *ThreatInfo {
+	return &ThreatInfo{Scanned: true, Detected: true, Rules: rules, Stage: stage}
+}
+
+// NewBypassedScan returns a ThreatInfo for content that bypassed scanning
+// (e.g., scanner failure on best-effort path). Scanned is false because
+// no scan ran; Detected is false because no threat was found.
+func NewBypassedScan(stage ScanStage) *ThreatInfo {
+	return &ThreatInfo{Bypassed: true, Stage: stage}
+}
+
 // Message represents a single message in a session conversation.
 type Message struct {
 	ID         string

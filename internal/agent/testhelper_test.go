@@ -1165,6 +1165,7 @@ func (p *mockProviderBatchToolCall) Available(_ context.Context) bool { return t
 func (p *mockProviderBatchToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-batch-tool"}, nil
 }
+
 func (p *mockProviderBatchToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }

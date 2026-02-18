@@ -225,7 +225,7 @@ func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error)
 // invisibleCharReplacer strips zero-width and other invisible Unicode characters
 // to reduce evasion via Unicode homoglyphs. Allocated once at package init.
 var invisibleCharReplacer = strings.NewReplacer(
-	"\x00", "",   // ASCII null byte (not collapsed by NFKC; used to fragment injection phrases)
+	"\x00", "", // ASCII null byte (not collapsed by NFKC; used to fragment injection phrases)
 	"\u200b", "", // zero-width space
 	"\u200c", "", // zero-width non-joiner
 	"\u200d", "", // zero-width joiner
@@ -255,8 +255,12 @@ var invisibleCharReplacer = strings.NewReplacer(
 // Exported so other packages (e.g., the agent loop) can apply the same
 // normalization pipeline.
 func Normalize(s string) string {
-	// 1. Decode HTML entities so that encoded payloads get normalized.
-	s = html.UnescapeString(s)
+	// 1. Decode HTML entities iteratively so that double/triple-encoded
+	// payloads (e.g. &amp;lt;|system|&amp;gt;) are fully decoded.
+	for prev := ""; prev != s; {
+		prev = s
+		s = html.UnescapeString(s)
+	}
 	// 2. Strip zero-width and invisible Unicode characters.
 	s = invisibleCharReplacer.Replace(s)
 	// 3. NFKC normalization collapses compatibility equivalents.
@@ -370,8 +374,11 @@ func InputRules() ([]Rule, error) {
 		mustNewRule("delimiter_abuse",
 			regexp.MustCompile("(?i)```system\\b"),
 			StageInput, SeverityMedium),
+		// new_task_injection: 'new task' and 'from now on' require attack-intent
+		// keywords in proximity to avoid false positives on benign messages like
+		// "I have a new task for you" or "From now on, use bullet points".
 		mustNewRule("new_task_injection",
-			regexp.MustCompile(`(?i)(new\s+task|from\s+now\s+on|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?)\s+(?:do\s+not|don'?t)\s+exist)`),
+			regexp.MustCompile(`(?i)((?:new\s+task|from\s+now\s+on)\s*[,:;.!]?\s*(?:ignore|disregard|forget|override|bypass|do\s+not\s+follow|stop\s+following)|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?|guidelines?)\s+(?:do\s+not|don'?t)\s+exist)`),
 			StageInput, SeverityMedium),
 		mustNewRule("system_block_injection",
 			regexp.MustCompile(`(?i)(?:<\|?system\|?>|\[system\]|<<SYS>>)`),

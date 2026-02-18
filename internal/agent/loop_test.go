@@ -2930,9 +2930,7 @@ func TestAgentLoop_ToolScanContentTooLarge_TruncatesAndRescans(t *testing.T) {
 	assert.LessOrEqual(t, len(sc.lastToolContent), agent.MaxToolContentScanSize,
 		"re-scanned content must be <= maxToolContentScanSize")
 
-	// The scanner fail counter must remain zero — this is not a scanner failure.
-	assert.Equal(t, int64(0), loop.ScannerFailCount(),
-		"content_too_large truncation+rescan must not increment the scanner fail counter")
+	// Successful truncation+rescan is not a scanner failure — no circuit breaker effect.
 }
 
 func TestAgentLoop_ToolScanTruncation_UTF8Boundary(t *testing.T) {
@@ -3386,9 +3384,6 @@ func TestAgentLoop_ScannerFailCounter_IncrementAndReset(t *testing.T) {
 		UserPermissions: security.NewCapabilitySet("tool.*"),
 	}
 
-	// Counter starts at zero.
-	assert.Equal(t, int64(0), loop.ScannerFailCount())
-
 	// A single ProcessMessage dispatches all tool calls within one turn.
 	// The first (threshold-1) tool scans fail (below threshold: best-effort succeeds).
 	// The threshold-th scan succeeds, but the counter retains the accumulated
@@ -3396,8 +3391,6 @@ func TestAgentLoop_ScannerFailCounter_IncrementAndReset(t *testing.T) {
 	out, procErr := loop.ProcessMessage(ctx, msg)
 	require.NoError(t, procErr, "ProcessMessage should succeed: failures are below threshold and last scan succeeds")
 	assert.NotNil(t, out)
-	assert.Equal(t, int64(numFailing), loop.ScannerFailCount(),
-		"counter must retain per-turn total failures (no reset on success)")
 }
 
 func TestAgentLoop_ScannerFailCounter_ResetsOnSuccess(t *testing.T) {
@@ -3419,7 +3412,6 @@ func TestAgentLoop_ScannerFailCounter_ResetsOnSuccess(t *testing.T) {
 		Content:     "Hello",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), loop.ScannerFailCount())
 }
 
 // ---------------------------------------------------------------------------
@@ -3552,19 +3544,15 @@ func TestAgentLoop_ScannerCircuitBreaker_ResetsAfterSuccess(t *testing.T) {
 	}
 
 	// The next call should succeed because the scanner recovers at this call number.
-	// Counter resets to 0 at runToolLoop entry (per-turn isolation).
+	// Counter is local to runToolLoop (per-turn isolation via local var).
 	out, procErr := loop.ProcessMessage(ctx, msg)
 	require.NoError(t, procErr, "call at recovery point should succeed (scanner recovered)")
 	assert.NotNil(t, out)
-	assert.Equal(t, int64(0), loop.ScannerFailCount(),
-		"failure counter should be 0 (per-turn reset at runToolLoop entry)")
 
-	// Subsequent calls should also succeed with the counter staying at 0.
+	// Subsequent calls should also succeed — each turn starts a fresh counter.
 	out, procErr = loop.ProcessMessage(ctx, msg)
 	require.NoError(t, procErr, "call after recovery should succeed")
 	assert.NotNil(t, out)
-	assert.Equal(t, int64(0), loop.ScannerFailCount(),
-		"failure counter should remain 0 after continued success")
 }
 
 // ---------------------------------------------------------------------------
@@ -4102,10 +4090,6 @@ func TestAgentLoop_ToolScanDoubleFailure_BelowThreshold(t *testing.T) {
 	require.NoError(t, procErr, "double-failure below threshold must not fail the turn")
 	assert.NotNil(t, out)
 
-	// scannerFailCount must increment by 1 (the generic re-scan error).
-	assert.Equal(t, int64(1), loop.ScannerFailCount(),
-		"scannerFailCount must be 1 after one double-failure (below threshold)")
-
 	// The persisted tool message must carry Bypassed=true ThreatInfo.
 	history, err := ss.GetActiveWindow(ctx, session.ID, 20)
 	require.NoError(t, err)
@@ -4540,32 +4524,12 @@ func TestAgentLoop_ScannerCircuitBreaker_FreshAcrossInstances(t *testing.T) {
 	loop1, err := agent.NewLoop(cfg1)
 	require.NoError(t, err)
 
-	// Trigger a tool scan failure in Loop 1 to increment its counter.
-	// One failure is below the circuit breaker threshold, so the turn succeeds.
-	_, _ = loop1.ProcessMessage(ctx, msg)
-	assert.Equal(t, int64(1), loop1.ScannerFailCount(),
-		"Loop 1 should have 1 scanner failure after one tool scan error")
-
-	// Loop 2: same config but a brand-new instance — counter must start at zero.
-	toolCallProvider2 := &mockProviderToolCall{
-		toolCall: &provider.ToolCall{
-			ID:        "tc-loop2",
-			Name:      "get_weather",
-			Arguments: `{"city":"Tokyo"}`,
-		},
-	}
-	cfg2 := newTestLoopConfig(t)
-	cfg2.SessionManager = sm
-	cfg2.ProviderRouter = &mockProviderRouter{provider: toolCallProvider2}
-	cfg2.ToolDispatcher = dispatcher
-	cfg2.Scanner = &mockToolErrorScanner{}
-	cfg2.ScannerModes = agent.ScannerModes{Input: scanner.ModeFlag, Tool: scanner.ModeBlock, Output: scanner.ModeRedact}
-	loop2, err := agent.NewLoop(cfg2)
-	require.NoError(t, err)
-
-	// Loop 2's counter must start at zero — no state shared with Loop 1.
-	assert.Equal(t, int64(0), loop2.ScannerFailCount(),
-		"Loop 2 must start with ScannerFailCount=0, not inherit Loop 1's failures")
+	// Trigger a tool scan failure in Loop 1 — one failure is below the circuit
+	// breaker threshold, so the turn succeeds. Counter is local to runToolLoop,
+	// so there's no cross-turn or cross-Loop leakage to verify.
+	out1, procErr := loop1.ProcessMessage(ctx, msg)
+	require.NoError(t, procErr, "one tool scan failure below threshold should succeed")
+	assert.NotNil(t, out1)
 }
 
 // ---------------------------------------------------------------------------
@@ -4584,6 +4548,7 @@ func (p *mockProviderCapturingOptions) Available(_ context.Context) bool { retur
 func (p *mockProviderCapturingOptions) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-options"}, nil
 }
+
 func (p *mockProviderCapturingOptions) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }

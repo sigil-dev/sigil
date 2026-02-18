@@ -11,3 +11,6 @@ const MaxToolContentScanSize = maxToolContentScanSize
 
 // ScannerCircuitBreakerThreshold exposes scannerCircuitBreakerThreshold for white-box testing.
 const ScannerCircuitBreakerThreshold = scannerCircuitBreakerThreshold
+
+// TruncationMarker exposes truncationMarker for white-box testing.
+const TruncationMarker = truncationMarker

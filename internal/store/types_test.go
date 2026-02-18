@@ -273,6 +273,42 @@ func TestTokenBudget_Validate(t *testing.T) {
 	}
 }
 
+// --- ThreatInfo constructors ---
+
+func TestNewCleanScan(t *testing.T) {
+	for _, stage := range []store.ScanStage{store.ScanStageInput, store.ScanStageTool} {
+		ti := store.NewCleanScan(stage)
+		assert.True(t, ti.Scanned)
+		assert.False(t, ti.Detected)
+		assert.False(t, ti.Bypassed)
+		assert.Equal(t, stage, ti.Stage)
+		assert.NoError(t, ti.Validate())
+	}
+}
+
+func TestNewThreatDetected(t *testing.T) {
+	for _, stage := range []store.ScanStage{store.ScanStageInput, store.ScanStageTool} {
+		ti := store.NewThreatDetected(stage, []string{"test_rule"})
+		assert.True(t, ti.Scanned)
+		assert.True(t, ti.Detected)
+		assert.False(t, ti.Bypassed)
+		assert.Equal(t, []string{"test_rule"}, ti.Rules)
+		assert.Equal(t, stage, ti.Stage)
+		assert.NoError(t, ti.Validate())
+	}
+}
+
+func TestNewBypassedScan(t *testing.T) {
+	for _, stage := range []store.ScanStage{store.ScanStageInput, store.ScanStageTool} {
+		ti := store.NewBypassedScan(stage)
+		assert.False(t, ti.Scanned)
+		assert.False(t, ti.Detected)
+		assert.True(t, ti.Bypassed)
+		assert.Equal(t, stage, ti.Stage)
+		assert.NoError(t, ti.Validate())
+	}
+}
+
 // --- ThreatInfo.Validate ---
 
 func TestThreatInfo_Validate(t *testing.T) {

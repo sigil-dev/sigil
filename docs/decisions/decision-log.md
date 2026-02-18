@@ -975,7 +975,7 @@ The threshold value (3) was chosen to tolerate:
 
 - A single transient regex engine error
 - A pair of rapid consecutive failures from the same edge case
-while catching:
+  while catching:
 
 - Persistent scanner misconfiguration
 - Systematic regex compilation failures after a bad rules update
@@ -1024,10 +1024,10 @@ while catching:
 
 **Defense matrix — updated state (not modifying design doc):**
 
-| Attack Vector | Previous status | Current status |
-| --- | --- | --- |
+| Attack Vector                     | Previous status     | Current status     |
+| --------------------------------- | ------------------- | ------------------ |
 | Prompt injection via user message | Phase 8+, sigil-39g | Implemented (D062) |
-| Prompt injection via tool result | Phase 8+, sigil-j32 | Implemented (D062) |
+| Prompt injection via tool result  | Phase 8+, sigil-j32 | Implemented (D062) |
 
 All other rows in the defense matrix (tool escalation, infinite loops, cost explosion, plugin data exfiltration, session hijacking, config poisoning) were already implemented and unchanged.
 
@@ -1068,3 +1068,45 @@ All other rows in the defense matrix (tool escalation, infinite loops, cost expl
 **Rationale:** The immutability rule exists to prevent unilateral architectural changes that bypass review. A self-authored AI decision log entry does not constitute the "explicit human maintainer approval" required to override a MUST NOT rule. The decision log is the correct and sufficient record of what has been built.
 
 **Ref:** D065 (revoked), D068, sigil-7g5.482
+
+---
+
+## D071: Circuit Breaker Reset Correction — Turn Boundary, Not Per-Scan
+
+**Status:** Accepted
+
+**Question:** How does the scanner circuit breaker counter reset?
+
+**Context:** D066 states: "The circuit breaker counter resets on any successful scan, so recovery is automatic once the underlying issue resolves." The actual implementation resets only at the turn boundary (`l.scannerFailCount.Store(0)` in `runToolLoop` entry). `applyScannedResult` explicitly documents: "The per-turn scanner failure counter is NOT reset here; it only resets at the start of each runToolLoop call."
+
+**Options considered:**
+
+1. Update D066 in place — rejected (decision log entries are append-only corrections)
+2. Add correction entry — accepted
+
+**Decision:** The circuit breaker counter resets at the start of each turn (`runToolLoop` call), not on individual successful scans mid-turn. Once tripped (3 consecutive failures within a turn), it stays tripped for the remainder of that turn. The next turn starts fresh. D066's claim about automatic recovery via successful scans is incorrect.
+
+**Rationale:** Per-turn reset is simpler and more predictable than mid-turn recovery. The agent loop's natural unit of work is a turn; allowing mid-turn recovery would create complex re-trip-and-reset dynamics.
+
+**Ref:** PR #17, sigil-7g5.502, D066, `internal/agent/loop.go`
+
+---
+
+## D072: Origin Does Not Influence Scanner Rule Selection
+
+**Status:** Accepted
+
+**Question:** Does the Origin field influence scanner rule selection?
+
+**Context:** D062 item 4 states: "Origin tagging on provider.Message — enables context-aware rule selection (e.g., stricter rules for user input vs. system prompts)." The implementation contradicts this. `scanner.Scan()` documents: "Origin does not influence which rules are evaluated. Rule selection is determined exclusively by Stage." The Rule struct has a stage field for filtering but no origin-based filtering.
+
+**Options considered:**
+
+1. Implement origin-based rule filtering — rejected (adds complexity for unclear security benefit)
+2. Correct D062's claim via new decision entry — accepted
+
+**Decision:** Origin is audit/logging metadata only. Rule selection is determined exclusively by Stage. D062's claim about context-aware rule selection via Origin is inaccurate — it describes a design intent that was not implemented.
+
+**Rationale:** Stage-only rule selection keeps the scanner simple and predictable. Origin adds audit granularity (e.g., "was this scan for user input or system prompt?") without affecting security posture. Adding origin-based rule filtering would increase scanner complexity with questionable value.
+
+**Ref:** PR #17, sigil-7g5.494, D062, `internal/security/scanner/scanner.go:271-274`
