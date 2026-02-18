@@ -644,7 +644,11 @@ func TestToolDispatcher_TimeoutVsCancellation(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled, "expected context.Canceled, not timeout")
 }
 
-func TestToolDispatcher_AuditNotCalledOnDeny(t *testing.T) {
+// TestToolDispatcher_AuditCalledOnDeny verifies that an audit entry with
+// result="denied" is written when the capability enforcer blocks a tool call
+// (sigil-7g5.343). Security teams need visibility into capability probing even
+// when the call is blocked before execution.
+func TestToolDispatcher_AuditCalledOnDeny(t *testing.T) {
 	auditStore := newMockAuditStore()
 
 	d, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
@@ -656,7 +660,7 @@ func TestToolDispatcher_AuditNotCalledOnDeny(t *testing.T) {
 
 	result, err := d.Execute(context.Background(), agent.ToolCallRequest{
 		ToolName:        "search",
-		Arguments:       `{}`,
+		Arguments:       `{"q":"test"}`,
 		SessionID:       "sess-1",
 		WorkspaceID:     "ws-1",
 		PluginName:      "test-plugin",
@@ -669,7 +673,14 @@ func TestToolDispatcher_AuditNotCalledOnDeny(t *testing.T) {
 
 	auditStore.mu.Lock()
 	defer auditStore.mu.Unlock()
-	assert.Len(t, auditStore.entries, 0, "no audit entry should be created when capability is denied")
+	require.Len(t, auditStore.entries, 1, "one audit entry must be created when capability is denied")
+	entry := auditStore.entries[0]
+	assert.Equal(t, "denied", entry.Result, "audit result must be 'denied'")
+	assert.Equal(t, "tool_dispatch", entry.Action)
+	// Verify arguments are captured in the audit entry.
+	args, ok := entry.Details["tool_arguments"]
+	assert.True(t, ok, "audit entry must include tool_arguments")
+	assert.Equal(t, `{"q":"test"}`, args, "tool_arguments should match the request")
 }
 
 func TestToolDispatcher_AuditFailureDoesNotFailExecution(t *testing.T) {

@@ -146,6 +146,7 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("security.scanner.input", "block")
 	v.SetDefault("security.scanner.tool", "flag")
 	v.SetDefault("security.scanner.output", "redact")
+	v.SetDefault("security.scanner.allow_permissive_input_mode", false)
 }
 
 // SetupEnv configures environment variable binding on v with prefix SIGIL_.
@@ -410,10 +411,13 @@ func (c *Config) validateSecurity() []error {
 	// to prevent env injection from weakening security scanning in production.
 	// All scanner mode fields (input, tool, output, allow_permissive_input_mode)
 	// must be configured exclusively via the config file.
-	// NOTE: os.Getenv is called after AutomaticEnv, creating a theoretical
-	// TOCTOU window of microseconds between env reads. The practical risk is
-	// negligible — an attacker would need process-level access to exploit it.
-	// Accepted tradeoff: env-var guard is defense-in-depth, not the primary control.
+	//
+	// Defense-in-depth: Viper's AutomaticEnv() has already bound these env vars
+	// to config keys by the time Validate() is called. However, Validate() runs
+	// before any component reads the config, so this guard effectively prevents
+	// env-var-based scanner mode changes from taking effect. The os.Getenv check
+	// provides an explicit, auditable rejection point that surfaces the violation
+	// as a startup error rather than silently accepting the value.
 	blockedScannerEnvVars := []struct {
 		envVar string
 		field  string

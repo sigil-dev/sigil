@@ -10,6 +10,10 @@
 
 **Worktree:** `.worktrees/security-pipeline` (branch: `feat/agent-loop-security-pipeline`)
 
+> **Note:** Code snippets below reflect the initial design. The final API signature is
+> `ApplyMode(mode scanner.Mode, stage scanner.Stage, result scanner.ScanResult) (string, error)`
+> where content is inside `ScanResult.Content` — see `scanner.go` for the current implementation.
+
 ---
 
 ## Task 1: Add Error Codes and Origin Type

@@ -56,7 +56,9 @@ func (s Severity) Valid() bool {
 
 // ScanContext provides context for the scan.
 type ScanContext struct {
-	Stage    Stage
+	Stage Stage
+	// Origin is recorded in scan results for audit and logging purposes; it does
+	// not affect which rules are evaluated. Rule filtering uses only Stage.
 	Origin   Origin
 	Metadata map[string]string
 }
@@ -80,7 +82,10 @@ func NewScanContext(stage Stage, origin Origin, metadata map[string]string) Scan
 
 // ScanResult holds the outcome of a scan.
 type ScanResult struct {
-	Threat  bool
+	Threat bool
+	// Matches must not be mutated after Scan returns. The slice offsets reference
+	// Content (the normalized form); sorting, filtering, or appending to Matches
+	// may invalidate the offset invariant used by ApplyMode for redaction.
 	Matches []Match
 	// Content holds the normalized content after Scan processing (NFKC +
 	// zero-width character stripping). Match.Location()/Length() are byte offsets
@@ -127,13 +132,27 @@ type Scanner interface {
 }
 
 // Rule defines a detection pattern.
+// All fields are unexported to enforce construction via NewRule, which validates invariants.
+// Use the accessor methods Stage(), Name(), Pattern(), and Severity() for reads.
 type Rule struct {
-	// Stage is the pipeline phase this rule applies to; the scanner only evaluates rules whose Stage matches ScanContext.Stage.
-	Stage    Stage
-	Name     string
-	Pattern  *regexp.Regexp
-	Severity Severity
+	// stage is the pipeline phase this rule applies to; the scanner only evaluates rules whose stage matches ScanContext.Stage.
+	stage    Stage
+	name     string
+	pattern  *regexp.Regexp
+	severity Severity
 }
+
+// Stage returns the pipeline stage this rule applies to.
+func (r Rule) Stage() Stage { return r.stage }
+
+// Name returns the rule's identifier name.
+func (r Rule) Name() string { return r.name }
+
+// Pattern returns the compiled regex pattern for this rule.
+func (r Rule) Pattern() *regexp.Regexp { return r.pattern }
+
+// Severity returns the severity level of this rule.
+func (r Rule) Severity() Severity { return r.severity }
 
 // NewRule creates a Rule with validated fields.
 func NewRule(name string, pattern *regexp.Regexp, stage Stage, severity Severity) (Rule, error) {
@@ -150,10 +169,10 @@ func NewRule(name string, pattern *regexp.Regexp, stage Stage, severity Severity
 		return Rule{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %s has invalid severity %q", name, severity)
 	}
 	return Rule{
-		Name:     name,
-		Pattern:  pattern,
-		Stage:    stage,
-		Severity: severity,
+		name:     name,
+		pattern:  pattern,
+		stage:    stage,
+		severity: severity,
 	}, nil
 }
 
@@ -180,25 +199,24 @@ func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error)
 	copied := make([]Rule, len(rules))
 	for i, r := range rules {
 		// Validate rules in the same loop that copies them.
-		if r.Pattern == nil {
-			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has nil pattern", i, r.Name)
+		if r.pattern == nil {
+			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has nil pattern", i, r.name)
 		}
-		if !r.Stage.Valid() {
-			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid stage %q", i, r.Name, r.Stage)
+		if !r.stage.Valid() {
+			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid stage %q", i, r.name, r.stage)
 		}
-		if r.Name == "" {
+		if r.name == "" {
 			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d has empty name", i)
 		}
-		if !r.Severity.Valid() {
-			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid severity %q", i, r.Name, r.Severity)
+		if !r.severity.Valid() {
+			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid severity %q", i, r.name, r.severity)
 		}
-		// Deep-copy the rule.
-		copied[i] = Rule{
-			Stage:    r.Stage,
-			Name:     r.Name,
-			Pattern:  regexp.MustCompile(r.Pattern.String()),
-			Severity: r.Severity,
+		// Deep-copy the rule via NewRule to guarantee invariants.
+		c, err := NewRule(r.name, regexp.MustCompile(r.pattern.String()), r.stage, r.severity)
+		if err != nil {
+			return nil, err
 		}
+		copied[i] = c
 	}
 	s := &RegexScanner{rules: copied, maxContentLength: DefaultMaxContentLength}
 	for _, opt := range opts {
@@ -255,10 +273,16 @@ func Normalize(s string) string {
 // The context.Context parameter is intentionally discarded: Go RE2 guarantees
 // linear-time matching, so mid-scan cancellation is unnecessary for typical
 // content sizes. The interface accepts context for future Scanner implementations.
+//
+// opts.Origin is validated and stored in the returned ScanResult for audit and
+// logging purposes only; it does not influence which rules are evaluated. Rule
+// selection is determined exclusively by opts.Stage.
 func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext) (ScanResult, error) {
 	if !opts.Stage.Valid() {
 		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan stage: %q", opts.Stage)
 	}
+	// opts.Origin is validated here to catch misconfigured callers early.
+	// It is metadata for audit/logging and does not affect rule evaluation.
 	if !opts.Origin.Valid() {
 		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan origin: %q", opts.Origin)
 	}
@@ -288,12 +312,12 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 	result := ScanResult{Content: content}
 
 	for _, rule := range s.rules {
-		if rule.Stage != opts.Stage {
+		if rule.stage != opts.Stage {
 			continue
 		}
-		locs := rule.Pattern.FindAllStringIndex(content, -1)
+		locs := rule.pattern.FindAllStringIndex(content, -1)
 		for _, loc := range locs {
-			m, err := NewMatch(rule.Name, loc[0], loc[1]-loc[0], rule.Severity)
+			m, err := NewMatch(rule.name, loc[0], loc[1]-loc[0], rule.severity)
 			if err != nil {
 				return ScanResult{}, err
 			}
@@ -323,42 +347,37 @@ func DefaultRules() ([]Rule, error) {
 	return slices.Concat(input, ToolRules(), toolSecrets, output), nil
 }
 
+// mustNewRule creates a Rule via NewRule, panicking on error.
+// For use only with compile-time-constant patterns that are known valid.
+func mustNewRule(name string, pattern *regexp.Regexp, stage Stage, severity Severity) Rule {
+	r, err := NewRule(name, pattern, stage, severity)
+	if err != nil {
+		panic("scanner: invalid built-in rule: " + err.Error())
+	}
+	return r
+}
+
 // InputRules returns rules for StageInput: prompt injection, instruction override,
 // and secret detection patterns. Secrets in user input are blocked (default mode)
 // before reaching the LLM, preventing accidental credential forwarding.
 func InputRules() ([]Rule, error) {
 	injection := []Rule{
-		{
-			// Allow up to 3 optional words between the verb and the target noun phrase.
-			Name:     "instruction_override",
-			Pattern:  regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)(\s+\w+){0,3}\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
-			Stage:    StageInput,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "role_confusion",
-			Pattern:  regexp.MustCompile(`(?i)you\s+are\s+now\s+\w+[,.]?\s*(do|ignore|forget|disregard)`),
-			Stage:    StageInput,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "delimiter_abuse",
-			Pattern:  regexp.MustCompile("(?i)```system\\b"),
-			Stage:    StageInput,
-			Severity: SeverityMedium,
-		},
-		{
-			Name:     "new_task_injection",
-			Pattern:  regexp.MustCompile(`(?i)(new\s+task|from\s+now\s+on|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?)\s+(?:do\s+not|don'?t)\s+exist)`),
-			Stage:    StageInput,
-			Severity: SeverityMedium,
-		},
-		{
-			Name:     "system_block_injection",
-			Pattern:  regexp.MustCompile(`(?i)(?:<\|?system\|?>|\[system\]|<<SYS>>)`),
-			Stage:    StageInput,
-			Severity: SeverityHigh,
-		},
+		// Allow up to 3 optional words between the verb and the target noun phrase.
+		mustNewRule("instruction_override",
+			regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)(\s+\w+){0,3}\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
+			StageInput, SeverityHigh),
+		mustNewRule("role_confusion",
+			regexp.MustCompile(`(?i)you\s+are\s+now\s+\w+[,.]?\s*(do|ignore|forget|disregard)`),
+			StageInput, SeverityHigh),
+		mustNewRule("delimiter_abuse",
+			regexp.MustCompile("(?i)```system\\b"),
+			StageInput, SeverityMedium),
+		mustNewRule("new_task_injection",
+			regexp.MustCompile(`(?i)(new\s+task|from\s+now\s+on|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?)\s+(?:do\s+not|don'?t)\s+exist)`),
+			StageInput, SeverityMedium),
+		mustNewRule("system_block_injection",
+			regexp.MustCompile(`(?i)(?:<\|?system\|?>|\[system\]|<<SYS>>)`),
+			StageInput, SeverityHigh),
 	}
 	secrets, err := secretRules(StageInput)
 	if err != nil {
@@ -371,24 +390,15 @@ func InputRules() ([]Rule, error) {
 // These are static patterns that do not depend on the secrets DB.
 func ToolRules() []Rule {
 	return []Rule{
-		{
-			Name:     "system_prompt_leak",
-			Pattern:  regexp.MustCompile(`(?im)^SYSTEM:\s`),
-			Stage:    StageTool,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "role_impersonation_open",
-			Pattern:  regexp.MustCompile(`(?i)\[INST\]`),
-			Stage:    StageTool,
-			Severity: SeverityHigh,
-		},
-		{
-			Name:     "role_impersonation_close",
-			Pattern:  regexp.MustCompile(`(?i)\[/INST\]`),
-			Stage:    StageTool,
-			Severity: SeverityHigh,
-		},
+		mustNewRule("system_prompt_leak",
+			regexp.MustCompile(`(?im)^SYSTEM:\s`),
+			StageTool, SeverityHigh),
+		mustNewRule("role_impersonation_open",
+			regexp.MustCompile(`(?i)\[INST\]`),
+			StageTool, SeverityHigh),
+		mustNewRule("role_impersonation_close",
+			regexp.MustCompile(`(?i)\[/INST\]`),
+			StageTool, SeverityHigh),
 	}
 }
 
@@ -399,7 +409,7 @@ func secretRules(stage Stage) ([]Rule, error) {
 	sigil := sigilSpecificRules(stage)
 	sigilNames := make(map[string]bool, len(sigil))
 	for _, r := range sigil {
-		sigilNames[r.Name] = true
+		sigilNames[r.name] = true
 	}
 
 	db, err := loadDBRules(stage)
@@ -410,7 +420,7 @@ func secretRules(stage Stage) ([]Rule, error) {
 	// Filter DB rules that collide with Sigil-specific names.
 	filtered := make([]Rule, 0, len(db))
 	for _, r := range db {
-		if !sigilNames[r.Name] {
+		if !sigilNames[r.name] {
 			filtered = append(filtered, r)
 		}
 	}
@@ -440,8 +450,10 @@ func ParseMode(s string) (Mode, error) {
 
 // ApplyMode applies the detection mode to the scan result.
 // For block: returns an error with a stage-specific error code if threat detected.
-// For flag: returns the content unchanged. Callers are responsible for
-// logging or recording the threat details from ScanResult.Matches.
+// For flag: returns the normalized content from ScanResult unchanged. Note that
+// ScanResult.Content is the NFKC-normalized form produced by Scan; it may differ
+// from the original input if Unicode normalization was applied. Callers are
+// responsible for logging or recording the threat details from ScanResult.Matches.
 // For redact: replaces matched regions with [REDACTED] using ScanResult.Content offsets.
 func ApplyMode(mode Mode, stage Stage, result ScanResult) (string, error) {
 	if !result.Threat {

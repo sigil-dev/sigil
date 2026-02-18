@@ -7,6 +7,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/security/scanner"
@@ -199,48 +200,19 @@ func TestRegexScanner_StageFiltering(t *testing.T) {
 	assert.False(t, result.Threat, "input injection pattern should not trigger on output stage")
 }
 
-// Finding .65 — NewRegexScanner validation tests.
+// Finding .65 — NewRegexScanner validation: since Rule fields are unexported,
+// invalid Rules cannot be constructed from outside the package. Validation
+// is exercised via NewRule (see TestNewRule). This test verifies that a valid
+// rule created via NewRule is accepted by NewRegexScanner.
 func TestNewRegexScanner_Validation(t *testing.T) {
-	validRule := scanner.Rule{
-		Name:     "valid_rule",
-		Pattern:  regexp.MustCompile(`foo`),
-		Stage:    scanner.StageInput,
-		Severity: scanner.SeverityLow,
-	}
+	validRule, err := scanner.NewRule("valid_rule", regexp.MustCompile(`foo`), scanner.StageInput, scanner.SeverityLow)
+	require.NoError(t, err)
 
 	tests := []struct {
 		name    string
 		rules   []scanner.Rule
 		wantErr bool
 	}{
-		{
-			name: "nil pattern returns error",
-			rules: []scanner.Rule{
-				{Name: "no_pattern", Pattern: nil, Stage: scanner.StageInput, Severity: scanner.SeverityLow},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid stage returns error",
-			rules: []scanner.Rule{
-				{Name: "bad_stage", Pattern: regexp.MustCompile(`x`), Stage: scanner.Stage("invalid"), Severity: scanner.SeverityLow},
-			},
-			wantErr: true,
-		},
-		{
-			name: "empty name returns error",
-			rules: []scanner.Rule{
-				{Name: "", Pattern: regexp.MustCompile(`x`), Stage: scanner.StageInput, Severity: scanner.SeverityLow},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid severity returns error",
-			rules: []scanner.Rule{
-				{Name: "bad_sev", Pattern: regexp.MustCompile(`x`), Stage: scanner.StageInput, Severity: scanner.Severity("critical")},
-			},
-			wantErr: true,
-		},
 		{
 			name:    "valid rule succeeds",
 			rules:   []scanner.Rule{validRule},
@@ -267,8 +239,8 @@ func TestToolSecretRules_StageIsTool(t *testing.T) {
 	rules := mustToolSecretRules(t)
 	require.NotEmpty(t, rules, "ToolSecretRules must return at least one rule")
 	for _, r := range rules {
-		assert.Equal(t, scanner.StageTool, r.Stage,
-			"rule %q: expected StageTool, got %q", r.Name, r.Stage)
+		assert.Equal(t, scanner.StageTool, r.Stage(),
+			"rule %q: expected StageTool, got %q", r.Name(), r.Stage())
 	}
 }
 
@@ -277,20 +249,11 @@ func TestScan_OverlappingRedaction(t *testing.T) {
 	// Two rules whose patterns overlap on the same content region.
 	// "AKIAIOSFODNN7EXAMPLE" triggers aws_access_key.
 	// A second rule matches a wider span that includes the same bytes.
-	rules := []scanner.Rule{
-		{
-			Name:     "overlap_narrow",
-			Pattern:  regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-			Stage:    scanner.StageOutput,
-			Severity: scanner.SeverityHigh,
-		},
-		{
-			Name:     "overlap_wide",
-			Pattern:  regexp.MustCompile(`AKIA[0-9A-Z]{16}(EXTRA)?`),
-			Stage:    scanner.StageOutput,
-			Severity: scanner.SeverityHigh,
-		},
-	}
+	narrowRule, err := scanner.NewRule("overlap_narrow", regexp.MustCompile(`AKIA[0-9A-Z]{16}`), scanner.StageOutput, scanner.SeverityHigh)
+	require.NoError(t, err)
+	wideRule, err := scanner.NewRule("overlap_wide", regexp.MustCompile(`AKIA[0-9A-Z]{16}(EXTRA)?`), scanner.StageOutput, scanner.SeverityHigh)
+	require.NoError(t, err)
+	rules := []scanner.Rule{narrowRule, wideRule}
 
 	s, err := scanner.NewRegexScanner(rules)
 	require.NoError(t, err)
@@ -347,14 +310,11 @@ func TestScan_ContentTooLargeReturnsError(t *testing.T) {
 
 // Finding .78 — Unicode normalization bypass.
 func TestScan_UnicodeNormalizationBypass(t *testing.T) {
-	rules := []scanner.Rule{
-		{
-			Name:     "instruction_override",
-			Pattern:  regexp.MustCompile(`(?i)ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
-			Stage:    scanner.StageInput,
-			Severity: scanner.SeverityHigh,
-		},
-	}
+	r, err := scanner.NewRule("instruction_override",
+		regexp.MustCompile(`(?i)ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
+		scanner.StageInput, scanner.SeverityHigh)
+	require.NoError(t, err)
+	rules := []scanner.Rule{r}
 
 	s, err := scanner.NewRegexScanner(rules)
 	require.NoError(t, err)
@@ -870,7 +830,7 @@ func TestToolSecretRules_IncludesSigilSpecificPatterns(t *testing.T) {
 	rules := mustToolSecretRules(t)
 	ruleNames := make(map[string]bool, len(rules))
 	for _, r := range rules {
-		ruleNames[r.Name] = true
+		ruleNames[r.Name()] = true
 	}
 
 	// Sigil-specific rules not in the upstream DB or with better precision.
@@ -963,10 +923,10 @@ func TestNewRule(t *testing.T) {
 					"expected CodeSecurityScannerFailure, got: %v", err)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tt.ruleName, rule.Name)
-				assert.Equal(t, tt.pattern, rule.Pattern)
-				assert.Equal(t, tt.stage, rule.Stage)
-				assert.Equal(t, tt.severity, rule.Severity)
+				assert.Equal(t, tt.ruleName, rule.Name())
+				assert.Equal(t, tt.pattern, rule.Pattern())
+				assert.Equal(t, tt.stage, rule.Stage())
+				assert.Equal(t, tt.severity, rule.Severity())
 			}
 		})
 	}
@@ -1176,6 +1136,27 @@ func TestSecretRules_MSSQLAndGoogleAPIKey(t *testing.T) {
 			assert.True(t, ruleFound, "expected rule %q to match, got matches: %v", tt.ruleName, result.Matches)
 		})
 	}
+}
+
+// Finding sigil-7g5.344 — Concurrent scan: 100 goroutines on the same RegexScanner instance.
+// Run with -race to confirm no data races.
+func TestRegexScanner_ConcurrentScan(t *testing.T) {
+	t.Parallel()
+	rules := mustDefaultRules(t)
+	s, err := scanner.NewRegexScanner(rules)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := s.Scan(context.Background(), "test content with AWS_SECRET=AKIAIOSFODNN7EXAMPLE", scanner.ScanContext{Stage: scanner.StageInput, Origin: scanner.OriginUser})
+			assert.NoError(t, err)
+			_ = result
+		}()
+	}
+	wg.Wait()
 }
 
 // Finding .269 — NewMatch validates negative location/length offsets.

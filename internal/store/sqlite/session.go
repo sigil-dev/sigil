@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	tool_call_id TEXT NOT NULL DEFAULT '',
 	tool_name   TEXT NOT NULL DEFAULT '',
 	threat_info TEXT NOT NULL DEFAULT '{}',
+	origin      TEXT NOT NULL DEFAULT '',
 	created_at  TEXT NOT NULL,
 	metadata    TEXT NOT NULL DEFAULT '{}',
 	FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE

@@ -75,6 +75,16 @@ const (
 )
 
 // ThreatInfo records security scanner findings for audit persistence.
+//
+// Callers MUST distinguish three semantic states via pointer nilness:
+//   - nil *ThreatInfo: scanner did not run (legacy message or pre-scanner code path)
+//   - &ThreatInfo{Detected: false}: scanner ran and found no threats
+//   - &ThreatInfo{Detected: true, ...}: scanner detected threats
+//
+// Note: JSON serialization does not preserve the nil vs empty distinction — both
+// nil and &ThreatInfo{} serialize to `{}`. This is a known limitation for audit
+// queries on historical data; callers relying on nil-as-unscanned semantics MUST
+// use the in-memory representation rather than round-tripping through JSON.
 type ThreatInfo struct {
 	Detected bool      `json:"detected"`
 	Rules    []string  `json:"rules"`

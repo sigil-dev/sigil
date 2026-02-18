@@ -1150,3 +1150,53 @@ func (p *mockProviderRepeatingToolCall) Chat(_ context.Context, _ provider.ChatR
 	close(ch)
 	return ch, nil
 }
+
+// mockProviderBatchToolCall emits all provided tool calls in a single first Chat() response,
+// then a text response on all subsequent calls. This allows testing scenarios where multiple
+// tool scans occur within a single tool-loop iteration (i.e., within one turn).
+type mockProviderBatchToolCall struct {
+	mu        sync.Mutex
+	callNum   int
+	toolCalls []*provider.ToolCall
+}
+
+func (p *mockProviderBatchToolCall) Name() string                     { return "mock-batch-tool" }
+func (p *mockProviderBatchToolCall) Available(_ context.Context) bool { return true }
+func (p *mockProviderBatchToolCall) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return provider.ProviderStatus{Available: true, Provider: "mock-batch-tool"}, nil
+}
+func (p *mockProviderBatchToolCall) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (p *mockProviderBatchToolCall) Close() error { return nil }
+
+func (p *mockProviderBatchToolCall) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	p.mu.Lock()
+	call := p.callNum
+	p.callNum++
+	p.mu.Unlock()
+
+	ch := make(chan provider.ChatEvent, len(p.toolCalls)+2)
+	if call == 0 {
+		// First call: emit all tool calls in one response.
+		for _, tc := range p.toolCalls {
+			ch <- provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				ToolCall: tc,
+			}
+		}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 10, OutputTokens: 2},
+		}
+	} else {
+		// Subsequent calls: emit a text response.
+		ch <- provider.ChatEvent{Type: provider.EventTypeTextDelta, Text: "All tools processed."}
+		ch <- provider.ChatEvent{
+			Type:  provider.EventTypeDone,
+			Usage: &provider.Usage{InputTokens: 20, OutputTokens: 8},
+		}
+	}
+	close(ch)
+	return ch, nil
+}

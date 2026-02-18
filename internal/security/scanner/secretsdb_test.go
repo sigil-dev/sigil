@@ -31,7 +31,7 @@ func TestSecretsDB_HighConfidenceCount(t *testing.T) {
 	}
 	dbCount := 0
 	for _, r := range rules {
-		if !sigilNames[r.Name] {
+		if !sigilNames[r.Name()] {
 			dbCount++
 		}
 	}
@@ -46,7 +46,7 @@ func TestSecretsDB_HighConfidenceCount(t *testing.T) {
 func TestSecretsDB_AllPatternsCompile(t *testing.T) {
 	rules := mustOutputRules(t)
 	for _, r := range rules {
-		assert.NotNil(t, r.Pattern, "rule %q has nil pattern", r.Name)
+		assert.NotNil(t, r.Pattern(), "rule %q has nil pattern", r.Name())
 	}
 }
 
@@ -55,10 +55,10 @@ func TestSecretsDB_NoDuplicateNames(t *testing.T) {
 	rules := mustOutputRules(t)
 	seen := make(map[string]bool, len(rules))
 	for _, r := range rules {
-		if seen[r.Name] {
-			t.Errorf("duplicate rule name: %q", r.Name)
+		if seen[r.Name()] {
+			t.Errorf("duplicate rule name: %q", r.Name())
 		}
-		seen[r.Name] = true
+		seen[r.Name()] = true
 	}
 }
 
@@ -69,7 +69,7 @@ func TestToSnakeCase(t *testing.T) {
 	rules := mustOutputRules(t)
 	ruleNames := make(map[string]bool, len(rules))
 	for _, r := range rules {
-		ruleNames[r.Name] = true
+		ruleNames[r.Name()] = true
 	}
 
 	// "AWS API Key" -> "aws_api_key"

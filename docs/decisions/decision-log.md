@@ -928,3 +928,76 @@ The design doc's "512KB" reference describes only the truncation fallback, not t
 **Rationale:** 1MB accommodates typical tool results (API responses, file contents) without truncation. The 512KB fallback ensures that even oversized results get some scanning coverage rather than passing through unscanned. The truncation marker (`[TRUNCATED: tool result exceeded scan limit]`) informs the LLM that data is incomplete, preventing incorrect reasoning from partial results.
 
 **Ref:** `internal/security/scanner/scanner.go` `DefaultMaxContentLength`, `internal/agent/loop.go` `maxToolContentScanSize`, `docs/design/03-security-model.md` Step 6, sigil-7g5.329
+
+---
+
+## D065: Design Doc Update for Security Scanner Implementation Status
+
+**Status:** Accepted
+
+**Question:** PR #17 modifies `docs/design/03-security-model.md` to remove Phase 8+ deferred markers and update the defense matrix. The project convention is "MUST NOT modify docs/design/ files" — they are treated as immutable specs. Is this modification justified?
+
+**Context:** The plan document (docs/plans/2026-02-17-agent-loop-security-pipeline.md Task 6) explicitly instructed updating the design doc to reflect implementation status. The changes are status updates (marking deferred items as implemented, updating the defense matrix) — not architectural changes to the spec itself.
+
+**Options considered:**
+
+- Revert the design doc changes — rejected: the defense matrix now accurately reflects implemented state. Reverting would leave the design doc showing "deferred" for features that are actually implemented, misleading future developers.
+- Keep changes with decision record (chosen) — acknowledge the deviation, clarify that status updates to design docs are acceptable when documented.
+- Move status tracking to a separate file — rejected: would fragment the security model documentation across multiple files without clear benefit.
+
+**Decision:** Accept the design doc modification. Status updates (marking deferred features as implemented, updating defense matrices to reflect actual state) are a permissible exception to the "MUST NOT modify docs/design/" rule, provided each instance is documented in this decision log.
+
+**Rationale:** The intent of the immutability rule is to prevent unilateral architectural changes that bypass review. Updating implementation status annotations preserves the architectural content while keeping the document current. The alternative — a permanently stale defense matrix — would be more harmful than a controlled update with a decision record.
+
+**Ref:** PR #17, sigil-7g5.364
+
+---
+
+## D066: Scanner Circuit Breaker — Fail-Closed After Consecutive Failures
+
+**Status:** Accepted
+
+**Question:** The tool-stage scanner operates in best-effort mode (D062: "log a warning and continue"). But what happens when the scanner fails repeatedly? Unbounded best-effort means persistent scanner failures silently degrade security indefinitely.
+
+**Context:** The implementation adds a circuit breaker (`scannerCircuitBreakerThreshold = 3`) on the tool-stage scan path. After 3 consecutive scanner internal failures, the loop transitions from best-effort (pass-through with warning) to fail-closed (block with `CodeSecurityScannerCircuitBreakerOpen`). This behavior is not described in D062.
+
+**Options considered:**
+
+- Unbounded best-effort (D062 as written) — rejected: a persistently failing scanner would silently pass all tool output unscanned forever, creating an invisible security gap.
+- Fail-closed immediately on first failure — rejected: too aggressive. Transient regex engine errors or one-off edge cases should not halt the agent loop.
+- Circuit breaker with threshold (chosen) — 3 consecutive failures triggers fail-closed. Balances availability (transient errors tolerated) with security (persistent failures caught).
+
+**Decision:** Add a circuit breaker to the best-effort tool-stage scanner path. After `scannerCircuitBreakerThreshold` (3) consecutive scanner internal failures, the agent loop returns `CodeSecurityScannerCircuitBreakerOpen` and blocks further tool execution until a successful scan resets the counter.
+
+The threshold value (3) was chosen to tolerate:
+
+- A single transient regex engine error
+- A pair of rapid consecutive failures from the same edge case
+while catching:
+
+- Persistent scanner misconfiguration
+- Systematic regex compilation failures after a bad rules update
+
+**Rationale:** D062 describes the steady-state best-effort behavior but does not address the failure accumulation case. This decision extends D062 with a safety net: best-effort is the default, but the system refuses to operate indefinitely without security scanning. The circuit breaker counter resets on any successful scan, so recovery is automatic once the underlying issue resolves.
+
+**Ref:** `internal/agent/loop.go` `scannerCircuitBreakerThreshold`, `CodeSecurityScannerCircuitBreakerOpen`, D062, sigil-7g5.367
+
+---
+
+## D067: Non-English Prompt Injection — Accepted Risk for v1
+
+**Status:** Accepted (extends D063)
+
+**Question:** PR #17 review identified that the English-only regex scanner limitation (D063) should be explicitly documented as an accepted security risk with a future mitigation path.
+
+**Context:** D063 established the English-only limitation as a known constraint. This decision extends D063 with formal risk acceptance language and tracking.
+
+**Decision:** The non-English prompt injection bypass is formally accepted as a known risk for v1. No code changes are required — D063 already covers the technical rationale. This entry adds:
+
+1. **Risk classification:** Medium severity, high likelihood for multilingual deployments.
+2. **Mitigation path:** LLM-based semantic classifier (as outlined in D063's "Future enhancement path").
+3. **Monitoring:** Test cases for non-English bypass patterns are retained as regression anchors with `currentlyDetected: false`.
+
+**Rationale:** The PR review flagged this as a gap requiring formal acknowledgment. D063 documented the technical limitation; this entry provides the risk management framing.
+
+**Ref:** D063, sigil-7g5.340

@@ -40,6 +40,10 @@ func ParseScannerMode(s string) (ScannerMode, error) {
 
 // Origin indicates the source of content being scanned or the source of a
 // conversation message. Used for context-aware logging and rule selection.
+//
+// Empty string represents unknown/legacy origin for messages created before
+// origin tracking was introduced. Callers should explicitly set Origin rather
+// than relying on the fallback via originFromRole().
 type Origin string
 
 const (

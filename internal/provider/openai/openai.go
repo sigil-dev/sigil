@@ -206,7 +206,13 @@ func convertMessages(msgs []provider.Message, systemPrompt string) ([]openaisdk.
 	}
 
 	for _, msg := range msgs {
-		tag := provider.OriginTag(msg.Origin)
+		// System messages are Sigil-generated and MUST NOT have origin tags prepended.
+		// Only user, assistant, and tool messages carry untrusted content that benefits
+		// from origin tagging for context-aware scanning and audit.
+		tag := ""
+		if msg.Role != store.MessageRoleSystem {
+			tag = provider.OriginTag(msg.Origin)
+		}
 		switch msg.Role {
 		case store.MessageRoleUser:
 			result = append(result, openaisdk.UserMessage(tag+msg.Content))
@@ -215,7 +221,7 @@ func convertMessages(msgs []provider.Message, systemPrompt string) ([]openaisdk.
 		case store.MessageRoleTool:
 			result = append(result, openaisdk.ToolMessage(tag+msg.Content, msg.ToolCallID))
 		case store.MessageRoleSystem:
-			result = append(result, openaisdk.SystemMessage(tag+msg.Content))
+			result = append(result, openaisdk.SystemMessage(msg.Content))
 		default:
 			return nil, sigilerr.Errorf(sigilerr.CodeProviderRequestInvalid, "openai: unsupported message role %q", msg.Role)
 		}

@@ -109,12 +109,12 @@ security:
     # security implications. This setting cannot be changed via environment variable.
     input: block
 
-    # Tool output scanning mode. Default: block
+    # Tool output scanning mode. Default: flag
     # Controls how tool output containing detected sensitive content is handled.
-    # - block: Plugin tool is rejected if output contains detected secrets (recommended)
-    # - flag:  Plugin tool output is allowed but marked for review
+    # - block: Plugin tool is rejected if output contains detected secrets
+    # - flag:  Plugin tool output is allowed but marked for review (default)
     # - redact: Detected sensitive patterns are stripped from tool output
-    tool: block
+    tool: flag
 
     # Assistant output scanning mode. Default: redact
     # Controls how LLM output containing detected sensitive content is handled.

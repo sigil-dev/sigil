@@ -180,6 +180,9 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*Too
 		UserPermissions: req.UserPermissions,
 	}
 	if err := d.enforcer.Check(ctx, checkReq); err != nil {
+		// Audit the denial before returning so security teams can detect
+		// capability probing even when the enforcer blocks the call.
+		d.auditToolExecution(ctx, req, "denied")
 		return nil, err
 	}
 
@@ -258,8 +261,15 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 		return
 	}
 
+	// Truncate arguments to 1024 chars to bound audit entry size while
+	// retaining enough context for security investigations.
+	args := req.Arguments
+	if len(args) > 1024 {
+		args = args[:1024]
+	}
 	details := map[string]any{
-		"tool_name": req.ToolName,
+		"tool_name":      req.ToolName,
+		"tool_arguments": args,
 	}
 
 	entry := &store.AuditEntry{
