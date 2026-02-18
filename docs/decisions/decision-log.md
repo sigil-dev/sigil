@@ -933,7 +933,7 @@ The design doc's "512KB" reference describes only the truncation fallback, not t
 
 ## D065: Design Doc Update for Security Scanner Implementation Status
 
-**Status:** Accepted
+**Status:** Revoked
 
 **Question:** PR #17 modifies `docs/design/03-security-model.md` to remove Phase 8+ deferred markers and update the defense matrix. The project convention is "MUST NOT modify docs/design/ files" — they are treated as immutable specs. Is this modification justified?
 
@@ -950,6 +950,8 @@ The design doc's "512KB" reference describes only the truncation fallback, not t
 **Rationale:** The intent of the immutability rule is to prevent unilateral architectural changes that bypass review. Updating implementation status annotations preserves the architectural content while keeping the document current. The alternative — a permanently stale defense matrix — would be more harmful than a controlled update with a decision record.
 
 **Ref:** PR #17, sigil-7g5.364
+
+**Revocation note (2026-02-17):** This decision is revoked. A self-authored exception to a MUST NOT rule does not carry the authority to override that rule. The CLAUDE.md prohibition on modifying `docs/design/` files is absolute and requires explicit human maintainer approval to override — an AI-generated decision log entry authored in the same PR that performs the modification is a circular self-exception, not an approval. The design doc changes have been reverted to match `main`. Implementation status for the security scanner is documented in D068 without modifying the design doc. See sigil-7g5.399 and sigil-7g5.414.
 
 ---
 
@@ -1001,3 +1003,36 @@ while catching:
 **Rationale:** The PR review flagged this as a gap requiring formal acknowledgment. D063 documented the technical limitation; this entry provides the risk management framing.
 
 **Ref:** D063, sigil-7g5.340
+
+---
+
+## D068: Security Scanner Implementation Status — Agent Loop Steps 1, 6, and 7
+
+**Status:** Accepted
+
+**Question:** PR #17 implemented the security scanner described in D062. The design doc (`docs/design/03-security-model.md`) still shows Phase 8+ deferred markers for scanner functionality at steps 1, 6, and 7 of the agent loop. Where should the implementation status be recorded without modifying the immutable design doc?
+
+**Context:** D065 (now revoked) attempted to record this status by modifying `docs/design/03-security-model.md` directly. That approach violated the MUST NOT rule in CLAUDE.md. The correct approach is to record implementation status in the decision log, not in the design doc. The design doc represents the architectural intent (which is unchanged); the decision log records what has been built.
+
+**Implementation status as of PR #17 (2026-02-17):**
+
+- **Step 1 — Input sanitization (prompt injection scan):** Implemented in `internal/security/scanner/`. Previously deferred (Phase 8+, sigil-39g). Now covered by D062.
+- **Step 6 — Result size enforcement:** Scanner enforces `maxToolContentScanSize` (512KB); oversized results are truncated and re-scanned. Implemented in `internal/security/scanner/`. Previously deferred (sigil-7g5.184). See D064 for size-limit rationale.
+- **Step 6 — Result injection scan:** Tool results scanned for instruction patterns. Implemented in `internal/security/scanner/`. Previously deferred (Phase 8+, sigil-j32).
+- **Step 7 — Output filtering (secrets):** Implemented in `internal/security/scanner/`. Previously deferred (Phase 8+, sigil-hnh).
+- **Step 7 — PII detection:** Still deferred. D062 notes PII detection remains a future enhancement.
+
+**Defense matrix — updated state (not modifying design doc):**
+
+| Attack Vector | Previous status | Current status |
+| --- | --- | --- |
+| Prompt injection via user message | Phase 8+, sigil-39g | Implemented (D062) |
+| Prompt injection via tool result | Phase 8+, sigil-j32 | Implemented (D062) |
+
+All other rows in the defense matrix (tool escalation, infinite loops, cost explosion, plugin data exfiltration, session hijacking, config poisoning) were already implemented and unchanged.
+
+**Decision:** Record the scanner implementation status here rather than annotating the design doc. The architectural intent in `docs/design/03-security-model.md` remains valid and unchanged; the design doc is not modified.
+
+**Rationale:** The design doc describes what the system must do. The decision log records what has been done and when. This separation keeps the spec stable while providing a traceable implementation history.
+
+**Ref:** D062, D064, D065 (revoked), PR #17, sigil-7g5.399, sigil-7g5.414
