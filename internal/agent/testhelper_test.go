@@ -1035,11 +1035,11 @@ func (s *mockErrorScanner) Scan(_ context.Context, _ string, _ scanner.ScanConte
 // allowing input and tool scans to pass through cleanly.
 type mockOutputErrorScanner struct{}
 
-func (s *mockOutputErrorScanner) Scan(_ context.Context, _ string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+func (s *mockOutputErrorScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
 	if opts.Stage == scanner.StageOutput {
 		return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
 	}
-	return scanner.ScanResult{}, nil
+	return scanner.ScanResult{Content: content}, nil
 }
 
 // mockToolErrorScanner returns an error only when scanning the tool stage,
@@ -1047,11 +1047,11 @@ func (s *mockOutputErrorScanner) Scan(_ context.Context, _ string, opts scanner.
 // the tool execution path.
 type mockToolErrorScanner struct{}
 
-func (s *mockToolErrorScanner) Scan(_ context.Context, _ string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+func (s *mockToolErrorScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
 	if opts.Stage == scanner.StageTool {
 		return scanner.ScanResult{}, fmt.Errorf("internal scanner failure")
 	}
-	return scanner.ScanResult{}, nil
+	return scanner.ScanResult{Content: content}, nil
 }
 
 // mockToolContentTooLargeScanner returns CodeSecurityScannerContentTooLarge on the tool

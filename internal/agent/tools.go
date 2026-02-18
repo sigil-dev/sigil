@@ -113,7 +113,12 @@ type ToolCallRequest struct {
 // ToolResult holds the output from a tool execution.
 type ToolResult struct {
 	Content string
-	Origin  string // "tool_output" — always tagged for injection defense
+	// Origin is always "tool_output" (types.OriginToolOutput). The value is
+	// set by Execute() and consumed by the agent loop to stamp the store.Message
+	// and provider.Message Origin fields before scanning and forwarding. It is
+	// not configurable: all plugin-produced tool output is unconditionally
+	// tagged as tool_output so the security scanner can apply StageTool rules.
+	Origin string
 }
 
 // ToolDispatcherConfig holds dependencies for ToolDispatcher.
@@ -256,6 +261,13 @@ func (d *ToolDispatcher) ExecuteForTurn(ctx context.Context, req ToolCallRequest
 	return d.Execute(ctx, req)
 }
 
+// auditToolExecution writes a best-effort audit entry for tool dispatch events.
+// It implements its own escalating-log-level behavior (warn → error after 3
+// consecutive failures) independently from the agent loop's logAuditFailure
+// helper in loop.go, because ToolDispatcher has no reference to the agent loop.
+// Both functions use the same escalation threshold (3 consecutive failures) and
+// the same slog-based structured logging convention. If the audit escalation
+// logic changes, update BOTH locations.
 func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallRequest, result string) {
 	if d.auditStore == nil {
 		return

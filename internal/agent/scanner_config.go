@@ -5,20 +5,18 @@ package agent
 
 import (
 	"github.com/sigil-dev/sigil/internal/config"
-	"github.com/sigil-dev/sigil/internal/provider"
-	"github.com/sigil-dev/sigil/internal/security"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // defaultScannerModes is the single source of truth for scanner mode defaults.
-// Input: block (reject prompt injection), Tool: redact (strip secrets before persisting), Output: redact (strip secrets).
-// OriginTagging defaults to true for backwards compatibility.
+// Input: block (reject prompt injection), Tool: flag (mark for review), Output: redact (strip secrets).
+// DisableOriginTagging defaults to false (tagging enabled) — the zero value is the safe default.
 var defaultScannerModes = ScannerModes{
-	Input:         scanner.ModeBlock,
-	Tool:          scanner.ModeRedact,
-	Output:        scanner.ModeRedact,
-	OriginTagging: true,
+	Input:  scanner.ModeBlock,
+	Tool:   scanner.ModeFlag,
+	Output: scanner.ModeRedact,
+	// DisableOriginTagging omitted: false (enabled) is the correct default.
 }
 
 // parseModeField parses a single scanner mode config field.
@@ -35,7 +33,10 @@ func parseModeField(raw scanner.Mode, name string, fallback scanner.Mode) (scann
 
 // NewScannerModesFromConfig converts config.ScannerConfig to agent.ScannerModes.
 // Empty fields fall back to defaultScannerModes. Non-empty fields are validated.
-// OriginTagging is read directly from the config (default true when not set, via Viper defaults).
+//
+// DisableOriginTagging is copied directly from cfg: false (the default) means
+// tagging is enabled; true means tagging is disabled. Both the config struct and
+// ScannerModes use the same "disable" polarity so no inversion is needed.
 func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
 	var (
 		modes ScannerModes
@@ -50,12 +51,6 @@ func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
 	if modes.Output, err = parseModeField(cfg.Output, "output", defaultScannerModes.Output); err != nil {
 		return ScannerModes{}, err
 	}
-	modes.OriginTagging = cfg.OriginTagging
+	modes.DisableOriginTagging = cfg.DisableOriginTagging
 	return modes, nil
-}
-
-// DefaultLoopConfig returns a LoopConfig with default scanner modes and the given required dependencies.
-// Returns an error if any required dependency is nil.
-func DefaultLoopConfig(sessions *SessionManager, enforcer *security.Enforcer, router provider.Router, sc scanner.Scanner) (LoopConfig, error) {
-	return NewLoopConfig(sessions, enforcer, router, sc, defaultScannerModes)
 }

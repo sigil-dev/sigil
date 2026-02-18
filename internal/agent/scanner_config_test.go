@@ -51,12 +51,13 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "empty config uses defaults: block/redact/redact",
+			name: "empty config uses defaults: block/flag/redact",
 			cfg:  config.ScannerConfig{},
 			want: agent.ScannerModes{
 				Input:  scanner.ModeBlock,
-				Tool:   scanner.ModeRedact,
+				Tool:   scanner.ModeFlag,
 				Output: scanner.ModeRedact,
+				// DisableOriginTagging defaults to false (tagging enabled) — zero-value.
 			},
 		},
 		{
@@ -73,7 +74,7 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "only tool empty uses default redact",
+			name: "only tool empty uses default flag",
 			cfg: config.ScannerConfig{
 				Input:  types.ScannerModeRedact,
 				Tool:   "",
@@ -81,7 +82,7 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 			},
 			want: agent.ScannerModes{
 				Input:  scanner.ModeRedact,
-				Tool:   scanner.ModeRedact,
+				Tool:   scanner.ModeFlag,
 				Output: scanner.ModeBlock,
 			},
 		},
@@ -132,42 +133,44 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 			assert.Equal(t, tt.want.Input, got.Input, "Input mode mismatch")
 			assert.Equal(t, tt.want.Tool, got.Tool, "Tool mode mismatch")
 			assert.Equal(t, tt.want.Output, got.Output, "Output mode mismatch")
-			assert.Equal(t, tt.want.OriginTagging, got.OriginTagging, "OriginTagging mismatch")
+			assert.Equal(t, tt.want.DisableOriginTagging, got.DisableOriginTagging, "DisableOriginTagging mismatch")
 		})
 	}
 }
 
-// TestNewScannerModesFromConfig_OriginTagging tests that the OriginTagging field
-// is correctly propagated from config.ScannerConfig to agent.ScannerModes.
-func TestNewScannerModesFromConfig_OriginTagging(t *testing.T) {
+// TestNewScannerModesFromConfig_DisableOriginTagging tests that the DisableOriginTagging
+// field is correctly propagated from config.ScannerConfig to agent.ScannerModes.
+// Semantics: DisableOriginTagging=false means tagging IS enabled (zero-value default).
+// DisableOriginTagging=true means tagging IS disabled.
+func TestNewScannerModesFromConfig_DisableOriginTagging(t *testing.T) {
 	tests := []struct {
-		name          string
-		originTagging bool
-		want          bool
+		name                 string
+		disableOriginTagging bool
+		want                 bool
 	}{
 		{
-			name:          "origin tagging enabled",
-			originTagging: true,
-			want:          true,
+			name:                 "origin tagging enabled (disable=false)",
+			disableOriginTagging: false,
+			want:                 false,
 		},
 		{
-			name:          "origin tagging disabled",
-			originTagging: false,
-			want:          false,
+			name:                 "origin tagging disabled (disable=true)",
+			disableOriginTagging: true,
+			want:                 true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := config.ScannerConfig{
-				Input:         types.ScannerModeBlock,
-				Tool:          types.ScannerModeFlag,
-				Output:        types.ScannerModeRedact,
-				OriginTagging: tt.originTagging,
+				Input:                types.ScannerModeBlock,
+				Tool:                 types.ScannerModeFlag,
+				Output:               types.ScannerModeRedact,
+				DisableOriginTagging: tt.disableOriginTagging,
 			}
 			got, err := agent.NewScannerModesFromConfig(cfg)
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, got.OriginTagging)
+			assert.Equal(t, tt.want, got.DisableOriginTagging)
 		})
 	}
 }

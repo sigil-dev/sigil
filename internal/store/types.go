@@ -119,7 +119,20 @@ type Message struct {
 	// Origin records the source of the message for audit purposes.
 	// Values: "user_input", "system", "tool_output" (mirrors pkg/types.Origin).
 	// Stored as a plain string to avoid coupling store to provider or types packages.
-	Origin    string
+	// Valid values are defined by the store package constants OriginUserInput,
+	// OriginSystem, OriginToolOutput (see types_validation.go).
+	//
+	// Added in PR #17. Custom MessageStore implementations MUST populate this
+	// field to preserve security audit trail integrity. An empty string is
+	// accepted for backward compatibility with pre-PR-17 records.
+	Origin string
+	// Threat holds the security scanner result for this message.
+	// A nil value means the scanner did not run (legacy record or pre-scanner code path).
+	// See ThreatInfo for the three semantic states (not scanned, clean, detected).
+	//
+	// Added in PR #17. Custom MessageStore implementations MUST persist and
+	// restore this field so that security audit queries can distinguish
+	// "scanned clean" from "scanner did not run".
 	Threat    *ThreatInfo
 	CreatedAt time.Time
 	Metadata  map[string]string

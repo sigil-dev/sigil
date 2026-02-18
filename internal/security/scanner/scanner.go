@@ -59,7 +59,11 @@ type ScanContext struct {
 	Stage Stage
 	// Origin is recorded in scan results for audit and logging purposes; it does
 	// not affect which rules are evaluated. Rule filtering uses only Stage.
-	Origin   Origin
+	Origin Origin
+	// Metadata holds caller-supplied key-value pairs for audit/logging context.
+	// Use NewScanContext for safe construction (deep-copies the map). When
+	// constructing ScanContext directly, the caller retains ownership of the map
+	// and must not mutate it after passing it to Scan.
 	Metadata map[string]string
 }
 
@@ -198,7 +202,9 @@ func WithMaxContentLength(n int) ScannerOption {
 func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error) {
 	copied := make([]Rule, len(rules))
 	for i, r := range rules {
-		// Deep-copy the rule via NewRule to guarantee invariants; NewRule validates all fields.
+		// Deep-copy via re-compilation ensures the scanner's rules are not aliased
+		// with the caller's slice. regexp.Regexp is safe for concurrent use (stdlib
+		// guarantee), so the copy is for ownership isolation, not thread safety.
 		c, err := NewRule(r.name, regexp.MustCompile(r.pattern.String()), r.stage, r.severity)
 		if err != nil {
 			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d: %w", i, err)
@@ -275,14 +281,8 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan origin: %q", opts.Origin)
 	}
 
-	// Defensive copy: prevent caller mutation of shared metadata.
-	if opts.Metadata != nil {
-		copied := make(map[string]string, len(opts.Metadata))
-		for k, v := range opts.Metadata {
-			copied[k] = v
-		}
-		opts.Metadata = copied
-	}
+	// Metadata was already deep-copied by NewScanContext; no additional copy needed.
+	// Callers constructing ScanContext directly accept ownership of the map.
 
 	content = Normalize(content)
 
@@ -348,6 +348,16 @@ func mustNewRule(name string, pattern *regexp.Regexp, stage Stage, severity Seve
 // InputRules returns rules for StageInput: prompt injection, instruction override,
 // and secret detection patterns. Secrets in user input are blocked (default mode)
 // before reaching the LLM, preventing accidental credential forwarding.
+//
+// Including secretRules at StageInput is a defense-in-depth measure. The primary
+// secret scan is at StageOutput (to prevent the LLM from leaking credentials in
+// its responses), but scanning user input as well prevents:
+//   - Accidental credential forwarding: users pasting API keys into chat messages.
+//   - Prompt-injection-with-credential-theft: an adversary including a secret in
+//     their message to have it echoed back by the LLM in a logged session.
+//
+// Callers that only want prompt-injection rules without secret detection can
+// construct rules manually. This function returns the full input-stage rule set.
 func InputRules() ([]Rule, error) {
 	injection := []Rule{
 		// Allow up to 3 optional words between the verb and the target noun phrase.
@@ -395,9 +405,9 @@ func ToolRules() []Rule {
 // rules with the same name (better precision or coverage).
 func secretRules(stage Stage) ([]Rule, error) {
 	sigil := sigilSpecificRules(stage)
-	sigilNames := make(map[string]bool, len(sigil))
+	sigilNames := make(map[string]struct{}, len(sigil))
 	for _, r := range sigil {
-		sigilNames[r.name] = true
+		sigilNames[r.name] = struct{}{}
 	}
 
 	db, err := loadDBRules(stage)
@@ -408,7 +418,7 @@ func secretRules(stage Stage) ([]Rule, error) {
 	// Filter DB rules that collide with Sigil-specific names.
 	filtered := make([]Rule, 0, len(db))
 	for _, r := range db {
-		if !sigilNames[r.name] {
+		if _, ok := sigilNames[r.name]; !ok {
 			filtered = append(filtered, r)
 		}
 	}

@@ -122,6 +122,7 @@ func (b TokenBudget) Validate() error {
 //   - If Detected is true, Scanned must also be true.
 //   - Bypassed=true is permitted only when Detected=false (bypass markers
 //     record that no scan occurred, not that a threat was found).
+//   - Bypassed=true and Scanned=true cannot both be true (bypass means scan was skipped).
 func (t ThreatInfo) Validate() error {
 	if !t.Detected && len(t.Rules) > 0 {
 		return sigilerr.New(sigilerr.CodeStoreInvalidInput, "threat info: Rules must be empty when Detected is false")
@@ -136,6 +137,9 @@ func (t ThreatInfo) Validate() error {
 	}
 	if t.Bypassed && t.Detected {
 		return sigilerr.New(sigilerr.CodeStoreInvalidInput, "threat info: Bypassed must be false when Detected is true")
+	}
+	if t.Bypassed && t.Scanned {
+		return sigilerr.New(sigilerr.CodeStoreInvalidInput, "ThreatInfo: Bypassed and Scanned cannot both be true (bypass means scan was skipped)")
 	}
 	return nil
 }

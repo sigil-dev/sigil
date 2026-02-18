@@ -17,21 +17,21 @@ func TestSecretsDB_HighConfidenceCount(t *testing.T) {
 	rules := mustOutputRules(t)
 
 	// Count rules that are NOT Sigil-specific (i.e., from the DB).
-	sigilNames := map[string]bool{
-		"bearer_token":              true,
-		"database_connection_string": true,
-		"mssql_connection_string":   true,
-		"keyring_uri":               true,
-		"anthropic_api_key":         true,
-		"openai_api_key":            true,
-		"openai_legacy_key":         true,
-		"npm_token":                 true,
-		"azure_connection_string":   true,
-		"vault_token":               true,
+	sigilNames := map[string]struct{}{
+		"bearer_token":               {},
+		"database_connection_string": {},
+		"mssql_connection_string":    {},
+		"keyring_uri":                {},
+		"anthropic_api_key":          {},
+		"openai_api_key":             {},
+		"openai_legacy_key":          {},
+		"npm_token":                  {},
+		"azure_connection_string":    {},
+		"vault_token":                {},
 	}
 	dbCount := 0
 	for _, r := range rules {
-		if !sigilNames[r.Name()] {
+		if _, ok := sigilNames[r.Name()]; !ok {
 			dbCount++
 		}
 	}
@@ -53,12 +53,12 @@ func TestSecretsDB_AllPatternsCompile(t *testing.T) {
 // TestSecretsDB_NoDuplicateNames verifies no two rules share the same name.
 func TestSecretsDB_NoDuplicateNames(t *testing.T) {
 	rules := mustOutputRules(t)
-	seen := make(map[string]bool, len(rules))
+	seen := make(map[string]struct{}, len(rules))
 	for _, r := range rules {
-		if seen[r.Name()] {
+		if _, dup := seen[r.Name()]; dup {
 			t.Errorf("duplicate rule name: %q", r.Name())
 		}
-		seen[r.Name()] = true
+		seen[r.Name()] = struct{}{}
 	}
 }
 
@@ -67,21 +67,23 @@ func TestToSnakeCase(t *testing.T) {
 	// toSnakeCase is unexported, so we test it indirectly by checking
 	// known DB pattern names that we know the original names of.
 	rules := mustOutputRules(t)
-	ruleNames := make(map[string]bool, len(rules))
+	ruleNames := make(map[string]struct{}, len(rules))
 	for _, r := range rules {
-		ruleNames[r.Name()] = true
+		ruleNames[r.Name()] = struct{}{}
 	}
 
+	has := func(name string) bool { _, ok := ruleNames[name]; return ok }
+
 	// "AWS API Key" -> "aws_api_key"
-	assert.True(t, ruleNames["aws_api_key"], "expected aws_api_key from DB")
+	assert.True(t, has("aws_api_key"), "expected aws_api_key from DB")
 	// google_api_key: Sigil-specific override (DB version is lowercase-only)
-	assert.True(t, ruleNames["google_api_key"], "expected google_api_key")
+	assert.True(t, has("google_api_key"), "expected google_api_key")
 	// "SendGrid API Key" -> "sendgrid_api_key"
-	assert.True(t, ruleNames["sendgrid_api_key"], "expected sendgrid_api_key from DB")
+	assert.True(t, has("sendgrid_api_key"), "expected sendgrid_api_key from DB")
 	// "Twilio API Key" -> "twilio_api_key"
-	assert.True(t, ruleNames["twilio_api_key"], "expected twilio_api_key from DB")
+	assert.True(t, has("twilio_api_key"), "expected twilio_api_key from DB")
 	// "Github Personal Access Token" -> "github_personal_access_token"
-	assert.True(t, ruleNames["github_personal_access_token"],
+	assert.True(t, has("github_personal_access_token"),
 		"expected github_personal_access_token from DB")
 }
 

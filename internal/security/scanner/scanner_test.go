@@ -525,6 +525,26 @@ func mustToolSecretRules(t *testing.T) []scanner.Rule {
 	return rules
 }
 
+// Finding .438 — NewScanContext deep-copies metadata so callers cannot mutate it.
+func TestNewScanContext_MetadataIsolation(t *testing.T) {
+	orig := map[string]string{
+		"session_id":   "sess-abc",
+		"workspace_id": "ws-xyz",
+	}
+	sc := scanner.NewScanContext(scanner.StageInput, scanner.OriginUser, orig)
+
+	// Mutate the original map after construction.
+	orig["session_id"] = "mutated"
+	orig["injected_key"] = "injected_value"
+
+	// The ScanContext's Metadata must be unaffected by the mutations.
+	assert.Equal(t, "sess-abc", sc.Metadata["session_id"],
+		"ScanContext.Metadata must not reflect post-construction mutation of original map")
+	assert.Equal(t, "ws-xyz", sc.Metadata["workspace_id"])
+	_, hasInjected := sc.Metadata["injected_key"]
+	assert.False(t, hasInjected, "ScanContext.Metadata must not contain keys added after construction")
+}
+
 // mustMatch is a test helper that creates a Match via NewMatch, panicking on error.
 func mustMatch(rule string, location, length int, severity scanner.Severity) scanner.Match {
 	m, err := scanner.NewMatch(rule, location, length, severity)

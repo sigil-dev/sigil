@@ -31,8 +31,10 @@ import (
 )
 
 // Gateway holds all wired subsystems and manages their lifecycle.
-// All fields are unexported to enforce construction through WireGateway,
-// preventing partially-initialized Gateway{} values with nil fields.
+// Fields are unexported to enforce construction through WireGateway,
+// which initializes all subsystems and validates their dependencies.
+// This prevents callers from constructing a partially-initialized
+// Gateway literal with nil fields that would panic at runtime.
 type Gateway struct {
 	server           *server.Server
 	gatewayStore     store.GatewayStore
@@ -104,6 +106,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating security scanner: %w", err)
 	}
+	slog.Info("security scanner initialized", "rule_count", len(defaultRules))
 	scannerModes, err := agent.NewScannerModesFromConfig(cfg.Security.Scanner)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "configuring scanner modes: %w", err)

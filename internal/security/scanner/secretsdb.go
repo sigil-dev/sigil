@@ -50,6 +50,13 @@ var (
 
 // loadDBRules parses the embedded YAML and returns compiled high-confidence
 // rules for the given stage. Uses sync.Once to parse only once.
+//
+// False-positive filtering strategy: only patterns whose Confidence field
+// equals "high" are loaded. Medium- and low-confidence patterns are excluded
+// because they produce too many false positives in general-purpose text
+// (common English words, short hex strings, etc.). Sigil-specific rules in
+// sigilSpecificRules() override DB rules with the same name to provide better
+// precision where the DB regex is known to be overly broad.
 func loadDBRules(stage Stage) ([]Rule, error) {
 	dbOnce.Do(func() {
 		var f dbFile
@@ -112,7 +119,13 @@ func loadDBRules(stage Stage) ([]Rule, error) {
 		patCopy := regexp.MustCompile(e.pattern.String())
 		r, err := NewRule(e.name, patCopy, stage, SeverityHigh)
 		if err != nil {
-			// This should not happen since dbEntries were validated at parse time.
+			// This should not happen in practice: dbEntries were validated
+			// during sync.Once initialization (name non-empty, regex compiled,
+			// SeverityHigh is always valid). The continue is deliberate
+			// graceful-degradation: a single rule failing to stamp a new stage
+			// does not justify returning zero rules. The caller (DefaultRules)
+			// already guards against the zero-rules case via loadDBRules
+			// returning dbErr when dbEntries is empty.
 			slog.Warn("skipping DB rule that failed NewRule",
 				"name", e.name, "stage", stage, "error", err)
 			continue

@@ -1036,3 +1036,35 @@ All other rows in the defense matrix (tool escalation, infinite loops, cost expl
 **Rationale:** The design doc describes what the system must do. The decision log records what has been done and when. This separation keeps the spec stable while providing a traceable implementation history.
 
 **Ref:** D062, D064, D065 (revoked), PR #17, sigil-7g5.399, sigil-7g5.414
+
+---
+
+## D069: Origin Tagging — Emergent Feature Not in Design Doc 03
+
+**Status:** Accepted
+
+**Question:** Origin tagging (prepending `[user_input]`, `[system]`, `[tool_output]` markers to message content) is an emergent feature implemented in PR #17. It is not explicitly specified in `docs/design/03-security-model.md`. Where should it be documented?
+
+**Context:** Origin tagging is implemented in `internal/provider/provider.go` (`OriginTag`, `OriginTagIfEnabled`) and described in D062. Design doc 03 is immutable per CLAUDE.md policy.
+
+**Decision:** Origin tagging is documented in D062 and in the provider package code comments. Design doc 03 is not modified per CLAUDE.md policy ("MUST NOT modify docs/design/ files").
+
+**Rationale:** The design doc captures architectural intent. Origin tagging is an implementation detail of the security pipeline that supports the intent (message provenance tracking). D062 is the appropriate home for this documentation. Future readers can locate it via the D062 reference in provider.go.
+
+**Ref:** D062, `internal/provider/provider.go`, PR #17, sigil-7g5.482
+
+---
+
+## D070: Design Doc 03 Stale Annotations — Immutability Takes Precedence
+
+**Status:** Accepted
+
+**Question:** Design doc 03 (`docs/design/03-security-model.md`) contains annotations that were corrected by D068 (implementation status for scanner steps 1, 6, and 7). Should the design doc be updated to remove stale annotations?
+
+**Context:** D065 (now revoked) attempted to update the design doc directly. D068 recorded the implementation status in the decision log instead. The underlying annotation discrepancy (design doc shows "Phase 8+ deferred" for features that are now implemented) remains visible in the design doc itself.
+
+**Decision:** No — design docs are immutable per project policy (CLAUDE.md: "MUST NOT modify docs/design/ files"). The stale annotations in design doc 03 remain as written. Implementation status is tracked exclusively in the decision log (D068). Readers who notice the discrepancy should consult D068 for the authoritative implementation status.
+
+**Rationale:** The immutability rule exists to prevent unilateral architectural changes that bypass review. A self-authored AI decision log entry does not constitute the "explicit human maintainer approval" required to override a MUST NOT rule. The decision log is the correct and sufficient record of what has been built.
+
+**Ref:** D065 (revoked), D068, sigil-7g5.482

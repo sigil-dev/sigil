@@ -128,11 +128,14 @@ type ScannerConfig struct {
 	Tool                     types.ScannerMode `mapstructure:"tool"`
 	Output                   types.ScannerMode `mapstructure:"output"`
 	AllowPermissiveInputMode bool              `mapstructure:"allow_permissive_input_mode"`
-	// OriginTagging controls whether origin tags ([user_input], [tool_output], etc.)
+	// DisableOriginTagging controls whether origin tag prepending is disabled.
+	// When false (the default), origin tags ([user_input], [tool_output], etc.)
 	// are prepended to message content when sending to LLM providers.
-	// Defaults to true. Disable to reduce upstream token count changes and avoid
-	// altering message content sent to providers.
-	OriginTagging bool `mapstructure:"origin_tagging"`
+	// Set to true to disable tagging (reduces upstream token count and avoids
+	// altering message content sent to providers).
+	//
+	// The zero value (false) is the safe default: tagging enabled.
+	DisableOriginTagging bool `mapstructure:"disable_origin_tagging"`
 }
 
 // SetDefaults applies Sigil's default configuration values to v.
@@ -149,10 +152,10 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("models.budgets.per_hour_usd", 5.00)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
 	v.SetDefault("security.scanner.input", "block")
-	v.SetDefault("security.scanner.tool", "redact")
+	v.SetDefault("security.scanner.tool", "flag")
 	v.SetDefault("security.scanner.output", "redact")
 	v.SetDefault("security.scanner.allow_permissive_input_mode", false)
-	v.SetDefault("security.scanner.origin_tagging", true)
+	v.SetDefault("security.scanner.disable_origin_tagging", false)
 }
 
 // SetupEnv configures environment variable binding on v with prefix SIGIL_.
@@ -391,6 +394,9 @@ func (c *Config) validateSessions() []error {
 func (c *Config) validateSecurity() []error {
 	var errs []error
 
+	// Validate scanner modes using types.ScannerMode.Valid(), which is the
+	// authoritative check in pkg/types and is also used by scanner.Mode.Valid()
+	// (an alias). This avoids duplicating the valid-mode set here.
 	for _, pair := range []struct {
 		field string
 		value types.ScannerMode
@@ -401,7 +407,7 @@ func (c *Config) validateSecurity() []error {
 	} {
 		if !pair.value.Valid() {
 			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-				"config: %s: invalid scanner mode %q (valid: block, flag, redact)", pair.field, pair.value))
+				"config: %s: invalid scanner mode %q", pair.field, pair.value))
 		}
 	}
 
@@ -413,17 +419,21 @@ func (c *Config) validateSecurity() []error {
 		))
 	}
 
-	// Scanner mode env vars must not be overridable via environment variables
-	// to prevent env injection from weakening security scanning in production.
-	// All scanner mode fields (input, tool, output, allow_permissive_input_mode)
-	// must be configured exclusively via the config file.
+	// Scanner mode env vars are rejected at validate-time to prevent environment
+	// variable injection from weakening security scanning in production. Environment
+	// variables are less auditable than config files (they can be injected by
+	// container orchestrators, CI systems, or shell profiles without appearing in
+	// version-controlled config). All scanner mode fields must be set in the config
+	// file or mounted secrets. Container deployments should use mounted config files
+	// or secret volumes rather than env vars for scanner settings.
 	//
-	// Defense-in-depth: Viper's AutomaticEnv() has already bound these env vars
-	// to config keys by the time Validate() is called. However, Validate() runs
-	// before any component reads the config, so this guard effectively prevents
-	// env-var-based scanner mode changes from taking effect. The os.Getenv check
-	// provides an explicit, auditable rejection point that surfaces the violation
-	// as a startup error rather than silently accepting the value.
+	// Note on Viper binding timing: os.Getenv runs at validate-time (after Viper
+	// has already called AutomaticEnv() and may have merged env values into the
+	// unmarshalled struct). This check detects env var presence and rejects the
+	// startup, but it does NOT retroactively prevent Viper from reading the env
+	// var into cfg — it surfaces the violation as a fatal startup error so the
+	// operator is forced to remove the env var rather than silently proceeding
+	// with a potentially weakened scanner configuration.
 	blockedScannerEnvVars := []struct {
 		envVar string
 		field  string
@@ -432,7 +442,7 @@ func (c *Config) validateSecurity() []error {
 		{"SIGIL_SECURITY_SCANNER_INPUT", "security.scanner.input"},
 		{"SIGIL_SECURITY_SCANNER_TOOL", "security.scanner.tool"},
 		{"SIGIL_SECURITY_SCANNER_OUTPUT", "security.scanner.output"},
-		{"SIGIL_SECURITY_SCANNER_ORIGIN_TAGGING", "security.scanner.origin_tagging"},
+		{"SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING", "security.scanner.disable_origin_tagging"},
 	}
 	for _, blocked := range blockedScannerEnvVars {
 		if os.Getenv(blocked.envVar) != "" {

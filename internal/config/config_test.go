@@ -523,7 +523,7 @@ func TestConfig_ScannerDefaults(t *testing.T) {
 	config.SetDefaults(v)
 
 	assert.Equal(t, "block", v.GetString("security.scanner.input"))
-	assert.Equal(t, "redact", v.GetString("security.scanner.tool"))
+	assert.Equal(t, "flag", v.GetString("security.scanner.tool"))
 	assert.Equal(t, "redact", v.GetString("security.scanner.output"))
 }
 
@@ -630,10 +630,10 @@ func TestConfig_ScannerModeEnvVarsRejected(t *testing.T) {
 			wantErrFrag: "security.scanner.output cannot be set via environment variable",
 		},
 		{
-			name:        "SIGIL_SECURITY_SCANNER_ORIGIN_TAGGING rejected",
-			envVar:      "SIGIL_SECURITY_SCANNER_ORIGIN_TAGGING",
-			envVal:      "false",
-			wantErrFrag: "security.scanner.origin_tagging cannot be set via environment variable",
+			name:        "SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING rejected",
+			envVar:      "SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING",
+			envVal:      "true",
+			wantErrFrag: "security.scanner.disable_origin_tagging cannot be set via environment variable",
 		},
 	}
 

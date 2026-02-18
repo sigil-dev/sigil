@@ -89,6 +89,14 @@ const (
 	OriginUser   = types.OriginUserInput
 	OriginSystem = types.OriginSystem
 	OriginTool   = types.OriginToolOutput
+	// OriginUnknown is used when the origin of a message cannot be determined,
+	// for example in internal error paths or messages constructed before origin
+	// tracking was introduced. The agent loop sets Origin explicitly on all
+	// messages it constructs; OriginUnknown should not appear in production
+	// chat histories. Providers constructing internal Messages (e.g., for
+	// streaming error events) SHOULD use OriginUnknown rather than leaving
+	// Origin as the zero-value "".
+	OriginUnknown Origin = "unknown"
 )
 
 // Message represents a conversation message.
