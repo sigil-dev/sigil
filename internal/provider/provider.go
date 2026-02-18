@@ -75,6 +75,9 @@ type ChatOptions struct {
 	MaxTokens     int
 	StopSequences []string
 	Stream        bool
+	// OriginTagging controls whether origin tags are prepended to message content.
+	// When false, no tags are added regardless of message origin.
+	OriginTagging bool
 }
 
 // Origin indicates the source of a message. Used to label conversation
@@ -292,6 +295,16 @@ func OriginTag(origin Origin) string {
 	default:
 		return ""
 	}
+}
+
+// OriginTagIfEnabled returns the origin tag for the given origin when enabled is true,
+// and empty string when enabled is false. Use this in providers to conditionally
+// prepend origin tags based on the security.scanner.origin_tagging config setting.
+func OriginTagIfEnabled(origin Origin, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return OriginTag(origin)
 }
 
 // HealthReporter is an optional interface that providers can implement to

@@ -471,6 +471,30 @@ func TestOriginTag(t *testing.T) {
 	}
 }
 
+func TestOriginTagIfEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  provider.Origin
+		enabled bool
+		want    string
+	}{
+		{"enabled user origin", provider.OriginUser, true, "[user_input] "},
+		{"enabled system origin", provider.OriginSystem, true, "[system] "},
+		{"enabled tool origin", provider.OriginTool, true, "[tool_output] "},
+		{"enabled unknown origin", provider.Origin("unknown"), true, ""},
+		{"disabled user origin", provider.OriginUser, false, ""},
+		{"disabled system origin", provider.OriginSystem, false, ""},
+		{"disabled tool origin", provider.OriginTool, false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := provider.OriginTagIfEnabled(tt.origin, tt.enabled)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestProvider_MidStreamFailure_HealthTracking(t *testing.T) {
 	tests := []struct {
 		name                string

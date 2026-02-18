@@ -36,11 +36,11 @@ func newDefaultScanner(t *testing.T) *scanner.RegexScanner {
 }
 
 // defaultScannerModes returns the standard per-stage scanner modes used by most tests:
-// block input, flag tools (per D062), redact output.
+// block input, redact tools, redact output.
 func defaultScannerModes() agent.ScannerModes {
 	return agent.ScannerModes{
 		Input:  scanner.ModeBlock,
-		Tool:   scanner.ModeFlag,
+		Tool:   scanner.ModeRedact,
 		Output: scanner.ModeRedact,
 	}
 }

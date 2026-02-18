@@ -12,11 +12,13 @@ import (
 )
 
 // defaultScannerModes is the single source of truth for scanner mode defaults.
-// Input: block (reject prompt injection), Tool: flag (log and continue, per D062), Output: redact (strip secrets).
+// Input: block (reject prompt injection), Tool: redact (strip secrets before persisting), Output: redact (strip secrets).
+// OriginTagging defaults to true for backwards compatibility.
 var defaultScannerModes = ScannerModes{
-	Input:  scanner.ModeBlock,
-	Tool:   scanner.ModeFlag,
-	Output: scanner.ModeRedact,
+	Input:         scanner.ModeBlock,
+	Tool:          scanner.ModeRedact,
+	Output:        scanner.ModeRedact,
+	OriginTagging: true,
 }
 
 // parseModeField parses a single scanner mode config field.
@@ -33,6 +35,7 @@ func parseModeField(raw scanner.Mode, name string, fallback scanner.Mode) (scann
 
 // NewScannerModesFromConfig converts config.ScannerConfig to agent.ScannerModes.
 // Empty fields fall back to defaultScannerModes. Non-empty fields are validated.
+// OriginTagging is read directly from the config (default true when not set, via Viper defaults).
 func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
 	var (
 		modes ScannerModes
@@ -47,6 +50,7 @@ func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
 	if modes.Output, err = parseModeField(cfg.Output, "output", defaultScannerModes.Output); err != nil {
 		return ScannerModes{}, err
 	}
+	modes.OriginTagging = cfg.OriginTagging
 	return modes, nil
 }
 

@@ -198,23 +198,10 @@ func WithMaxContentLength(n int) ScannerOption {
 func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error) {
 	copied := make([]Rule, len(rules))
 	for i, r := range rules {
-		// Validate rules in the same loop that copies them.
-		if r.pattern == nil {
-			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has nil pattern", i, r.name)
-		}
-		if !r.stage.Valid() {
-			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid stage %q", i, r.name, r.stage)
-		}
-		if r.name == "" {
-			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d has empty name", i)
-		}
-		if !r.severity.Valid() {
-			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d (%s) has invalid severity %q", i, r.name, r.severity)
-		}
-		// Deep-copy the rule via NewRule to guarantee invariants.
+		// Deep-copy the rule via NewRule to guarantee invariants; NewRule validates all fields.
 		c, err := NewRule(r.name, regexp.MustCompile(r.pattern.String()), r.stage, r.severity)
 		if err != nil {
-			return nil, err
+			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d: %w", i, err)
 		}
 		copied[i] = c
 	}
@@ -232,6 +219,7 @@ func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error)
 // invisibleCharReplacer strips zero-width and other invisible Unicode characters
 // to reduce evasion via Unicode homoglyphs. Allocated once at package init.
 var invisibleCharReplacer = strings.NewReplacer(
+	"\x00", "",   // ASCII null byte (not collapsed by NFKC; used to fragment injection phrases)
 	"\u200b", "", // zero-width space
 	"\u200c", "", // zero-width non-joiner
 	"\u200d", "", // zero-width joiner

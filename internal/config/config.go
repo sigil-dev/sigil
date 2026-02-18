@@ -128,6 +128,11 @@ type ScannerConfig struct {
 	Tool                     types.ScannerMode `mapstructure:"tool"`
 	Output                   types.ScannerMode `mapstructure:"output"`
 	AllowPermissiveInputMode bool              `mapstructure:"allow_permissive_input_mode"`
+	// OriginTagging controls whether origin tags ([user_input], [tool_output], etc.)
+	// are prepended to message content when sending to LLM providers.
+	// Defaults to true. Disable to reduce upstream token count changes and avoid
+	// altering message content sent to providers.
+	OriginTagging bool `mapstructure:"origin_tagging"`
 }
 
 // SetDefaults applies Sigil's default configuration values to v.
@@ -144,9 +149,10 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("models.budgets.per_hour_usd", 5.00)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
 	v.SetDefault("security.scanner.input", "block")
-	v.SetDefault("security.scanner.tool", "flag")
+	v.SetDefault("security.scanner.tool", "redact")
 	v.SetDefault("security.scanner.output", "redact")
 	v.SetDefault("security.scanner.allow_permissive_input_mode", false)
+	v.SetDefault("security.scanner.origin_tagging", true)
 }
 
 // SetupEnv configures environment variable binding on v with prefix SIGIL_.
@@ -426,6 +432,7 @@ func (c *Config) validateSecurity() []error {
 		{"SIGIL_SECURITY_SCANNER_INPUT", "security.scanner.input"},
 		{"SIGIL_SECURITY_SCANNER_TOOL", "security.scanner.tool"},
 		{"SIGIL_SECURITY_SCANNER_OUTPUT", "security.scanner.output"},
+		{"SIGIL_SECURITY_SCANNER_ORIGIN_TAGGING", "security.scanner.origin_tagging"},
 	}
 	for _, blocked := range blockedScannerEnvVars {
 		if os.Getenv(blocked.envVar) != "" {

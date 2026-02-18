@@ -76,23 +76,34 @@ const (
 
 // ThreatInfo records security scanner findings for audit persistence.
 //
-// Callers MUST distinguish three semantic states via pointer nilness:
+// Three semantic states are encoded using the Scanned and Detected fields:
 //   - nil *ThreatInfo: scanner did not run (legacy message or pre-scanner code path)
-//   - &ThreatInfo{Detected: false}: scanner ran and found no threats
-//   - &ThreatInfo{Detected: true, ...}: scanner detected threats
+//   - &ThreatInfo{Scanned: true, Detected: false}: scanner ran and found no threats
+//   - &ThreatInfo{Scanned: true, Detected: true, Rules: [...]}: scanner detected threats
 //
-// Note: JSON serialization does not preserve the nil vs empty distinction — both
-// nil and &ThreatInfo{} serialize to `{}`. This is a known limitation for audit
-// queries on historical data; callers relying on nil-as-unscanned semantics MUST
-// use the in-memory representation rather than round-tripping through JSON.
+// The Scanned field solves the JSON round-trip problem: both nil and &ThreatInfo{}
+// previously serialized to `{}`, making "not scanned" indistinguishable from
+// "scanned clean" after persistence. With Scanned=true, a clean scan result
+// serializes to `{"scanned":true,"detected":false,...}`, which is distinct from
+// the default `{}` produced when a nil ThreatInfo is stored as "{}".
+//
+// Backward compatibility: pre-Scanned records stored as `{}` unmarshal with
+// Scanned=false and Detected=false. Treating Scanned=false as "did not run" is
+// correct for historical records — they either predate the scanner or were stored
+// before this field was added.
 type ThreatInfo struct {
+	// Scanned is true when the security scanner actually ran on the content.
+	// A false value means the scanner did not run (legacy record, or nil ThreatInfo
+	// serialized as "{}"). MUST be true whenever Detected is true.
+	Scanned  bool      `json:"scanned"`
 	Detected bool      `json:"detected"`
 	Rules    []string  `json:"rules"`
 	Stage    ScanStage `json:"stage"`
 	// Bypassed is true when the scanner was unavailable and content passed
 	// through unscanned (best-effort path below circuit breaker threshold).
 	// Detected will be false because no scan occurred, not because the
-	// content is clean. Audit queries MUST treat Bypassed=true as distinct
+	// content is clean. Scanned will also be false because no scan ran.
+	// Audit queries MUST treat Bypassed=true as distinct
 	// from a confirmed clean scan result.
 	Bypassed bool `json:"bypassed,omitempty"`
 }
