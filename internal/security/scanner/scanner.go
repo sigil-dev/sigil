@@ -255,7 +255,7 @@ func Normalize(s string) string {
 // opts.Origin is validated and stored in the returned ScanResult for audit and
 // logging purposes only; it does not influence which rules are evaluated. Rule
 // selection is determined exclusively by opts.Stage.
-func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext) (ScanResult, error) {
+func (s *RegexScanner) Scan(ctx context.Context, content string, opts ScanContext) (ScanResult, error) {
 	if !opts.Stage.Valid() {
 		return ScanResult{}, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "invalid scan stage: %q", opts.Stage)
 	}
@@ -284,6 +284,9 @@ func (s *RegexScanner) Scan(_ context.Context, content string, opts ScanContext)
 	result := ScanResult{Content: content}
 
 	for _, rule := range s.rules {
+		if err := ctx.Err(); err != nil {
+			return ScanResult{}, sigilerr.Wrap(err, sigilerr.CodeSecurityScannerFailure, "scan cancelled")
+		}
 		if rule.stage != opts.Stage {
 			continue
 		}

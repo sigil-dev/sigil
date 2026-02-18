@@ -1089,7 +1089,7 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage types.Scan
 		// and re-scan the truncated content.
 		if stage == types.ScanStageTool {
 			if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerContentTooLarge) {
-				slog.LogAttrs(ctx, slog.LevelDebug, "tool result exceeds scanner limit, delegating to oversized handler",
+				slog.LogAttrs(ctx, slog.LevelWarn, "tool result exceeds scanner limit, delegating to oversized handler",
 					append([]slog.Attr{
 						slog.String("error", scanErr.Error()),
 						slog.Int("content_length", len(content)),

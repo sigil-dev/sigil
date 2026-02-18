@@ -99,6 +99,19 @@ func TestNewScannerModesFromConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "case-insensitive mode parsing",
+			cfg: config.ScannerConfig{
+				Input:  "BLOCK",
+				Tool:   "Flag",
+				Output: "REDACT",
+			},
+			want: agent.ScannerModes{
+				Input:  types.ScannerModeBlock,
+				Tool:   types.ScannerModeFlag,
+				Output: types.ScannerModeRedact,
+			},
+		},
+		{
 			name: "invalid input mode returns error",
 			cfg: config.ScannerConfig{
 				Input: "bogus",

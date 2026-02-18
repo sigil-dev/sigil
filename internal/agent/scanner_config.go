@@ -25,10 +25,11 @@ func parseModeField(raw types.ScannerMode, name string, fallback types.ScannerMo
 	if raw == "" {
 		return fallback, nil
 	}
-	if !raw.Valid() {
+	mode, err := types.ParseScannerMode(string(raw))
+	if err != nil {
 		return "", sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue, "invalid scanner %s mode: %q", name, raw)
 	}
-	return raw, nil
+	return mode, nil
 }
 
 // NewScannerModesFromConfig converts config.ScannerConfig to agent.ScannerModes.
@@ -38,18 +39,23 @@ func parseModeField(raw types.ScannerMode, name string, fallback types.ScannerMo
 // tagging is enabled; true means tagging is disabled. Both the config struct and
 // ScannerModes use the same "disable" polarity so no inversion is needed.
 func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
-	var (
-		modes ScannerModes
-		err   error
-	)
-	if modes.Input, err = parseModeField(cfg.Input, "input", defaultScannerModes.Input); err != nil {
-		return ScannerModes{}, err
+	type modeEntry struct {
+		raw      types.ScannerMode
+		name     string
+		fallback types.ScannerMode
+		dst      *types.ScannerMode
 	}
-	if modes.Tool, err = parseModeField(cfg.Tool, "tool", defaultScannerModes.Tool); err != nil {
-		return ScannerModes{}, err
-	}
-	if modes.Output, err = parseModeField(cfg.Output, "output", defaultScannerModes.Output); err != nil {
-		return ScannerModes{}, err
+	var modes ScannerModes
+	for _, e := range []modeEntry{
+		{cfg.Input, "input", defaultScannerModes.Input, &modes.Input},
+		{cfg.Tool, "tool", defaultScannerModes.Tool, &modes.Tool},
+		{cfg.Output, "output", defaultScannerModes.Output, &modes.Output},
+	} {
+		parsed, err := parseModeField(e.raw, e.name, e.fallback)
+		if err != nil {
+			return ScannerModes{}, err
+		}
+		*e.dst = parsed
 	}
 	modes.DisableOriginTagging = cfg.DisableOriginTagging
 	return modes, nil

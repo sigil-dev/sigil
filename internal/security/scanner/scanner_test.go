@@ -1179,6 +1179,23 @@ func TestRegexScanner_ConcurrentScan(t *testing.T) {
 	wg.Wait()
 }
 
+// Finding sigil-7g5.551 — Cancelled context interrupts Scan between rule evaluations.
+func TestRegexScanner_Scan_CancelledContext(t *testing.T) {
+	rules := mustDefaultRules(t)
+	s, err := scanner.NewRegexScanner(rules)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err = s.Scan(ctx, "test content", scanner.ScanContext{
+		Stage:  types.ScanStageInput,
+		Origin: types.OriginUserInput,
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure))
+}
+
 // Finding .269 — NewMatch validates negative location/length offsets.
 func TestNewMatch_NegativeOffsets(t *testing.T) {
 	_, err := scanner.NewMatch("rule", -1, 5, scanner.SeverityHigh)

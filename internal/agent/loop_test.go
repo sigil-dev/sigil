@@ -4430,6 +4430,73 @@ func TestAgentLoop_AuditToolScan_CleanResult(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// sigil-7g5.554 — auditToolScan bypass-path audit entry assertion
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_AuditToolScan_BypassPath verifies that when a tool-stage scanner
+// error triggers a bypass (below threshold), auditToolScan creates an audit entry
+// with action "agent_loop.tool_scan_bypassed".
+func TestAgentLoop_AuditToolScan_BypassPath(t *testing.T) {
+	sm, _ := newMockSessionManagerWithStore()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-audit-bypass",
+			Name:      "audit_tool",
+			Arguments: `{}`,
+		},
+	}
+
+	auditStore := newMockAuditStore()
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("tool output"),
+		AuditStore:     auditStore,
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = &mockToolErrorScanner{}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
+	cfg.AuditStore = auditStore
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "use the tool",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, procErr, "tool-stage bypass below threshold must not fail the turn")
+	assert.NotNil(t, out)
+
+	// Assert audit store contains a tool_scan_bypassed entry.
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+	var foundBypass bool
+	for _, entry := range auditStore.entries {
+		if entry.Action == "agent_loop.tool_scan_bypassed" {
+			foundBypass = true
+			break
+		}
+	}
+	assert.True(t, foundBypass, "audit store must contain an agent_loop.tool_scan_bypassed entry when tool scan is bypassed")
+}
+
+// ---------------------------------------------------------------------------
 // sigil-7g5.424 — auditInputBlocked works even when session doesn't exist
 // ---------------------------------------------------------------------------
 
