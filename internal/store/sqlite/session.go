@@ -116,7 +116,7 @@ var safeIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // underscores, braces, brackets, commas, dots, hyphens, and spaces — covering
 // DEFAULT values like '{}' while excluding SQL metacharacters such as
 // semicolons, dashes-in-comments, and quote sequences.
-var safeDefTokenRe = regexp.MustCompile(`^(?:[a-zA-Z_][a-zA-Z0-9_]*|'[a-zA-Z0-9_{}[\]., -]*')$`)
+var safeDefTokenRe = regexp.MustCompile(`^(?:[a-zA-Z_][a-zA-Z0-9_]*|'[-a-zA-Z0-9_{}[\]., ]*')$`)
 
 // addColumnIfMissing checks whether the named column exists in the given table
 // via PRAGMA table_info, and issues ALTER TABLE ADD COLUMN if it does not.

@@ -3235,6 +3235,84 @@ func TestAgentLoop_ToolScanDetectsInjection(t *testing.T) {
 	require.NotNil(t, out)
 }
 
+// ---------------------------------------------------------------------------
+// sigil-7g5.651 — Circuit breaker trips after exactly threshold consecutive
+// tool-scan failures within one turn.
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ToolScanCircuitBreaker_TripsAfterThreshold verifies that
+// when the tool-stage scanner returns CodeSecurityScannerFailure for every
+// tool call in a single turn, the circuit breaker trips after exactly
+// scannerCircuitBreakerThreshold consecutive failures and the loop returns
+// CodeSecurityScannerCircuitBreakerOpen.
+func TestAgentLoop_ToolScanCircuitBreaker_TripsAfterThreshold(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Build exactly ScannerCircuitBreakerThreshold tool calls in one turn.
+	// The mockToolErrorScanner returns CodeSecurityScannerFailure for every
+	// tool-stage scan, so failures accumulate until the breaker trips.
+	toolCalls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
+	for i := range toolCalls {
+		toolCalls[i] = &provider.ToolCall{
+			ID:        fmt.Sprintf("tc-cb-trip-%d", i),
+			Name:      "get_weather",
+			Arguments: `{"city":"London"}`,
+		}
+	}
+	toolCallProvider := &mockProviderBatchToolCall{toolCalls: toolCalls}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny, 22C"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	// mockToolErrorScanner returns CodeSecurityScannerFailure on tool stage.
+	cfg.Scanner = &mockToolErrorScanner{}
+	cfg.ScannerModes = agent.ScannerModes{
+		Input:  types.ScannerModeFlag,
+		Tool:   types.ScannerModeBlock,
+		Output: types.ScannerModeRedact,
+	}
+	// Allow enough tool calls so the threshold is reachable.
+	cfg.MaxToolCallsPerTurn = agent.ScannerCircuitBreakerThreshold + 1
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	msg := agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	}
+
+	out, procErr := loop.ProcessMessage(ctx, msg)
+
+	// The circuit breaker must trip after exactly threshold failures.
+	require.Error(t, procErr,
+		"expected circuit breaker to trip after %d consecutive tool-scan failures",
+		agent.ScannerCircuitBreakerThreshold)
+	assert.Nil(t, out, "output must be nil when circuit breaker is open")
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen),
+		"expected error code %s, got %s",
+		sigilerr.CodeSecurityScannerCircuitBreakerOpen, sigilerr.CodeOf(procErr))
+}
+
 // Finding .125 — Block-before-persist: scanner block prevents AppendMessage.
 func TestAgentLoop_BlockedInputNotPersisted(t *testing.T) {
 	trackingStore := newMockSessionStoreTracking()
@@ -4751,6 +4829,97 @@ func TestAgentLoop_AuditToolScan_CircuitBreakerPath(t *testing.T) {
 	}
 	assert.Greater(t, bypassCount, 0,
 		"audit store must contain at least one agent_loop.tool_scan_bypassed entry when circuit breaker fires")
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.656 — auditToolScan records audit entry with bypassed=true and
+// scan_error details when the circuit breaker fires.
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ToolScanCircuitBreaker_AuditsEntry verifies that when the
+// tool-stage scanner circuit breaker fires (ScannerCircuitBreakerThreshold+1
+// tool calls in one turn with a failing scanner), ProcessMessage returns
+// CodeSecurityScannerCircuitBreakerOpen and the audit store contains an entry
+// with action "agent_loop.tool_scan_bypassed", details["bypassed"]==true, and
+// details["scan_error"] set to the circuit-breaker error message.
+func TestAgentLoop_ToolScanCircuitBreaker_AuditsEntry(t *testing.T) {
+	sm, _ := newMockSessionManagerWithStore()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Build ScannerCircuitBreakerThreshold+1 tool calls so the batch has more
+	// than enough to trip the circuit breaker within a single turn.
+	numCalls := agent.ScannerCircuitBreakerThreshold + 1
+	toolCalls := make([]*provider.ToolCall, numCalls)
+	for i := range toolCalls {
+		toolCalls[i] = &provider.ToolCall{
+			ID:        fmt.Sprintf("tc-cb-audit-entry-%d", i),
+			Name:      "cb_entry_tool",
+			Arguments: `{}`,
+		}
+	}
+	toolCallProvider := &mockProviderBatchToolCall{toolCalls: toolCalls}
+
+	auditStore := newMockAuditStore()
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("tool output"),
+		AuditStore:     auditStore,
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = &mockToolErrorScanner{}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
+	cfg.MaxToolCallsPerTurn = numCalls + 1
+	cfg.AuditStore = auditStore
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	_, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "use the tools",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.Error(t, procErr, "circuit breaker open must fail the turn")
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen),
+		"expected CodeSecurityScannerCircuitBreakerOpen, got %s", sigilerr.CodeOf(procErr))
+
+	// The circuit-breaker trip must produce at least one audit entry that:
+	//   - has action "agent_loop.tool_scan_bypassed" (bypassed path)
+	//   - has details["bypassed"] == true
+	//   - has details["scan_error"] set (the circuit-breaker error message)
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+
+	var cbEntry *store.AuditEntry
+	for _, entry := range auditStore.entries {
+		if entry.Action == "agent_loop.tool_scan_bypassed" {
+			if bypassed, ok := entry.Details["bypassed"].(bool); ok && bypassed {
+				if _, hasErr := entry.Details["scan_error"]; hasErr {
+					cbEntry = entry
+					break
+				}
+			}
+		}
+	}
+	require.NotNil(t, cbEntry,
+		"audit store must contain an agent_loop.tool_scan_bypassed entry with bypassed=true and scan_error when circuit breaker fires")
+	assert.Equal(t, true, cbEntry.Details["bypassed"],
+		"audit entry Details[\"bypassed\"] must be true on circuit-breaker path")
+	assert.NotEmpty(t, cbEntry.Details["scan_error"],
+		"audit entry Details[\"scan_error\"] must be set to the circuit-breaker error message")
 }
 
 // ---------------------------------------------------------------------------

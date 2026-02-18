@@ -117,6 +117,48 @@ func TestAddColumnIfMissing_Validation(t *testing.T) {
 			wantErr:     true,
 			errContains: "empty column definition",
 		},
+		// Regression tests for safeDefTokenRe character-class range bug
+		// (sigil-7g5.652): ' -' created an unintended range U+0020..U+002D,
+		// which admitted SQL metacharacters like !, $, (.
+		{
+			name:      "valid quoted default with hyphen",
+			table:     "t",
+			column:    "col_hyph",
+			columnDef: "TEXT NOT NULL DEFAULT 'foo-bar'",
+			wantErr:   false,
+		},
+		{
+			name:        "quoted default with space rejected by tokenizer",
+			table:       "t",
+			column:      "col_sp",
+			columnDef:   "TEXT NOT NULL DEFAULT 'foo bar'",
+			wantErr:     true,
+			errContains: "unsafe token",
+		},
+		{
+			name:        "reject exclamation in quoted default",
+			table:       "t",
+			column:      "col",
+			columnDef:   "TEXT DEFAULT 'bad!'",
+			wantErr:     true,
+			errContains: "unsafe token",
+		},
+		{
+			name:        "reject dollar in quoted default",
+			table:       "t",
+			column:      "col",
+			columnDef:   "TEXT DEFAULT '$var'",
+			wantErr:     true,
+			errContains: "unsafe token",
+		},
+		{
+			name:        "reject paren in quoted default",
+			table:       "t",
+			column:      "col",
+			columnDef:   "TEXT DEFAULT '(inject)'",
+			wantErr:     true,
+			errContains: "unsafe token",
+		},
 	}
 
 	for _, tt := range tests {
@@ -131,6 +173,46 @@ func TestAddColumnIfMissing_Validation(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+// TestSafeDefTokenRe_CharacterClassRange verifies that safeDefTokenRe treats
+// hyphen as a literal character rather than creating a range from space
+// (U+0020) to hyphen (U+002D). Regression test for sigil-7g5.652.
+func TestSafeDefTokenRe_CharacterClassRange(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		// Characters that SHOULD match.
+		{"plain identifier", "TEXT", true},
+		{"quoted braces", "'{}'", true},
+		{"quoted hyphen", "'foo-bar'", true},
+		{"quoted with space", "'foo bar'", true},
+		{"quoted with dot", "'1.0'", true},
+		{"quoted with comma", "'a,b'", true},
+		{"quoted with brackets", "'[0]'", true},
+
+		// Characters between space and hyphen (U+0021..U+002C) that MUST be
+		// rejected now that the range bug is fixed.
+		{"reject exclamation", "'bad!'", false},
+		{"reject double quote", "'say\"hi'", false},
+		{"reject hash", "'#tag'", false},
+		{"reject dollar", "'$var'", false},
+		{"reject percent", "'100%'", false},
+		{"reject ampersand", "'a&b'", false},
+		{"reject open paren", "'f('", false},
+		{"reject close paren", "'f)'", false},
+		{"reject asterisk", "'a*b'", false},
+		{"reject plus", "'a+b'", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := safeDefTokenRe.MatchString(tt.input)
+			assert.Equal(t, tt.want, got, "safeDefTokenRe.MatchString(%q)", tt.input)
 		})
 	}
 }

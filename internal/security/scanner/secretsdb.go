@@ -62,6 +62,7 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 	dbOnce.Do(func() {
 		var f dbFile
 		if err := yaml.Unmarshal(rulesStableYAML, &f); err != nil {
+			slog.Error("secrets-patterns-db YAML parse failed", "error", err)
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
 				"parsing secrets-patterns-db YAML (permanent failure — process restart required to retry): %w", err)
 			return

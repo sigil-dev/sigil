@@ -9,6 +9,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -453,14 +454,14 @@ func TestChatEvent_Validate(t *testing.T) {
 func TestOriginTag(t *testing.T) {
 	tests := []struct {
 		name   string
-		origin provider.Origin
+		origin types.Origin
 		want   string
 	}{
-		{"user origin", provider.OriginUser, "[user_input] "},
-		{"system origin", provider.OriginSystem, "[system] "},
-		{"tool origin", provider.OriginTool, "[tool_output] "},
-		{"unknown origin", provider.Origin("unknown"), ""},
-		{"empty origin", provider.Origin(""), ""},
+		{"user origin", types.OriginUserInput, "[user_input] "},
+		{"system origin", types.OriginSystem, "[system] "},
+		{"tool origin", types.OriginToolOutput, "[tool_output] "},
+		{"unknown origin", types.Origin("unknown"), ""},
+		{"empty origin", types.Origin(""), ""},
 	}
 
 	for _, tt := range tests {
@@ -474,17 +475,17 @@ func TestOriginTag(t *testing.T) {
 func TestOriginTagIfEnabled(t *testing.T) {
 	tests := []struct {
 		name    string
-		origin  provider.Origin
+		origin  types.Origin
 		enabled bool
 		want    string
 	}{
-		{"enabled user origin", provider.OriginUser, true, "[user_input] "},
-		{"enabled system origin", provider.OriginSystem, true, "[system] "},
-		{"enabled tool origin", provider.OriginTool, true, "[tool_output] "},
-		{"enabled unknown origin", provider.Origin("unknown"), true, ""},
-		{"disabled user origin", provider.OriginUser, false, ""},
-		{"disabled system origin", provider.OriginSystem, false, ""},
-		{"disabled tool origin", provider.OriginTool, false, ""},
+		{"enabled user origin", types.OriginUserInput, true, "[user_input] "},
+		{"enabled system origin", types.OriginSystem, true, "[system] "},
+		{"enabled tool origin", types.OriginToolOutput, true, "[tool_output] "},
+		{"enabled unknown origin", types.Origin("unknown"), true, ""},
+		{"disabled user origin", types.OriginUserInput, false, ""},
+		{"disabled system origin", types.OriginSystem, false, ""},
+		{"disabled tool origin", types.OriginToolOutput, false, ""},
 	}
 
 	for _, tt := range tests {

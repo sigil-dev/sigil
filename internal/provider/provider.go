@@ -80,32 +80,13 @@ type ChatOptions struct {
 	OriginTagging bool
 }
 
-// Origin indicates the source of a message. Used to label conversation
-// history entries for downstream processing.
-// Aliased from pkg/types for backward compatibility.
-type Origin = types.Origin
-
-const (
-	OriginUser   = types.OriginUserInput
-	OriginSystem = types.OriginSystem
-	OriginTool   = types.OriginToolOutput
-	// OriginUnknown is used when the origin of a message cannot be determined,
-	// for example in internal error paths or messages constructed before origin
-	// tracking was introduced. The agent loop sets Origin explicitly on all
-	// messages it constructs; OriginUnknown should not appear in production
-	// chat histories. Providers constructing internal Messages (e.g., for
-	// streaming error events) SHOULD use OriginUnknown rather than leaving
-	// Origin as the zero-value "".
-	OriginUnknown Origin = "unknown"
-)
-
 // Message represents a conversation message.
 type Message struct {
 	Role       store.MessageRole
 	Content    string
 	ToolCallID string
 	ToolName   string
-	Origin     Origin
+	Origin     types.Origin
 }
 
 // ToolDefinition describes a tool available to the agent.
@@ -292,13 +273,13 @@ type ProviderStatus struct {
 // (e.g. "user", "assistant", "tool" in the upstream LLM request). Security
 // decisions MUST rely on the role field and the agent loop's 7-step validation
 // pipeline, not on these textual markers.
-func OriginTag(origin Origin) string {
+func OriginTag(origin types.Origin) string {
 	switch origin {
-	case OriginUser:
+	case types.OriginUserInput:
 		return "[user_input] "
-	case OriginSystem:
+	case types.OriginSystem:
 		return "[system] "
-	case OriginTool:
+	case types.OriginToolOutput:
 		return "[tool_output] "
 	default:
 		return ""
@@ -308,7 +289,7 @@ func OriginTag(origin Origin) string {
 // OriginTagIfEnabled returns the origin tag for the given origin when enabled is true,
 // and empty string when enabled is false. Use this in providers to conditionally
 // prepend origin tags based on the security.scanner.origin_tagging config setting.
-func OriginTagIfEnabled(origin Origin, enabled bool) string {
+func OriginTagIfEnabled(origin types.Origin, enabled bool) string {
 	if !enabled {
 		return ""
 	}

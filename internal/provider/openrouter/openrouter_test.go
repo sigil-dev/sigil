@@ -11,6 +11,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/provider/openrouter"
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -139,7 +140,7 @@ func TestConvertMessages_OriginTagging(t *testing.T) {
 		{
 			name: "user message with origin tagging enabled gets [user_input] prefix",
 			msgs: []provider.Message{
-				{Role: store.MessageRoleUser, Content: "hello world", Origin: provider.OriginUser},
+				{Role: store.MessageRoleUser, Content: "hello world", Origin: types.OriginUserInput},
 			},
 			originTagging: true,
 			wantLen:       1,
@@ -148,7 +149,7 @@ func TestConvertMessages_OriginTagging(t *testing.T) {
 		{
 			name: "user message with origin tagging disabled has no prefix",
 			msgs: []provider.Message{
-				{Role: store.MessageRoleUser, Content: "hello world", Origin: provider.OriginUser},
+				{Role: store.MessageRoleUser, Content: "hello world", Origin: types.OriginUserInput},
 			},
 			originTagging: false,
 			wantLen:       1,
@@ -157,7 +158,7 @@ func TestConvertMessages_OriginTagging(t *testing.T) {
 		{
 			name: "tool message with origin tagging enabled gets [tool_output] prefix",
 			msgs: []provider.Message{
-				{Role: store.MessageRoleTool, Content: "result data", Origin: provider.OriginTool, ToolCallID: "call-1"},
+				{Role: store.MessageRoleTool, Content: "result data", Origin: types.OriginToolOutput, ToolCallID: "call-1"},
 			},
 			originTagging: true,
 			wantLen:       1,
@@ -166,7 +167,7 @@ func TestConvertMessages_OriginTagging(t *testing.T) {
 		{
 			name: "tool message with origin tagging disabled has no prefix",
 			msgs: []provider.Message{
-				{Role: store.MessageRoleTool, Content: "result data", Origin: provider.OriginTool, ToolCallID: "call-1"},
+				{Role: store.MessageRoleTool, Content: "result data", Origin: types.OriginToolOutput, ToolCallID: "call-1"},
 			},
 			originTagging: false,
 			wantLen:       1,
@@ -184,9 +185,9 @@ func TestConvertMessages_OriginTagging(t *testing.T) {
 		{
 			name: "mixed conversation with origin tagging applies tags only to user and tool",
 			msgs: []provider.Message{
-				{Role: store.MessageRoleUser, Content: "question", Origin: provider.OriginUser},
+				{Role: store.MessageRoleUser, Content: "question", Origin: types.OriginUserInput},
 				{Role: store.MessageRoleAssistant, Content: "answer"},
-				{Role: store.MessageRoleTool, Content: "tool result", Origin: provider.OriginTool, ToolCallID: "call-2"},
+				{Role: store.MessageRoleTool, Content: "tool result", Origin: types.OriginToolOutput, ToolCallID: "call-2"},
 			},
 			originTagging: true,
 			wantLen:       3,

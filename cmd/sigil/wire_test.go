@@ -780,6 +780,17 @@ func TestGateway_ValidateRequiredFields(t *testing.T) {
 			mutate:    func(g *Gateway) { g.scannerModes = agent.ScannerModes{} },
 			expectErr: "ScannerModes.Input is required",
 		},
+		{
+			name: "invalid scanner modes output with valid input and tool",
+			mutate: func(g *Gateway) {
+				g.scannerModes = agent.ScannerModes{
+					Input:  types.ScannerModeBlock,
+					Tool:   types.ScannerModeFlag,
+					Output: "invalid",
+				}
+			},
+			expectErr: "invalid ScannerModes.Output",
+		},
 	}
 
 	for _, tt := range tests {

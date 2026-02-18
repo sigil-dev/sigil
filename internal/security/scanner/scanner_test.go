@@ -1187,7 +1187,7 @@ func TestRegexScanner_Scan_CancelledContext(t *testing.T) {
 		Origin: types.OriginUserInput,
 	})
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure))
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerCancelled))
 }
 
 // Finding .269 — NewMatch validates negative location/length offsets.

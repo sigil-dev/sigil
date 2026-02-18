@@ -92,6 +92,7 @@ const (
 	CodeSecurityScannerOutputBlocked      Code = "security.scanner.output_blocked"
 	CodeSecurityScannerContentTooLarge    Code = "security.scanner.content_too_large"
 	CodeSecurityScannerFailure            Code = "security.scanner.failure"
+	CodeSecurityScannerCancelled          Code = "security.scanner.cancelled"
 	CodeSecurityScannerCircuitBreakerOpen Code = "security.scanner.circuit_breaker_open"
 
 	CodeChannelTokenInvalid     Code = "channel.token.invalid"
