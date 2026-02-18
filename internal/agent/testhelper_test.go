@@ -1084,6 +1084,29 @@ func (s *mockToolContentTooLargeScanner) Scan(_ context.Context, content string,
 	return scanner.ScanResult{Content: content}, nil
 }
 
+// mockToolAlwaysContentTooLargeScanner returns CodeSecurityScannerContentTooLarge for
+// every tool-stage Scan call, regardless of content length. This simulates a scanner
+// whose internal size limit is smaller than maxToolContentScanSize (512KB), causing
+// both the primary oversized scan AND the truncated re-scan to fail with the same
+// error code (sigil-7g5.617). Input and output stages pass through cleanly so that
+// ProcessMessage can reach the tool execution path.
+type mockToolAlwaysContentTooLargeScanner struct {
+	// scanCount tracks the total number of tool-stage Scan calls made.
+	scanCount int
+}
+
+func (s *mockToolAlwaysContentTooLargeScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage != types.ScanStageTool {
+		return scanner.ScanResult{Content: content}, nil
+	}
+	s.scanCount++
+	return scanner.ScanResult{Content: content},
+		sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+			"content exceeds scanner internal limit",
+			sigilerr.Field("length", len(content)),
+		)
+}
+
 // mockInputContentTooLargeScanner returns CodeSecurityScannerContentTooLarge on the
 // input stage unconditionally, simulating a scanner that always rejects input due to
 // excessive size. All other stages pass through cleanly.

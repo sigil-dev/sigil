@@ -142,3 +142,103 @@ func TestApplyMode_UnknownMode(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
 		"expected CodeSecurityScannerFailure, got: %v", err)
 }
+
+// TestApplyMode_RedactByteOffsets exercises the byte-offset arithmetic in
+// redact() via the public ApplyMode API. It constructs ScanResult values
+// directly with controlled Match entries to cover boundary conditions that
+// are not reliably reachable through a real regex scan.
+//
+// Finding sigil-7g5.615 — redact() had no tests for overlapping matches or
+// boundary positions (end-of-string, full-string).
+func TestApplyMode_RedactByteOffsets(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		matches     []scanner.Match
+		wantContent string
+	}{
+		{
+			// Two non-overlapping matches: both must be independently redacted
+			// and the text between them must be preserved.
+			name:    "two non-overlapping matches",
+			content: "secret1 and secret2",
+			matches: []scanner.Match{
+				mustMatch("rule-a", 0, 7, scanner.SeverityHigh),  // "secret1"
+				mustMatch("rule-b", 12, 7, scanner.SeverityHigh), // "secret2"
+			},
+			wantContent: "[REDACTED] and [REDACTED]",
+		},
+		{
+			// Match extends exactly to the last byte: Location + Length == len(content).
+			// Off-by-one in the end-clamp would produce an index out of range panic
+			// or leave the final character un-redacted.
+			name:    "match extends to end of string",
+			content: "prefix secret",
+			matches: []scanner.Match{
+				mustMatch("rule-a", 7, 6, scanner.SeverityHigh), // "secret" (bytes 7–12, len==13)
+			},
+			wantContent: "prefix [REDACTED]",
+		},
+		{
+			// Match covers the entire string: Location==0, Length==len(content).
+			// Exercises both start-clamp and end-clamp paths simultaneously.
+			name:    "full-string redaction",
+			content: "topsecret",
+			matches: []scanner.Match{
+				mustMatch("rule-a", 0, 9, scanner.SeverityHigh),
+			},
+			wantContent: "[REDACTED]",
+		},
+		{
+			// Two matches from different rules on the same content.
+			// If the ranges overlap the merged span must produce a single
+			// [REDACTED] token; if they are adjacent they must also merge.
+			name:    "overlapping matches from two rules merge into one redaction",
+			content: "AKIAIOSFODNN7EXAMPLE extra",
+			matches: []scanner.Match{
+				// rule-a covers bytes 0–19 ("AKIAIOSFODNN7EXAMPLE")
+				mustMatch("rule-a", 0, 20, scanner.SeverityHigh),
+				// rule-b overlaps: bytes 5–19 (sub-range of rule-a)
+				mustMatch("rule-b", 5, 15, scanner.SeverityMedium),
+			},
+			wantContent: "[REDACTED] extra",
+		},
+		{
+			// Three matches: first two overlap, third is separate.
+			// Ensures the merge loop correctly advances past the merged span
+			// before emitting the third [REDACTED].
+			name:    "three matches two overlapping one separate",
+			content: "aabbccddee",
+			matches: []scanner.Match{
+				mustMatch("rule-a", 0, 4, scanner.SeverityHigh),  // "aabb"
+				mustMatch("rule-b", 2, 4, scanner.SeverityHigh),  // "bbcc" (overlaps rule-a)
+				mustMatch("rule-c", 8, 2, scanner.SeverityMedium), // "ee"
+			},
+			// Merged spans: [0,6) → "aabbcc", [8,10) → "ee"; "dd" is preserved.
+			wantContent: "[REDACTED]dd[REDACTED]",
+		},
+		{
+			// Matches supplied in reverse order: redact() must sort before merging.
+			name:    "matches supplied in descending order are sorted correctly",
+			content: "hello world",
+			matches: []scanner.Match{
+				mustMatch("rule-b", 6, 5, scanner.SeverityHigh), // "world"
+				mustMatch("rule-a", 0, 5, scanner.SeverityHigh), // "hello"
+			},
+			wantContent: "[REDACTED] [REDACTED]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := scanner.ScanResult{
+				Threat:  true,
+				Content: tt.content,
+				Matches: tt.matches,
+			}
+			got, err := scanner.ApplyMode(types.ScannerModeRedact, types.ScanStageOutput, result)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantContent, got)
+		})
+	}
+}

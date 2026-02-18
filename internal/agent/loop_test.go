@@ -2818,15 +2818,21 @@ func TestAgentLoop_InputScannerContentTooLarge_FailsClosed(t *testing.T) {
 	// an error with CodeSecurityScannerContentTooLarge rather than passing the
 	// oversized input through to the provider. This is a critical security
 	// invariant: content-too-large on input is treated as a hard failure.
+	//
+	// sigil-7g5.610: also verifies that auditInputBlocked records an audit entry
+	// with Result == "content_too_large" and no threat_detected flag (since the
+	// scanner never evaluated content — it only rejected the size).
 	sm := newMockSessionManager()
 	ctx := context.Background()
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
+	auditStore := newMockAuditStore()
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.Scanner = &mockInputContentTooLargeScanner{}
 	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeBlock, Tool: types.ScannerModeFlag, Output: types.ScannerModeRedact}
+	cfg.AuditStore = auditStore
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -2839,6 +2845,24 @@ func TestAgentLoop_InputScannerContentTooLarge_FailsClosed(t *testing.T) {
 	require.Error(t, err, "input content-too-large must fail closed")
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
 		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
+
+	// Verify the audit entry for the content_too_large path (sigil-7g5.610).
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+	var inputBlockedEntry *store.AuditEntry
+	for _, e := range auditStore.entries {
+		if e.Action == "agent_loop.input_blocked" {
+			inputBlockedEntry = e
+			break
+		}
+	}
+	require.NotNil(t, inputBlockedEntry,
+		"audit store must contain an agent_loop.input_blocked entry for content_too_large")
+	assert.Equal(t, "content_too_large", inputBlockedEntry.Result,
+		"audit Result must be 'content_too_large', not 'blocked_threat' or 'scanner_failure'")
+	_, hasThreatDetected := inputBlockedEntry.Details["threat_detected"]
+	assert.False(t, hasThreatDetected,
+		"audit Details must NOT contain threat_detected: no threat was evaluated, scanner only rejected size")
 }
 
 func TestAgentLoop_OutputScannerContentTooLarge_FailsClosed(t *testing.T) {
@@ -3062,6 +3086,105 @@ func TestAgentLoop_ToolScanTruncation_UTF8Boundary(t *testing.T) {
 	// Must be within the size limit.
 	assert.LessOrEqual(t, len(sc.lastToolContent), agent.MaxToolContentScanSize,
 		"truncated content must be <= maxToolContentScanSize")
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.617 — scanOversizedToolContent double-ContentTooLarge bypass path
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ToolScanOversized_BothScansContentTooLarge verifies the
+// config-mismatch bypass path in scanOversizedToolContent (sigil-7g5.617):
+// when the scanner's internal limit is smaller than maxToolContentScanSize,
+// both the primary scan (oversized content) AND the re-scan (truncated content)
+// return CodeSecurityScannerContentTooLarge. In this case the loop MUST:
+//  1. Succeed (best-effort path — the turn is not failed).
+//  2. Record an audit entry with action "agent_loop.tool_scan_bypassed".
+//  3. NOT increment scannerFailCount (no circuit-breaker credit).
+//
+// The absence of circuit-breaker increment is verified by running
+// ScannerCircuitBreakerThreshold tool calls in the same turn and confirming
+// that ProcessMessage still returns without error: if the counter were
+// incremented on the bypass path, the circuit breaker would trip and the
+// turn would fail with CodeSecurityScannerCircuitBreakerOpen.
+func TestAgentLoop_ToolScanOversized_BothScansContentTooLarge(t *testing.T) {
+	sm, _ := newMockSessionManagerWithStore()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Build ScannerCircuitBreakerThreshold tool calls, each returning content
+	// larger than maxToolContentScanSize. The always-too-large scanner will
+	// reject both the original AND truncated content for every call.
+	// If scannerFailCount were incremented on this path, the circuit breaker
+	// would trip before the last tool call and ProcessMessage would error.
+	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+	toolCalls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
+	for i := range toolCalls {
+		toolCalls[i] = &provider.ToolCall{
+			ID:        fmt.Sprintf("tc-both-large-%d", i),
+			Name:      "large_tool",
+			Arguments: `{}`,
+		}
+	}
+	toolCallProvider := &mockProviderBatchToolCall{toolCalls: toolCalls}
+
+	auditStore := newMockAuditStore()
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult(oversizedResult),
+		AuditStore:     auditStore,
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	sc := &mockToolAlwaysContentTooLargeScanner{}
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = sc
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeFlag}
+	cfg.AuditStore = auditStore
+	cfg.MaxToolCallsPerTurn = agent.ScannerCircuitBreakerThreshold + 1
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "run the large tools",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+
+	// The turn must succeed: double-ContentTooLarge is a config mismatch, not a
+	// scanner malfunction, so it must not fail the call.
+	require.NoError(t, procErr,
+		"double-ContentTooLarge on tool scan must not fail the turn (best-effort bypass path)")
+	assert.NotNil(t, out)
+
+	// Each tool call triggers two scanner calls (primary + re-scan), so the
+	// total scan count must be exactly 2 * ScannerCircuitBreakerThreshold.
+	expectedScanCount := 2 * agent.ScannerCircuitBreakerThreshold
+	assert.Equal(t, expectedScanCount, sc.scanCount,
+		"expected two tool-stage scan calls per tool (primary + re-scan), got %d", sc.scanCount)
+
+	// Audit store must contain at least one agent_loop.tool_scan_bypassed entry
+	// for the config-mismatch bypass path.
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+	var bypassCount int
+	for _, entry := range auditStore.entries {
+		if entry.Action == "agent_loop.tool_scan_bypassed" {
+			bypassCount++
+		}
+	}
+	assert.Greater(t, bypassCount, 0,
+		"audit store must contain at least one agent_loop.tool_scan_bypassed entry for the double-ContentTooLarge bypass path")
 }
 
 func TestAgentLoop_ToolScanDetectsInjection(t *testing.T) {
@@ -4552,6 +4675,82 @@ func TestAgentLoop_AuditToolScan_BypassPath(t *testing.T) {
 		}
 	}
 	assert.True(t, foundBypass, "audit store must contain an agent_loop.tool_scan_bypassed entry when tool scan is bypassed")
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.612 — auditToolScan records audit entry when circuit breaker fires
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_AuditToolScan_CircuitBreakerPath verifies that when the scanner
+// circuit breaker trips (threshold consecutive tool-stage scanner failures in one
+// turn), auditToolScan still records an audit entry with action
+// "agent_loop.tool_scan_bypassed". Previously handleToolScanFailure returned nil
+// ThreatInfo on the circuit-breaker path, causing auditToolScan to silently skip.
+func TestAgentLoop_AuditToolScan_CircuitBreakerPath(t *testing.T) {
+	sm, _ := newMockSessionManagerWithStore()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Build ScannerCircuitBreakerThreshold tool calls so the breaker trips within
+	// a single turn.
+	toolCalls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
+	for i := range toolCalls {
+		toolCalls[i] = &provider.ToolCall{
+			ID:        fmt.Sprintf("tc-cb-audit-%d", i),
+			Name:      "cb_tool",
+			Arguments: `{}`,
+		}
+	}
+	toolCallProvider := &mockProviderBatchToolCall{toolCalls: toolCalls}
+
+	auditStore := newMockAuditStore()
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("tool output"),
+		AuditStore:     auditStore,
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = &mockToolErrorScanner{}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
+	cfg.MaxToolCallsPerTurn = agent.ScannerCircuitBreakerThreshold + 1
+	cfg.AuditStore = auditStore
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	_, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "use the tool",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.Error(t, procErr, "circuit breaker open must fail the turn")
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen),
+		"expected CodeSecurityScannerCircuitBreakerOpen, got %s", sigilerr.CodeOf(procErr))
+
+	// The circuit-breaker trip must produce at least one audit entry with
+	// action "agent_loop.tool_scan_bypassed" (sigil-7g5.612).
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+	var bypassCount int
+	for _, entry := range auditStore.entries {
+		if entry.Action == "agent_loop.tool_scan_bypassed" {
+			bypassCount++
+		}
+	}
+	assert.Greater(t, bypassCount, 0,
+		"audit store must contain at least one agent_loop.tool_scan_bypassed entry when circuit breaker fires")
 }
 
 // ---------------------------------------------------------------------------

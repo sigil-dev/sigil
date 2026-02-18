@@ -872,6 +872,19 @@ func TestWireGateway_ScannerIsWiredAndFunctional(t *testing.T) {
 			origin:     types.OriginUserInput,
 			wantThreat: false,
 		},
+		{
+			// Near-miss: contains "ignore" and "previous" (keywords present in the
+			// instruction_override rule), but the full pattern requires the verb to
+			// be followed immediately by (previous|prior|above) then one of
+			// (instructions|prompts|rules). Here "ignore" governs "the noise" and
+			// "previous" modifies "results" — the required noun phrase is absent,
+			// so no rule matches. Verifies false-positive prevention.
+			name:       "near-miss phrase with injection keywords is not flagged",
+			payload:    "Please ignore the noise, previous results are still valid",
+			stage:      types.ScanStageInput,
+			origin:     types.OriginUserInput,
+			wantThreat: false,
+		},
 	}
 
 	for _, tt := range tests {

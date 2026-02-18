@@ -226,6 +226,11 @@ var invisibleCharReplacer = strings.NewReplacer(
 	"\ufffb", "", // interlinear annotation terminator
 )
 
+// maxHTMLDecodeIterations caps the HTML entity decode loop to prevent CPU DoS
+// via deeply nested encodings (e.g. 1000 levels of &amp;amp;...). Legitimate
+// payloads never require more than a handful of decode passes.
+const maxHTMLDecodeIterations = 10
+
 // Normalize applies HTML entity decoding, zero-width character stripping, and
 // NFKC normalization to reduce evasion via Unicode homoglyphs and HTML encoding.
 // Exported so other packages (e.g., the agent loop) can apply the same
@@ -233,7 +238,8 @@ var invisibleCharReplacer = strings.NewReplacer(
 func Normalize(s string) string {
 	// 1. Decode HTML entities iteratively so that double/triple-encoded
 	// payloads (e.g. &amp;lt;|system|&amp;gt;) are fully decoded.
-	for prev := ""; prev != s; {
+	// The iteration count is capped to prevent CPU DoS via deeply nested encodings.
+	for i, prev := 0, ""; prev != s && i < maxHTMLDecodeIterations; i++ {
 		prev = s
 		s = html.UnescapeString(s)
 	}

@@ -51,5 +51,8 @@ func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
 		return ScannerModes{}, err
 	}
 	modes.DisableOriginTagging = cfg.DisableOriginTagging
+	if err := modes.Validate(); err != nil {
+		return ScannerModes{}, err
+	}
 	return modes, nil
 }

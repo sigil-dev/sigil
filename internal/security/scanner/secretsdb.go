@@ -63,7 +63,7 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 		var f dbFile
 		if err := yaml.Unmarshal(rulesStableYAML, &f); err != nil {
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
-				"parsing secrets-patterns-db YAML: %w", err)
+				"parsing secrets-patterns-db YAML (permanent failure — process restart required to retry): %w", err)
 			return
 		}
 
@@ -102,14 +102,14 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 		// the scanner cannot guarantee full coverage and must refuse to start.
 		if len(failedNames) > 0 {
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
-				"scanner startup aborted: %d high-confidence pattern(s) failed to compile: %v",
+				"scanner startup aborted: %d high-confidence pattern(s) failed to compile: %v (permanent failure — process restart required to retry)",
 				len(failedNames), failedNames)
 			return
 		}
 
 		if len(dbEntries) == 0 {
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
-				"zero high-confidence patterns loaded from secrets-patterns-db (%d duplicates skipped)",
+				"zero high-confidence patterns loaded from secrets-patterns-db (%d duplicates skipped) (permanent failure — process restart required to retry)",
 				duplicateCount)
 		}
 	})
