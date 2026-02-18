@@ -45,7 +45,6 @@ func TestToolDispatcher_AllowedTool(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "executed", result.Content)
-	assert.Equal(t, "tool_output", result.Origin)
 }
 
 func TestToolDispatcher_DeniedCapability(t *testing.T) {
@@ -523,7 +522,6 @@ func TestToolDispatcher_WorkspaceUserCapabilityIntersection(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, result)
 				assert.Equal(t, "executed", result.Content)
-				assert.Equal(t, "tool_output", result.Origin)
 			}
 		})
 	}

@@ -404,6 +404,9 @@ func (c *Config) validateSecurity() []error {
 		{"security.scanner.tool", c.Security.Scanner.Tool},
 		{"security.scanner.output", c.Security.Scanner.Output},
 	} {
+		if pair.value == "" {
+			continue // empty means "use default" — matches NewScannerModesFromConfig behavior
+		}
 		if !pair.value.Valid() {
 			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 				"config: %s: invalid scanner mode %q", pair.field, pair.value))

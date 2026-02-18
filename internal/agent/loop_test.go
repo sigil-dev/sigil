@@ -3567,7 +3567,7 @@ func TestSanitizeToolError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := agent.SanitizeToolError(context.Background(), tt.err)
+			got := agent.SanitizeToolError(context.Background(), tt.err, "test-tool", "test-plugin", "test-session")
 			assert.Equal(t, tt.wantMsg, got)
 			// Verify no internal details from the error are present in the output.
 			assert.NotContains(t, got, "internal:")
@@ -5658,4 +5658,352 @@ func TestAgentLoop_ConcurrentProcessMessage(t *testing.T) {
 	assert.Nil(t, injectionResult.out)
 	assert.True(t, sigilerr.HasCode(injectionResult.err, sigilerr.CodeSecurityScannerInputBlocked),
 		"expected CodeSecurityScannerInputBlocked, got %s", sigilerr.CodeOf(injectionResult.err))
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.684 — scanOversizedToolContent re-scan content_too_large bypass
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ToolScan_ReScanAlsoContentTooLarge_DoesNotIncrementCircuitBreaker
+// verifies that when BOTH the primary scan and the re-scan of truncated content
+// return CodeSecurityScannerContentTooLarge (because the scanner's internal limit
+// is smaller than maxToolContentScanSize), the loop:
+//  1. Succeeds (best-effort bypass path — turn is not failed).
+//  2. Persists the tool message with Threat.Bypassed==true and Threat.Detected==false.
+//  3. Does NOT increment scannerFailCount — verified by running
+//     ScannerCircuitBreakerThreshold turns each with one tool call, and confirming
+//     none of them trip the circuit breaker.
+func TestAgentLoop_ToolScan_ReScanAlsoContentTooLarge_DoesNotIncrementCircuitBreaker(t *testing.T) {
+	// mockToolAlwaysContentTooLargeScanner (in testhelper_test.go) returns
+	// CodeSecurityScannerContentTooLarge for every tool-stage Scan call regardless
+	// of content length. This simulates a scanner whose internal size limit is
+	// smaller than maxToolContentScanSize, so both primary and re-scan fail.
+	//
+	// We send ScannerCircuitBreakerThreshold separate ProcessMessage calls via
+	// independent Loop instances (each with its own per-turn scannerFailCount),
+	// each triggering one tool scan (primary) + one re-scan. If scannerFailCount
+	// were incremented on the double-ContentTooLarge bypass path, the circuit
+	// breaker would trip and ProcessMessage would return an error — but the
+	// double-ContentTooLarge path must NOT increment the counter.
+
+	// Content larger than maxToolContentScanSize triggers the re-scan path.
+	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+
+	sc := &mockToolAlwaysContentTooLargeScanner{}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	sm, ss := newMockSessionManagerWithStore()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult(oversizedResult),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-rescan-large",
+			Name:      "large_tool",
+			Arguments: `{}`,
+		},
+	}
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = sc
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	// 1. Turn succeeds (best-effort bypass path).
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "run the large tool",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.NoError(t, procErr,
+		"double-ContentTooLarge on tool re-scan must not fail the turn (best-effort bypass path)")
+	assert.NotNil(t, out)
+
+	// 2. Persisted tool message has Threat.Bypassed==true and Threat.Detected==false.
+	history, histErr := ss.GetActiveWindow(ctx, session.ID, 20)
+	require.NoError(t, histErr)
+	var toolMsg *store.Message
+	for _, m := range history {
+		if m.Role == store.MessageRoleTool {
+			toolMsg = m
+			break
+		}
+	}
+	require.NotNil(t, toolMsg, "tool result message must be persisted")
+	require.NotNil(t, toolMsg.Threat, "Threat must be non-nil on bypassed tool message")
+	assert.True(t, toolMsg.Threat.Bypassed,
+		"Threat.Bypassed must be true when both primary and re-scan return ContentTooLarge")
+	assert.False(t, toolMsg.Threat.Detected,
+		"Threat.Detected must be false for a bypass (no threat was detected)")
+
+	// 3. scannerFailCount NOT incremented: send ScannerCircuitBreakerThreshold
+	// additional turns via fresh Loop instances — each causes one tool call whose
+	// both scans return ContentTooLarge. If the counter were incremented on the
+	// bypass path, the circuit breaker would trip within a single turn that had
+	// enough tool calls. We confirm no error across all threshold turns.
+	for i := 0; i < agent.ScannerCircuitBreakerThreshold; i++ {
+		freshSession, createErr := sm.Create(ctx, "ws-1", "user-1")
+		require.NoError(t, createErr)
+
+		freshProvider := &mockProviderToolCall{
+			toolCall: &provider.ToolCall{
+				ID:        fmt.Sprintf("tc-rescan-large-extra-%d", i),
+				Name:      "large_tool",
+				Arguments: `{}`,
+			},
+		}
+		freshCfg := newTestLoopConfig(t)
+		freshCfg.SessionManager = sm
+		freshCfg.ProviderRouter = &mockProviderRouter{provider: freshProvider}
+		freshCfg.ToolDispatcher = dispatcher
+		freshCfg.Scanner = sc
+		freshCfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
+		freshLoop, loopErr := agent.NewLoop(freshCfg)
+		require.NoError(t, loopErr)
+
+		extraOut, extraErr := freshLoop.ProcessMessage(ctx, agent.InboundMessage{
+			SessionID:       freshSession.ID,
+			WorkspaceID:     "ws-1",
+			UserID:          "user-1",
+			Content:         "run the large tool again",
+			WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+			UserPermissions: security.NewCapabilitySet("tool.*"),
+		})
+		require.NoError(t, extraErr,
+			"turn %d: double-ContentTooLarge bypass must not trip circuit breaker (scannerFailCount must not increment)", i+1)
+		assert.NotNil(t, extraOut)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.686 — auditToolScan before scanErr check: tool block audit entry
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ToolScanBlock_AuditEntry verifies that when the tool scanner mode
+// is ModeBlock and a tool result contains a secret (AWS key pattern), the loop:
+//  1. Returns an error with CodeSecurityScannerToolBlocked.
+//  2. Records an audit entry with action "agent_loop.tool_scan_threat" that
+//     includes threat_detected==true and non-empty threat_rules in Details.
+func TestAgentLoop_ToolScanBlock_AuditEntry(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// AWS key in tool result triggers the regex scanner's aws_key rule.
+	const awsKey = "AKIAIOSFODNN7EXAMPLE"
+	toolResult := "Here is your key: " + awsKey
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-block-audit",
+			Name:      "get_key",
+			Arguments: `{}`,
+		},
+	}
+
+	auditStore := newMockAuditStore()
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult(toolResult),
+		AuditStore:     auditStore,
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	// Tool mode is ModeBlock: secret in tool result must block the turn and
+	// auditToolScan must run before the scanErr causes ProcessMessage to return.
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
+	cfg.AuditStore = auditStore
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "Get the key.",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+
+	// 1. Error is CodeSecurityScannerToolBlocked.
+	require.Error(t, procErr, "tool scan block must return error")
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerToolBlocked),
+		"expected CodeSecurityScannerToolBlocked, got %s", sigilerr.CodeOf(procErr))
+
+	// 2. Audit store must contain an agent_loop.tool_scan_threat entry with
+	// the expected threat metadata.
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+
+	var threatEntry *store.AuditEntry
+	for _, entry := range auditStore.entries {
+		if entry.Action == "agent_loop.tool_scan_threat" {
+			threatEntry = entry
+			break
+		}
+	}
+	require.NotNil(t, threatEntry,
+		"audit store must contain an agent_loop.tool_scan_threat entry when tool scan blocks a secret")
+	assert.Equal(t, true, threatEntry.Details["threat_detected"],
+		"audit entry Details[\"threat_detected\"] must be true")
+	rules, ok := threatEntry.Details["threat_rules"].([]string)
+	assert.True(t, ok, "audit entry Details[\"threat_rules\"] must be a []string")
+	assert.NotEmpty(t, rules, "audit entry Details[\"threat_rules\"] must be non-empty")
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.688 — auditOutputBlocked on intermediate output block audit entry
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_IntermediateOutputBlocked_AuditEntry verifies that when the
+// output scanner mode is ModeBlock and intermediate assistant text emitted
+// alongside a tool call contains a secret, the loop:
+//  1. Returns an error with CodeSecurityScannerOutputBlocked.
+//  2. Records an audit entry with action "agent_loop.output_blocked",
+//     Result=="blocked_threat", and Details containing threat_detected and
+//     non-empty threat_rules.
+func TestAgentLoop_IntermediateOutputBlocked_AuditEntry(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	const secretTrigger = "SECRETTOKEN_OUTPUT_AUDIT"
+
+	// mockOutputBlockScanner (in testhelper_test.go) returns a threat match on
+	// the output stage when content contains the trigger string. All other stages
+	// pass through cleanly so the turn reaches the intermediate output scan.
+	intermediateProvider := &mockProviderTextAndToolCall{
+		text: "Intermediate text: " + secretTrigger + ", calling tool now.",
+		toolCall: &provider.ToolCall{
+			ID:        "tc-output-blocked-audit",
+			Name:      "do_something",
+			Arguments: `{}`,
+		},
+	}
+
+	auditStore := newMockAuditStore()
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("tool output"),
+		AuditStore:     auditStore,
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: intermediateProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = &mockOutputBlockScanner{trigger: secretTrigger}
+	// Output mode is ModeBlock: intermediate text with trigger must block the turn.
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeBlock}
+	cfg.AuditStore = auditStore
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "Do something that leaks a secret in intermediate output",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+
+	// 1. Error is CodeSecurityScannerOutputBlocked.
+	require.Error(t, procErr, "intermediate output block must return error")
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerOutputBlocked),
+		"expected CodeSecurityScannerOutputBlocked, got %s", sigilerr.CodeOf(procErr))
+
+	// 2. Audit store must contain an agent_loop.output_blocked entry with
+	// the expected Result and Details fields.
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+
+	var outputBlockedEntry *store.AuditEntry
+	for _, entry := range auditStore.entries {
+		if entry.Action == "agent_loop.output_blocked" {
+			outputBlockedEntry = entry
+			break
+		}
+	}
+	require.NotNil(t, outputBlockedEntry,
+		"audit store must contain an agent_loop.output_blocked entry when intermediate output is blocked")
+	assert.Equal(t, "blocked_threat", outputBlockedEntry.Result,
+		"audit entry Result must be 'blocked_threat'")
+	assert.Equal(t, true, outputBlockedEntry.Details["threat_detected"],
+		"audit entry Details[\"threat_detected\"] must be true")
+	rules, ok := outputBlockedEntry.Details["threat_rules"].([]string)
+	assert.True(t, ok, "audit entry Details[\"threat_rules\"] must be a []string")
+	assert.NotEmpty(t, rules, "audit entry Details[\"threat_rules\"] must be non-empty")
+}
+
+// Finding sigil-7g5.689 — Input scan cancellation returns CodeSecurityScannerCancelled,
+// not CodeSecurityScannerFailure or CodeAgentLoopFailure. The cancellation check runs
+// before session load, so ProcessMessage must surface the scanner's cancellation code
+// directly without wrapping it into a generic loop failure.
+func TestAgentLoop_ScanContextCancellation_InputStage(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Scanner = &mockCancelledScanner{}
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	// Cancel the context before ProcessMessage so the scanner sees a done context.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out, err := loop.ProcessMessage(cancelCtx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerCancelled),
+		"expected CodeSecurityScannerCancelled, got %s", sigilerr.CodeOf(err))
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"error must not be CodeSecurityScannerFailure — cancellation and failure are distinct conditions")
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"error must not be CodeAgentLoopFailure — cancellation must not be swallowed by the loop")
 }

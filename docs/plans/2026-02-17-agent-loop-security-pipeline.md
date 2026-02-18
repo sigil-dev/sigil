@@ -702,6 +702,11 @@ func redact(content string, matches []Match) string {
 }
 ```
 
+> **Implementation note:** The final implementation uses per-stage error codes
+> (CodeSecurityScannerToolBlocked, CodeSecurityScannerOutputBlocked) rather than
+> the single CodeSecurityScannerInputBlocked shown above. See scanner/mode.go and
+> TestApplyMode for the definitive behavior.
+
 Add `"sort"`, `"strings"` imports and sigilerr import.
 
 **Step 4: Run tests to verify they pass**

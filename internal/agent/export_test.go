@@ -4,7 +4,9 @@
 package agent
 
 // SanitizeToolError exposes sanitizeToolError for white-box testing.
-var SanitizeToolError = sanitizeToolError
+// The method receiver is a zero-value Loop which is sufficient for the
+// sanitisation logic (no fields accessed).
+var SanitizeToolError = (&Loop{}).sanitizeToolError
 
 // MaxToolContentScanSize exposes maxToolContentScanSize for white-box testing.
 const MaxToolContentScanSize = maxToolContentScanSize

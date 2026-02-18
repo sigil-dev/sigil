@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/pkg/types"
@@ -319,63 +318,44 @@ func mustNewRule(name string, pattern *regexp.Regexp, stage types.ScanStage, sev
 	return r
 }
 
-// inputInjectionRulesOnce caches the static injection rules for StageInput.
-// Patterns are compiled exactly once at first call; subsequent calls return the cached slice.
-var (
-	inputInjectionRulesOnce  sync.Once
-	inputInjectionRulesCache []Rule
-)
-
-// inputInjectionRules returns the cached static injection rules for StageInput.
-func inputInjectionRules() []Rule {
-	inputInjectionRulesOnce.Do(func() {
-		inputInjectionRulesCache = []Rule{
-			// Allow up to 3 optional words between the verb and the target noun phrase.
-			mustNewRule("instruction_override",
-				regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)(\s+\w+){0,3}\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
-				types.ScanStageInput, SeverityHigh),
-			mustNewRule("role_confusion",
-				regexp.MustCompile(`(?i)you\s+are\s+now\s+\w+[,.]?\s*(do|ignore|forget|disregard)`),
-				types.ScanStageInput, SeverityHigh),
-			mustNewRule("delimiter_abuse",
-				regexp.MustCompile("(?i)```system\\b"),
-				types.ScanStageInput, SeverityMedium),
-			// new_task_injection: 'new task' and 'from now on' require attack-intent
-			// keywords in proximity to avoid false positives on benign messages like
-			// "I have a new task for you" or "From now on, use bullet points".
-			mustNewRule("new_task_injection",
-				regexp.MustCompile(`(?i)((?:new\s+task|from\s+now\s+on)\s*[,:;.!]?\s*(?:ignore|disregard|forget|override|bypass|do\s+not\s+follow|stop\s+following)|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?|guidelines?)\s+(?:do\s+not|don'?t)\s+exist)`),
-				types.ScanStageInput, SeverityMedium),
-			mustNewRule("system_block_injection",
-				regexp.MustCompile(`(?i)(?:<\|?system\|?>|\[system\]|<<SYS>>)`),
-				types.ScanStageInput, SeverityHigh),
-		}
-	})
-	return inputInjectionRulesCache
+// inputInjectionRules holds the static injection detection rules for StageInput.
+// regexp.MustCompile panics on invalid patterns, so initialization is safe at
+// package level (pattern validity is enforced by tests).
+var inputInjectionRules = []Rule{
+	// Allow up to 3 optional words between the verb and the target noun phrase.
+	mustNewRule("instruction_override",
+		regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)(\s+\w+){0,3}\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
+		types.ScanStageInput, SeverityHigh),
+	mustNewRule("role_confusion",
+		regexp.MustCompile(`(?i)you\s+are\s+now\s+\w+[,.]?\s*(do|ignore|forget|disregard)`),
+		types.ScanStageInput, SeverityHigh),
+	mustNewRule("delimiter_abuse",
+		regexp.MustCompile("(?i)```system\\b"),
+		types.ScanStageInput, SeverityMedium),
+	// new_task_injection: 'new task' and 'from now on' require attack-intent
+	// keywords in proximity to avoid false positives on benign messages like
+	// "I have a new task for you" or "From now on, use bullet points".
+	mustNewRule("new_task_injection",
+		regexp.MustCompile(`(?i)((?:new\s+task|from\s+now\s+on)\s*[,:;.!]?\s*(?:ignore|disregard|forget|override|bypass|do\s+not\s+follow|stop\s+following)|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?|guidelines?)\s+(?:do\s+not|don'?t)\s+exist)`),
+		types.ScanStageInput, SeverityMedium),
+	mustNewRule("system_block_injection",
+		regexp.MustCompile(`(?i)(?:<\|?system\|?>|\[system\]|<<SYS>>)`),
+		types.ScanStageInput, SeverityHigh),
 }
 
-// toolStaticRulesOnce caches the static tool rules for StageTool.
-var (
-	toolStaticRulesOnce  sync.Once
-	toolStaticRulesCache []Rule
-)
-
-// toolStaticRules returns the cached static injection/impersonation rules for StageTool.
-func toolStaticRules() []Rule {
-	toolStaticRulesOnce.Do(func() {
-		toolStaticRulesCache = []Rule{
-			mustNewRule("system_prompt_leak",
-				regexp.MustCompile(`(?im)^SYSTEM:\s`),
-				types.ScanStageTool, SeverityHigh),
-			mustNewRule("role_impersonation_open",
-				regexp.MustCompile(`(?i)\[INST\]`),
-				types.ScanStageTool, SeverityHigh),
-			mustNewRule("role_impersonation_close",
-				regexp.MustCompile(`(?i)\[/INST\]`),
-				types.ScanStageTool, SeverityHigh),
-		}
-	})
-	return toolStaticRulesCache
+// toolStaticRules holds the static injection/impersonation rules for StageTool.
+// regexp.MustCompile panics on invalid patterns, so initialization is safe at
+// package level (pattern validity is enforced by tests).
+var toolStaticRules = []Rule{
+	mustNewRule("system_prompt_leak",
+		regexp.MustCompile(`(?im)^SYSTEM:\s`),
+		types.ScanStageTool, SeverityHigh),
+	mustNewRule("role_impersonation_open",
+		regexp.MustCompile(`(?i)\[INST\]`),
+		types.ScanStageTool, SeverityHigh),
+	mustNewRule("role_impersonation_close",
+		regexp.MustCompile(`(?i)\[/INST\]`),
+		types.ScanStageTool, SeverityHigh),
 }
 
 // InputRules returns rules for StageInput: prompt injection, instruction override,
@@ -396,13 +376,13 @@ func InputRules() ([]Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(inputInjectionRules(), secrets), nil
+	return slices.Concat(inputInjectionRules, secrets), nil
 }
 
 // ToolRules returns rules for StageTool: tool call injection and system command patterns.
 // These are static patterns that do not depend on the secrets DB.
 func ToolRules() []Rule {
-	return toolStaticRules()
+	return toolStaticRules
 }
 
 // DefaultRules returns the built-in rule set for all three stages.

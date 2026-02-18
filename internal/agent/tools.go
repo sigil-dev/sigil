@@ -112,14 +112,11 @@ type ToolCallRequest struct {
 }
 
 // ToolResult holds the output from a tool execution.
+// The Origin of all tool results is unconditionally types.OriginToolOutput;
+// callers (e.g. the agent loop) apply that constant directly when constructing
+// store.Message and provider.Message values.
 type ToolResult struct {
 	Content string
-	// Origin is always "tool_output" (types.OriginToolOutput). The value is
-	// set by Execute() and consumed by the agent loop to stamp the store.Message
-	// and provider.Message Origin fields before scanning and forwarding. It is
-	// not configurable: all plugin-produced tool output is unconditionally
-	// tagged as tool_output so the security scanner can apply StageTool rules.
-	Origin string
 }
 
 // ToolDispatcherConfig holds dependencies for ToolDispatcher.
@@ -222,10 +219,8 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*Too
 		)
 	}
 
-	// Step 4: Tag result with origin for injection defense.
 	result := &ToolResult{
 		Content: content,
-		Origin:  "tool_output",
 	}
 
 	// Step 5: Audit log the execution.
@@ -263,11 +258,9 @@ func (d *ToolDispatcher) ExecuteForTurn(ctx context.Context, req ToolCallRequest
 }
 
 // auditToolExecution writes a best-effort audit entry for tool dispatch events.
-// It implements its own escalating-log-level behavior (warn → error after
-// auditLogEscalationThreshold consecutive failures) independently from the
-// agent loop's logAuditFailure helper in loop.go, because ToolDispatcher has
-// no reference to the agent loop. Both functions share the same threshold
-// constant and the same slog-based structured logging convention.
+// Uses the shared logAuditFailure helper (audit.go) for escalating log levels
+// on consecutive failures, matching the same threshold and convention used by
+// the agent loop's audit paths.
 func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallRequest, result string) {
 	if d.auditStore == nil {
 		return
@@ -305,16 +298,12 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 	// Best-effort audit; do not fail the tool execution on audit errors.
 	if err := d.auditStore.Append(ctx, entry); err != nil {
 		consecutive := d.auditFailCount.Add(1)
-		logLevel := slog.LevelWarn
-		if consecutive >= auditLogEscalationThreshold {
-			logLevel = slog.LevelError
-		}
-		slog.Log(ctx, logLevel, "audit store append failed",
-			"error", err,
-			"plugin", req.PluginName,
-			"tool", req.ToolName,
-			"session_id", req.SessionID,
-			"consecutive_failures", consecutive,
+		logAuditFailure(ctx, consecutive, "audit store append failed",
+			slog.Any("error", err),
+			slog.String("plugin", req.PluginName),
+			slog.String("tool", req.ToolName),
+			slog.String("session_id", req.SessionID),
+			slog.Int64("consecutive_failures", consecutive),
 		)
 	} else {
 		d.auditFailCount.Store(0)

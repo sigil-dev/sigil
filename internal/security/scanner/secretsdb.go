@@ -43,6 +43,11 @@ type dbCacheEntry struct {
 	pattern *regexp.Regexp
 }
 
+// dbOnce / dbErr / dbEntries: sync.Once caches the result permanently for the
+// process lifetime. Unit tests for failure paths (zero patterns, compile errors)
+// require subprocess isolation (e.g., exec-based test helpers) because the Once
+// cannot be reset. Production code is safe because the embedded YAML is validated
+// at build time via tests.
 var (
 	dbOnce    sync.Once
 	dbEntries []dbCacheEntry
@@ -62,7 +67,10 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 	dbOnce.Do(func() {
 		var f dbFile
 		if err := yaml.Unmarshal(rulesStableYAML, &f); err != nil {
-			slog.Error("secrets-patterns-db YAML parse failed", "error", err)
+			slog.Error("secrets-patterns-db YAML parse failed",
+				"error", err,
+				slog.String("error_code", string(sigilerr.CodeSecurityScannerFailure)),
+				slog.Bool("permanent", true))
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
 				"parsing secrets-patterns-db YAML (permanent failure — process restart required to retry): %w", err)
 			return
@@ -102,6 +110,11 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 		// Fail-closed: any compile failure in a high-confidence pattern means
 		// the scanner cannot guarantee full coverage and must refuse to start.
 		if len(failedNames) > 0 {
+			slog.Error("high-confidence DB patterns failed to compile",
+				"failed_count", len(failedNames),
+				"failed_names", failedNames,
+				slog.String("error_code", string(sigilerr.CodeSecurityScannerFailure)),
+				slog.Bool("permanent", true))
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
 				"scanner startup aborted: %d high-confidence pattern(s) failed to compile: %v (permanent failure — process restart required to retry)",
 				len(failedNames), failedNames)

@@ -1107,6 +1107,19 @@ func (s *mockToolAlwaysContentTooLargeScanner) Scan(_ context.Context, content s
 		)
 }
 
+// mockCancelledScanner checks ctx.Err() and returns CodeSecurityScannerCancelled
+// when the context is already cancelled. This simulates the RegexScanner's
+// context-cancellation path so loop tests can verify error code propagation
+// without depending on the real scanner's timing.
+type mockCancelledScanner struct{}
+
+func (s *mockCancelledScanner) Scan(ctx context.Context, _ string, _ scanner.ScanContext) (scanner.ScanResult, error) {
+	if err := ctx.Err(); err != nil {
+		return scanner.ScanResult{}, sigilerr.Wrap(err, sigilerr.CodeSecurityScannerCancelled, "scan cancelled")
+	}
+	return scanner.ScanResult{}, nil
+}
+
 // mockInputContentTooLargeScanner returns CodeSecurityScannerContentTooLarge on the
 // input stage unconditionally, simulating a scanner that always rejects input due to
 // excessive size. All other stages pass through cleanly.

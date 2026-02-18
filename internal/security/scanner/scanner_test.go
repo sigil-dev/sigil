@@ -519,6 +519,109 @@ func mustToolSecretRules(t *testing.T) []scanner.Rule {
 	return rules
 }
 
+// Finding sigil-7g5.691 — WithMaxContentLength validation.
+// Zero and negative values must be rejected by NewRegexScanner; a valid positive
+// limit must be enforced during Scan.
+func TestWithMaxContentLength_Validation(t *testing.T) {
+	validRule, err := scanner.NewRule("rule", regexp.MustCompile(`x`), types.ScanStageInput, scanner.SeverityLow)
+	require.NoError(t, err)
+	rules := []scanner.Rule{validRule}
+
+	tests := []struct {
+		name     string
+		maxLen   int
+		wantCode sigilerr.Code
+	}{
+		{
+			name:     "zero returns CodeSecurityScannerFailure",
+			maxLen:   0,
+			wantCode: sigilerr.CodeSecurityScannerFailure,
+		},
+		{
+			name:     "negative returns CodeSecurityScannerFailure",
+			maxLen:   -1,
+			wantCode: sigilerr.CodeSecurityScannerFailure,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := scanner.NewRegexScanner(rules, scanner.WithMaxContentLength(tt.maxLen))
+			require.Error(t, err)
+			assert.True(t, sigilerr.HasCode(err, tt.wantCode),
+				"expected %s, got: %v", tt.wantCode, err)
+		})
+	}
+}
+
+// Finding sigil-7g5.691 (part 2) — WithMaxContentLength(100) limits content:
+// a 101-byte input must return CodeSecurityScannerContentTooLarge.
+func TestWithMaxContentLength_LimitsContent(t *testing.T) {
+	validRule, err := scanner.NewRule("rule", regexp.MustCompile(`x`), types.ScanStageInput, scanner.SeverityLow)
+	require.NoError(t, err)
+
+	s, err := scanner.NewRegexScanner([]scanner.Rule{validRule}, scanner.WithMaxContentLength(100))
+	require.NoError(t, err)
+
+	// 101 bytes of content — one byte over the limit.
+	content := strings.Repeat("a", 101)
+	_, err = s.Scan(context.Background(), content, scanner.ScanContext{
+		Stage:  types.ScanStageInput,
+		Origin: types.OriginUserInput,
+	})
+	require.Error(t, err, "content of 101 bytes must be rejected with maxContentLength=100")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
+		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
+}
+
+// Finding sigil-7g5.692 — secretRules deduplication: when a DB rule and a Sigil-specific
+// rule share the same name, the final rule set must contain exactly one rule with that
+// name, and it must be the Sigil version (verified by its pattern).
+//
+// We use OutputRules() as the public entry point into secretRules(ScanStageOutput).
+// Known overrides are listed in sigil_rules.go (e.g., "google_api_key" overrides the
+// DB pattern that only matches lowercase hex). We verify that:
+// 1. No duplicate names exist in the combined rule set.
+// 2. The Sigil-specific pattern for the overridden rule is present (not the DB pattern).
+func TestSecretRules_SigilOverridesDBRule(t *testing.T) {
+	rules := mustOutputRules(t)
+
+	// Verify no two rules share the same name (deduplication invariant).
+	seen := make(map[string]int, len(rules))
+	for _, r := range rules {
+		seen[r.Name()]++
+	}
+	for name, count := range seen {
+		assert.Equal(t, 1, count, "rule %q appears %d times; expected exactly once", name, count)
+	}
+
+	// "google_api_key" is a known Sigil override: the DB pattern only allows lowercase
+	// hex, while the Sigil version adds uppercase (AIza[0-9A-Za-z_-]{35}).
+	// Verify the Sigil pattern is present by confirming it matches a key with uppercase.
+	const sigilGoogleKeyContent = "AIzaSyA0123456789ABCDEFGHIJKLMNOPQRS456"
+	s, err := scanner.NewRegexScanner(rules)
+	require.NoError(t, err)
+
+	result, err := s.Scan(context.Background(), sigilGoogleKeyContent, scanner.ScanContext{
+		Stage:  types.ScanStageOutput,
+		Origin: types.OriginSystem,
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Threat,
+		"Sigil google_api_key override must detect keys with uppercase characters; DB pattern would miss this")
+
+	// Confirm the matching rule is "google_api_key" (the Sigil version).
+	ruleFound := false
+	for _, m := range result.Matches {
+		if m.Rule == "google_api_key" {
+			ruleFound = true
+			break
+		}
+	}
+	assert.True(t, ruleFound,
+		"expected google_api_key rule to match the uppercase Google API key; got matches: %v", result.Matches)
+}
+
 // Finding .438 — NewScanContext deep-copies metadata so callers cannot mutate it.
 func TestNewScanContext_MetadataIsolation(t *testing.T) {
 	orig := map[string]string{
