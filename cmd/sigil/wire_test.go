@@ -12,12 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/sigil-dev/sigil/pkg/types"
 )
 
@@ -81,6 +82,7 @@ func TestWireGateway_ChatEndpointReturns503WithoutHandler(t *testing.T) {
 	// Without a stream handler, the server fails closed with 503.
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
 		"chat endpoint should return 503 when no stream handler is configured")
+	assert.Equal(t, "5", w.Header().Get("Retry-After"), "503 response must include Retry-After header")
 }
 
 func TestWireGateway_ChatStreamEndpointReturns503WithoutHandler(t *testing.T) {
@@ -101,6 +103,7 @@ func TestWireGateway_ChatStreamEndpointReturns503WithoutHandler(t *testing.T) {
 	// Without a stream handler, the server fails closed with 503.
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
 		"chat/stream endpoint should return 503 when no stream handler is configured")
+	assert.Equal(t, "5", w.Header().Get("Retry-After"), "503 response must include Retry-After header")
 }
 
 func TestWorkspaceServiceAdapter_ListReturnsEmptyArray(t *testing.T) {

@@ -180,17 +180,9 @@ func WithMaxContentLength(n int) ScannerOption {
 
 // NewRegexScanner creates a scanner with the given rules and optional configuration.
 func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error) {
-	copied := make([]Rule, len(rules))
-	for i, r := range rules {
-		// Deep-copy via re-compilation ensures the scanner's rules are not aliased
-		// with the caller's slice. regexp.Regexp is safe for concurrent use (stdlib
-		// guarantee), so the copy is for ownership isolation, not thread safety.
-		c, err := NewRule(r.name, regexp.MustCompile(r.pattern.String()), r.stage, r.severity)
-		if err != nil {
-			return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "rule %d: %w", i, err)
-		}
-		copied[i] = c
-	}
+	// Clone the slice to decouple ownership from the caller. *regexp.Regexp is
+	// goroutine-safe per the stdlib guarantee, so no re-compilation is needed.
+	copied := slices.Clone(rules)
 	s := &RegexScanner{rules: copied, maxContentLength: DefaultMaxContentLength}
 	for _, opt := range opts {
 		opt(s)

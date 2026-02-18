@@ -9,6 +9,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/provider/openai"
+	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,4 +106,105 @@ func mustNewProvider(t *testing.T) *openai.Provider {
 	})
 	require.NoError(t, err)
 	return p
+}
+
+// TestConvertMessages_OriginTagging verifies that origin tags are prepended to
+// message content at the provider conversion layer when OriginTagging is enabled.
+func TestConvertMessages_OriginTagging(t *testing.T) {
+	tests := []struct {
+		name          string
+		msgs          []provider.Message
+		systemPrompt  string
+		originTagging bool
+		// wantLen is the expected number of result messages.
+		wantLen int
+		// wantContents maps result index → expected content string.
+		wantContents map[int]string
+	}{
+		{
+			name: "user message with origin tagging enabled gets [user_input] prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "hello world", Origin: provider.OriginUser},
+			},
+			originTagging: true,
+			wantLen:       1,
+			wantContents:  map[int]string{0: "[user_input] hello world"},
+		},
+		{
+			name: "user message with origin tagging disabled has no prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "hello world", Origin: provider.OriginUser},
+			},
+			originTagging: false,
+			wantLen:       1,
+			wantContents:  map[int]string{0: "hello world"},
+		},
+		{
+			name: "tool message with origin tagging enabled gets [tool_output] prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleTool, Content: "result data", Origin: provider.OriginTool, ToolCallID: "call-1"},
+			},
+			originTagging: true,
+			wantLen:       1,
+			wantContents:  map[int]string{0: "[tool_output] result data"},
+		},
+		{
+			name: "tool message with origin tagging disabled has no prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleTool, Content: "result data", Origin: provider.OriginTool, ToolCallID: "call-1"},
+			},
+			originTagging: false,
+			wantLen:       1,
+			wantContents:  map[int]string{0: "result data"},
+		},
+		{
+			name: "assistant message never gets origin tag even when tagging enabled",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleAssistant, Content: "I can help"},
+			},
+			originTagging: true,
+			wantLen:       1,
+			wantContents:  map[int]string{0: "I can help"},
+		},
+		{
+			name: "mixed conversation with origin tagging applies tags only to user and tool",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "question", Origin: provider.OriginUser},
+				{Role: store.MessageRoleAssistant, Content: "answer"},
+				{Role: store.MessageRoleTool, Content: "tool result", Origin: provider.OriginTool, ToolCallID: "call-2"},
+			},
+			originTagging: true,
+			wantLen:       3,
+			wantContents: map[int]string{
+				0: "[user_input] question",
+				1: "answer",
+				2: "[tool_output] tool result",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params, err := openai.ConvertMessages(tt.msgs, tt.systemPrompt, tt.originTagging)
+			require.NoError(t, err)
+			require.Len(t, params, tt.wantLen, "result count mismatch")
+
+			for idx, wantContent := range tt.wantContents {
+				msg := params[idx]
+				switch {
+				case msg.OfUser != nil:
+					assert.Equal(t, wantContent, msg.OfUser.Content.OfString.Value,
+						"message[%d] user content mismatch", idx)
+				case msg.OfAssistant != nil:
+					assert.Equal(t, wantContent, msg.OfAssistant.Content.OfString.Value,
+						"message[%d] assistant content mismatch", idx)
+				case msg.OfTool != nil:
+					assert.Equal(t, wantContent, msg.OfTool.Content.OfString.Value,
+						"message[%d] tool content mismatch", idx)
+				default:
+					t.Errorf("message[%d] has unexpected type (not user, assistant, or tool)", idx)
+				}
+			}
+		})
+	}
 }

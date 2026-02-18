@@ -1084,6 +1084,37 @@ func (s *mockToolContentTooLargeScanner) Scan(_ context.Context, content string,
 	return scanner.ScanResult{Content: content}, nil
 }
 
+// mockInputContentTooLargeScanner returns CodeSecurityScannerContentTooLarge on the
+// input stage unconditionally, simulating a scanner that always rejects input due to
+// excessive size. All other stages pass through cleanly.
+type mockInputContentTooLargeScanner struct{}
+
+func (s *mockInputContentTooLargeScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage == types.ScanStageInput {
+		return scanner.ScanResult{Content: content},
+			sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+				"input content exceeds maximum length",
+			)
+	}
+	return scanner.ScanResult{Content: content}, nil
+}
+
+// mockOutputContentTooLargeScanner returns CodeSecurityScannerContentTooLarge on the
+// output stage unconditionally, simulating a scanner that rejects LLM responses due to
+// excessive size. Input scans pass through cleanly so ProcessMessage reaches the output
+// scanning stage.
+type mockOutputContentTooLargeScanner struct{}
+
+func (s *mockOutputContentTooLargeScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage == types.ScanStageOutput {
+		return scanner.ScanResult{Content: content},
+			sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+				"output content exceeds maximum length",
+			)
+	}
+	return scanner.ScanResult{Content: content}, nil
+}
+
 // mockToolErrorScannerToggleable errors on tool-stage scans until succeedAfter
 // tool-stage calls have been made, then succeeds. This allows testing the
 // circuit-breaker reset behavior. Thread-safe via atomic counter.

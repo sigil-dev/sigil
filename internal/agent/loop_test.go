@@ -2812,6 +2812,64 @@ func TestAgentLoop_OutputScannerErrorPropagates(t *testing.T) {
 		"expected CodeSecurityScannerFailure, got: %v", err)
 }
 
+func TestAgentLoop_InputScannerContentTooLarge_FailsClosed(t *testing.T) {
+	// sigil-7g5.568: when the scanner returns CodeSecurityScannerContentTooLarge
+	// on the input stage, the loop must fail closed — ProcessMessage must return
+	// an error with CodeSecurityScannerContentTooLarge rather than passing the
+	// oversized input through to the provider. This is a critical security
+	// invariant: content-too-large on input is treated as a hard failure.
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Scanner = &mockInputContentTooLargeScanner{}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeBlock, Tool: types.ScannerModeFlag, Output: types.ScannerModeRedact}
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err, "input content-too-large must fail closed")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
+		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
+}
+
+func TestAgentLoop_OutputScannerContentTooLarge_FailsClosed(t *testing.T) {
+	// sigil-7g5.568: when the scanner returns CodeSecurityScannerContentTooLarge
+	// on the output stage, the loop must fail closed — ProcessMessage must return
+	// an error rather than delivering the oversized LLM response to the caller.
+	// Input scanning passes so the turn reaches the output scanning stage before
+	// the error is surfaced.
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Scanner = &mockOutputContentTooLargeScanner{}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeRedact}
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err, "output content-too-large must fail closed")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
+		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
+}
+
 func TestAgentLoop_ToolScannerErrorPropagates(t *testing.T) {
 	// Tool-stage scanner internal errors are best-effort (D062): the loop
 	// logs a warning and continues with unscanned content to preserve

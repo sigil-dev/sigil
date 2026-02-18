@@ -479,6 +479,73 @@ func TestSessionStore_ThreatInfo_OutputStage(t *testing.T) {
 	assert.Equal(t, []string{"rule-prompt-leak", "rule-pii"}, got.Threat.Rules, "matched rules must be preserved")
 }
 
+// TestSessionStore_LegacyThreatInfoBackwardCompat verifies that pre-Scanned records
+// stored as `{}` in the threat_info column unmarshal with Scanned==false and
+// Detected==false, correctly representing "scanner did not run" for historical data.
+func TestSessionStore_LegacyThreatInfoBackwardCompat(t *testing.T) {
+	ctx := context.Background()
+	dbPath := testDBPath(t, "sessions-legacy-threat")
+	ss, err := sqlite.NewSessionStore(dbPath)
+	require.NoError(t, err)
+	defer func() { _ = ss.Close() }()
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Create a session to satisfy the FK constraint.
+	err = ss.CreateSession(ctx, &store.Session{
+		ID:          "sess-legacy",
+		WorkspaceID: "ws-1",
+		UserID:      "usr-1",
+		Status:      store.SessionStatusActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	require.NoError(t, err)
+
+	// Append a message via the normal API (threat_info will be set to some value).
+	msg := &store.Message{
+		ID:        "msg-legacy-1",
+		SessionID: "sess-legacy",
+		Role:      store.MessageRoleUser,
+		Content:   "legacy content",
+		CreatedAt: now,
+	}
+	err = ss.AppendMessage(ctx, "sess-legacy", msg)
+	require.NoError(t, err)
+
+	// Simulate a legacy record by overwriting threat_info with '{}' via raw SQL.
+	// This represents a message written before the Scanned field was introduced.
+	rawDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+	require.NoError(t, err)
+	defer func() { _ = rawDB.Close() }()
+
+	_, err = rawDB.ExecContext(ctx,
+		`UPDATE messages SET threat_info = '{}' WHERE id = 'msg-legacy-1'`)
+	require.NoError(t, err, "raw SQL update to simulate legacy threat_info should succeed")
+
+	// Read back via GetActiveWindow and assert legacy {} is interpreted as "not scanned".
+	msgs, err := ss.GetActiveWindow(ctx, "sess-legacy", 10)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	got := msgs[0]
+	// The store treats '{}' as "no threat data" and leaves Threat nil — this is the
+	// correct backward-compat interpretation: nil means "scanner did not run",
+	// equivalent to Scanned=false, Detected=false.
+	// If the store ever changes to deserialize '{}' into &ThreatInfo{}, those fields
+	// must still be false (no scan ran, no threat was detected).
+	if got.Threat != nil {
+		assert.False(t, got.Threat.Scanned, "Scanned must be false for legacy {} records (scanner did not run)")
+		assert.False(t, got.Threat.Detected, "Detected must be false for legacy {} records")
+	}
+	// Either nil or &ThreatInfo{Scanned:false, Detected:false} is correct.
+	// Verify neither a detected flag nor a scanned flag is set.
+	threatScanned := got.Threat != nil && got.Threat.Scanned
+	threatDetected := got.Threat != nil && got.Threat.Detected
+	assert.False(t, threatScanned, "legacy {} must not have Scanned=true")
+	assert.False(t, threatDetected, "legacy {} must not have Detected=true")
+}
+
 // TestParseTime_ErrorPropagation verifies that malformed timestamps cause errors
 // instead of being silently ignored.
 func TestParseTime_ErrorPropagation(t *testing.T) {

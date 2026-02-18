@@ -68,7 +68,7 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 		}
 
 		seen := make(map[string]bool, len(f.Patterns))
-		var skippedNames []string
+		var failedNames []string
 		var duplicateCount int
 		for _, entry := range f.Patterns {
 			p := entry.Pattern
@@ -89,25 +89,28 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 
 			re, err := regexp.Compile(p.Regex)
 			if err != nil {
-				slog.Warn("skipping uncompilable DB pattern",
+				slog.Error("high-confidence DB pattern failed to compile",
 					"name", name, "regex", p.Regex, "error", err)
-				skippedNames = append(skippedNames, name)
+				failedNames = append(failedNames, name)
 				continue
 			}
 
 			dbEntries = append(dbEntries, dbCacheEntry{name: name, pattern: re})
 		}
 
-		if len(skippedNames) > 0 {
-			slog.Error("scanner: skipped embedded rules due to compile errors",
-				"count", len(skippedNames),
-				"names", skippedNames)
+		// Fail-closed: any compile failure in a high-confidence pattern means
+		// the scanner cannot guarantee full coverage and must refuse to start.
+		if len(failedNames) > 0 {
+			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
+				"scanner startup aborted: %d high-confidence pattern(s) failed to compile: %v",
+				len(failedNames), failedNames)
+			return
 		}
 
 		if len(dbEntries) == 0 {
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
-				"zero high-confidence patterns loaded from secrets-patterns-db (skipped %d compile errors, %d duplicates)",
-				len(skippedNames), duplicateCount)
+				"zero high-confidence patterns loaded from secrets-patterns-db (%d duplicates skipped)",
+				duplicateCount)
 		}
 	})
 

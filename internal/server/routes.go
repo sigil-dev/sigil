@@ -329,7 +329,8 @@ func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput)
 
 func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput) (*sendMessageOutput, error) {
 	if s.streamHandler == nil {
-		return nil, huma.Error503ServiceUnavailable("agent not configured")
+		err503 := huma.Error503ServiceUnavailable("agent not configured")
+		return nil, huma.ErrorWithHeaders(err503, http.Header{"Retry-After": []string{"5"}})
 	}
 
 	// Verify workspace membership.

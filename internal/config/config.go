@@ -411,7 +411,10 @@ func (c *Config) validateSecurity() []error {
 	}
 
 	// Require explicit opt-in to use non-block modes for input scanning.
-	if c.Security.Scanner.Input != types.ScannerModeBlock && !c.Security.Scanner.AllowPermissiveInputMode {
+	// Only check permissive-mode policy when the input mode is valid; invalid
+	// modes already produce an error above and would otherwise generate a
+	// second, misleading error here.
+	if c.Security.Scanner.Input.Valid() && c.Security.Scanner.Input != types.ScannerModeBlock && !c.Security.Scanner.AllowPermissiveInputMode {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: security.scanner.input is %q but only 'block' is allowed without security.scanner.allow_permissive_input_mode=true",
 			c.Security.Scanner.Input,
