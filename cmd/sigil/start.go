@@ -39,7 +39,7 @@ func runStart(cmd *cobra.Command, _ []string) error {
 
 	cfg, err := config.FromViper(v)
 	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "loading config: %w", err)
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "loading config: %s", err.Error())
 	}
 
 	if v.GetBool("verbose") {

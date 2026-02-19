@@ -21,6 +21,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/pkg/types"
 )
 
@@ -902,6 +903,41 @@ func TestWireGateway_ScannerIsWiredAndFunctional(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWireGateway_ScannerLimitsConfigured verifies that operator-configured scanner limits
+// (cfg.Security.Scanner.Limits.MaxContentLength) are threaded through to the scanner
+// constructed by WireGateway. The test wires a gateway with MaxContentLength=100, extracts
+// the scanner, and confirms that content of exactly 101 bytes returns
+// CodeSecurityScannerContentTooLarge — proving the limit is not silently ignored.
+func TestWireGateway_ScannerLimitsConfigured(t *testing.T) {
+	const maxLen = 100
+
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Security.Scanner.Limits.MaxContentLength = maxLen
+	// Keep MaxPreNormContentLength well above maxLen so it is never the binding limit.
+	cfg.Security.Scanner.Limits.MaxPreNormContentLength = maxLen * 100
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	sc := gw.Scanner()
+	require.NotNil(t, sc, "scanner must be non-nil after WireGateway")
+
+	// Content of exactly maxLen bytes must be accepted without a content-too-large error.
+	atLimit := strings.Repeat("a", maxLen)
+	scanCtx := scanner.NewScanContext(types.ScanStageInput, types.OriginUserInput, nil)
+	_, err = sc.Scan(context.Background(), atLimit, scanCtx)
+	require.NoError(t, err, "content of exactly MaxContentLength bytes must not return content-too-large")
+
+	// Content of maxLen+1 bytes must be rejected with CodeSecurityScannerContentTooLarge.
+	overLimit := strings.Repeat("a", maxLen+1)
+	_, err = sc.Scan(context.Background(), overLimit, scanCtx)
+	require.Error(t, err, "content exceeding MaxContentLength must return an error")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
+		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
 }
 
 // TestWireGateway_InvalidDataDir verifies that WireGateway returns a non-nil error

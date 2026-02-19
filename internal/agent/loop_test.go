@@ -5204,6 +5204,108 @@ func TestAgentLoop_ScannerCircuitBreaker_FreshAcrossInstances(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// sigil-7g5.971 — Circuit breaker trips mid-turn then resets at turn boundary
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ScannerCircuitBreaker_FullTurnSequence exercises the complete
+// two-turn circuit-breaker sequence on the SAME Loop instance:
+//
+//  1. Turn 1: ScannerCircuitBreakerThreshold tool calls are dispatched in a single
+//     ProcessMessage call. Each tool-stage scan fails (mockToolErrorScanner), so
+//     scannerFailCount reaches the threshold inside runToolLoop and the circuit
+//     breaker fires — returning CodeSecurityScannerCircuitBreakerOpen.
+//     The loop exits immediately (no second Chat() call), leaving prov.callNum = 1.
+//
+//  2. Turn 2: a second ProcessMessage on the SAME loop instance. prov.callNum is
+//     already 1, so Chat() returns a text response with no tool calls. The tool
+//     scanner is never invoked, and the turn succeeds. scannerFailCount is zero
+//     because it is a local variable in runToolLoop — it resets at every turn
+//     boundary regardless of what happened in the previous turn.
+//
+// This test is distinct from TestAgentLoop_ScannerCircuitBreaker_IsolationAcrossTurns
+// (which uses two separate loop instances) and from
+// TestAgentLoop_ScannerCircuitBreaker_BlocksAfterThreshold (which tests only the
+// trip, not the subsequent recovery). Here we verify both the trip on Turn 1 and
+// the fresh-start on Turn 2 using the SAME Loop instance.
+func TestAgentLoop_ScannerCircuitBreaker_FullTurnSequence(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny, 22C"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	msg := agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	}
+
+	// Build exactly ScannerCircuitBreakerThreshold tool calls. mockProviderBatchToolCall
+	// emits all of them on its first Chat() call (callNum=0), then returns text on
+	// subsequent calls (callNum≥1). This stateful behaviour is key: after Turn 1's
+	// circuit breaker fires without consuming a second Chat(), prov.callNum = 1, so
+	// Turn 2 naturally receives a text-only response with no tool calls to scan.
+	toolCalls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
+	for i := range toolCalls {
+		toolCalls[i] = &provider.ToolCall{
+			ID:        fmt.Sprintf("tc-full-seq-%d", i),
+			Name:      "get_weather",
+			Arguments: `{"city":"Paris"}`,
+		}
+	}
+	prov := &mockProviderBatchToolCall{toolCalls: toolCalls}
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: prov}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = &mockToolErrorScanner{}
+	cfg.ScannerModes = agent.ScannerModes{
+		Input:  types.ScannerModeFlag,
+		Tool:   types.ScannerModeBlock,
+		Output: types.ScannerModeRedact,
+	}
+	// Allow enough tool calls for the threshold to be reached within a single turn.
+	cfg.MaxToolCallsPerTurn = agent.ScannerCircuitBreakerThreshold + 1
+
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	// Turn 1: all threshold tool calls fail scanner → circuit breaker trips.
+	// The loop exits before making a second Chat() call, so prov.callNum = 1.
+	out1, procErr1 := loop.ProcessMessage(ctx, msg)
+	require.Error(t, procErr1, "turn 1 must fail: circuit breaker should trip after %d scanner failures", agent.ScannerCircuitBreakerThreshold)
+	assert.Nil(t, out1, "turn 1 output must be nil when circuit breaker fires")
+	assert.True(t, sigilerr.HasCode(procErr1, sigilerr.CodeSecurityScannerCircuitBreakerOpen),
+		"turn 1 must return CodeSecurityScannerCircuitBreakerOpen, got %s", sigilerr.CodeOf(procErr1))
+
+	// Turn 2 on the SAME loop instance. prov.callNum = 1, so Chat() returns text
+	// with no tool calls — the tool scanner is never invoked. scannerFailCount is
+	// local to runToolLoop and is therefore zero at the start of this turn.
+	// This turn must succeed, proving the counter resets at every turn boundary.
+	out2, procErr2 := loop.ProcessMessage(ctx, msg)
+	require.NoError(t, procErr2,
+		"turn 2 must succeed: scannerFailCount resets to 0 at each turn boundary")
+	assert.NotNil(t, out2, "turn 2 output must not be nil")
+	assert.False(t, sigilerr.HasCode(procErr2, sigilerr.CodeSecurityScannerCircuitBreakerOpen),
+		"turn 2 must not return CodeSecurityScannerCircuitBreakerOpen")
+}
+
+// ---------------------------------------------------------------------------
 // sigil-7g5.590 — Scanner circuit-breaker counter and audit-fail counter are independent
 // ---------------------------------------------------------------------------
 
@@ -5585,6 +5687,86 @@ func TestAgentLoop_DisableOriginTagging_SuppressesTagsInChatOptions(t *testing.T
 			opts := capturer.getCapturedOptions()
 			assert.Equal(t, tt.wantOriginTagging, opts.OriginTagging,
 				"ChatOptions.OriginTagging must reflect DisableOriginTagging inversion")
+		})
+	}
+}
+
+// TestAgentLoop_DisableOriginTagging_SuppressesMessageOrigin verifies that the
+// Origin field on provider.Message is always populated regardless of the
+// DisableOriginTagging flag. DisableOriginTagging only suppresses the text-tag
+// prefix ([user_input], [tool_output]) prepended to message content — it must
+// NOT zero out the Origin field, which is an auditable server-side annotation
+// independent of content-level tagging (see ScannerModes.DisableOriginTagging
+// godoc). A regression that zeroed Origin when DisableOriginTagging=true would
+// be undetected by TestAgentLoop_DisableOriginTagging_SuppressesTagsInChatOptions,
+// which only checks ChatOptions.OriginTagging.
+//
+// sigil-7g5.974
+func TestAgentLoop_DisableOriginTagging_SuppressesMessageOrigin(t *testing.T) {
+	tests := []struct {
+		name                 string
+		disableOriginTagging bool
+	}{
+		{
+			name:                 "DisableOriginTagging=false: Origin field is populated on all messages",
+			disableOriginTagging: false,
+		},
+		{
+			name:                 "DisableOriginTagging=true: Origin field is still populated on all messages",
+			disableOriginTagging: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := newMockSessionManager()
+			ctx := context.Background()
+			session, err := sm.Create(ctx, "ws-1", "user-1")
+			require.NoError(t, err)
+
+			capturer := &mockProviderCapturing{}
+			cfg := newTestLoopConfig(t)
+			cfg.SessionManager = sm
+			cfg.ProviderRouter = newMockProviderRouterCapturing(capturer)
+			cfg.ScannerModes = agent.ScannerModes{
+				Input:                types.ScannerModeBlock,
+				Tool:                 types.ScannerModeFlag,
+				Output:               types.ScannerModeRedact,
+				DisableOriginTagging: tt.disableOriginTagging,
+			}
+			loop, err := agent.NewLoop(cfg)
+			require.NoError(t, err)
+
+			out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+				SessionID:   session.ID,
+				WorkspaceID: "ws-1",
+				UserID:      "user-1",
+				Content:     "Hello",
+			})
+			require.NoError(t, procErr)
+			assert.NotNil(t, out)
+
+			messages := capturer.getCapturedMessages()
+			require.NotEmpty(t, messages, "provider should have received at least one message")
+
+			// The Origin field on provider.Message is set from auditable server-side
+			// context and must never be empty, regardless of DisableOriginTagging.
+			// DisableOriginTagging only controls ChatOptions.OriginTagging (the text
+			// prefix prepended to content) — it must not suppress the Origin field.
+			for i, msg := range messages {
+				assert.NotEmpty(t, msg.Origin,
+					"message[%d] (role=%s, DisableOriginTagging=%v) must have a non-empty Origin field",
+					i, msg.Role, tt.disableOriginTagging)
+			}
+
+			// User-role messages must carry OriginUserInput specifically.
+			for i, msg := range messages {
+				if msg.Role == store.MessageRoleUser {
+					assert.Equal(t, types.OriginUserInput, msg.Origin,
+						"message[%d]: user message must carry OriginUserInput regardless of DisableOriginTagging=%v",
+						i, tt.disableOriginTagging)
+				}
+			}
 		})
 	}
 }

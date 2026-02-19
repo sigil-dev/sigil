@@ -88,6 +88,101 @@ func TestToSnakeCase(t *testing.T) {
 		"expected github_personal_access_token from DB")
 }
 
+// TestSecretRules_DeduplicationLogic verifies the three invariants of the secretRules()
+// deduplication logic via OutputRules() as the public entry point:
+//
+//  1. DB-only rule: a rule present in the DB but not overridden by Sigil is
+//     included unchanged.
+//  2. Sigil-only rule: a Sigil-specific rule with no DB counterpart is included.
+//  3. Collision: when DB and Sigil share a rule name, the Sigil version wins
+//     (its pattern differs from the DB version and takes precedence).
+func TestSecretRules_DeduplicationLogic(t *testing.T) {
+	rules := mustOutputRules(t)
+
+	// Build an index of name → pattern string for O(1) lookup.
+	byName := make(map[string]string, len(rules))
+	for _, r := range rules {
+		byName[r.Name()] = r.Pattern().String()
+	}
+
+	tests := []struct {
+		name        string
+		ruleName    string
+		wantPresent bool
+		// wantPattern is the expected pattern string. Empty means "any non-empty pattern".
+		wantPattern string
+		description string
+	}{
+		{
+			// Case 1: DB-only rule.
+			// "aws_api_key" appears in secrets-patterns-db as a high-confidence rule and
+			// has no Sigil override in sigil_rules.go. It should be present as-is from the DB.
+			name:        "DB-only rule is included",
+			ruleName:    "aws_api_key",
+			wantPresent: true,
+			wantPattern: "",
+			description: "aws_api_key is a DB-only rule with no Sigil override; must be included",
+		},
+		{
+			// Case 1 (second example): Another DB-only rule to confirm the general property.
+			// "sendgrid_api_key" appears in the DB and has no Sigil override.
+			name:        "DB-only rule sendgrid is included",
+			ruleName:    "sendgrid_api_key",
+			wantPresent: true,
+			wantPattern: "",
+			description: "sendgrid_api_key is a DB-only rule with no Sigil override; must be included",
+		},
+		{
+			// Case 2: Sigil-only rule.
+			// "github_fine_grained_pat" is defined in sigil_rules.go and is NOT present
+			// in secrets-patterns-db (DB only covers ghp_/ghu_/ghs_/gho_ prefixes).
+			// It must appear in the merged output from OutputRules().
+			name:        "Sigil-only rule is included",
+			ruleName:    "github_fine_grained_pat",
+			wantPresent: true,
+			wantPattern: `github_pat_[A-Za-z0-9_]{22,}`,
+			description: "github_fine_grained_pat is Sigil-only; must be present in merged output",
+		},
+		{
+			// Case 2 (second example): Another Sigil-only rule.
+			// "digitalocean_pat" is defined in sigil_rules.go with prefix "dop_v1_";
+			// DB uses context-keyword matching, not a prefix approach.
+			name:        "Sigil-only rule digitalocean is included",
+			ruleName:    "digitalocean_pat",
+			wantPresent: true,
+			wantPattern: `dop_v1_[a-f0-9]{64}`,
+			description: "digitalocean_pat is Sigil-only; must be present in merged output",
+		},
+		{
+			// Case 3: Collision — Sigil wins.
+			// "google_api_key" exists in both the DB and sigil_rules.go. The DB version
+			// only matches lowercase hex after "AIza", while the Sigil version allows
+			// uppercase (AIza[0-9A-Za-z_-]{35}). The Sigil pattern must take precedence.
+			name:        "collision: Sigil pattern wins over DB pattern",
+			ruleName:    "google_api_key",
+			wantPresent: true,
+			wantPattern: `AIza[0-9A-Za-z_-]{35}`,
+			description: "google_api_key collision: Sigil pattern (case-insensitive range) must win over DB pattern",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pattern, present := byName[tt.ruleName]
+			assert.Equal(t, tt.wantPresent, present,
+				"%s: rule %q presence mismatch", tt.description, tt.ruleName)
+			if present && tt.wantPattern != "" {
+				assert.Equal(t, tt.wantPattern, pattern,
+					"%s: rule %q has pattern %q; want %q", tt.description, tt.ruleName, pattern, tt.wantPattern)
+			}
+			if present {
+				assert.NotEmpty(t, pattern,
+					"%s: rule %q has empty pattern string", tt.description, tt.ruleName)
+			}
+		})
+	}
+}
+
 // TestSecretsDB_SpotCheckDetection verifies known secrets are detected by DB patterns.
 func TestSecretsDB_SpotCheckDetection(t *testing.T) {
 	s, err := scanner.NewRegexScanner(mustOutputRules(t))

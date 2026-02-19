@@ -457,7 +457,7 @@ func InputRules() ([]Rule, error) {
 // ToolRules returns rules for StageTool: tool call injection and system command patterns.
 // These are static patterns that do not depend on the secrets DB.
 func ToolRules() []Rule {
-	return toolStaticRules
+	return slices.Clone(toolStaticRules)
 }
 
 // allStages is the canonical ordered list of scan stages used by DefaultRules
