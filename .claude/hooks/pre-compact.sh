@@ -57,7 +57,7 @@ if [[ "$active_count" -gt 0 ]]; then
   active_ids=()
   while IFS= read -r id; do
     active_ids+=("$id")
-    bd update "$id" --notes "$(echo -e "$state")" 2>/dev/null || true
+    bd update "$id" --notes "$(printf '%b' "$state")" 2>/dev/null || true
   done < <(echo "$in_progress" | jq -r '.[].id' 2>/dev/null)
 
   echo "Pre-compaction state saved to active bead(s): ${active_ids[*]}"
@@ -67,7 +67,7 @@ else
   # No active beads — create a session snapshot bead
   snapshot_id=$(bd create \
     --title="Session ${short_hash} state snapshot" \
-    --description="$(echo -e "$state")" \
+    --description="$(printf '%b' "$state")" \
     --type=task \
     --priority=3 \
     --json 2>/dev/null | jq -r '.id // empty' 2>/dev/null || echo "")

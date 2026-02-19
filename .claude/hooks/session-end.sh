@@ -24,16 +24,20 @@ short_hash=$(echo -n "$session_id" | shasum -a 256 | cut -c1-8)
 session_label="sess:${short_hash}"
 marker_file="${MARKER_DIR}/${short_hash}"
 
-# Read session start marker
+# Read session start marker (safe parsing — no source/eval)
 start_time=""
 start_head=""
 branch=""
 if [[ -f "$marker_file" ]]; then
-  # shellcheck source=/dev/null
-  source "$marker_file"
+  start_time=$(grep '^start_time=' "$marker_file" | cut -d= -f2-)
+  start_head=$(grep '^start_head=' "$marker_file" | cut -d= -f2-)
+  branch=$(grep '^branch=' "$marker_file" | cut -d= -f2-)
 fi
 branch="${branch:-$(git branch --show-current 2>/dev/null || echo "unknown")}"
 end_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+# Compute current HEAD once for reuse
+current_head=$(git rev-parse HEAD 2>/dev/null || echo "")
 
 # --- Build session summary ---
 summary="## Session Summary\n"
@@ -44,7 +48,6 @@ summary+="**Ended:** ${end_time}\n"
 
 # Commits made during session
 if [[ -n "$start_head" && "$start_head" != "unknown" ]]; then
-  current_head=$(git rev-parse HEAD 2>/dev/null || echo "")
   if [[ "$start_head" != "$current_head" && -n "$current_head" ]]; then
     commits=$(git log --oneline "${start_head}..HEAD" 2>/dev/null || echo "")
     if [[ -n "$commits" ]]; then
@@ -72,17 +75,14 @@ has_content=false
 if [[ -n "$git_status" ]] || [[ "$active_count" -gt 0 ]]; then
   has_content=true
 fi
-if [[ -n "$start_head" && "$start_head" != "unknown" ]]; then
-  current_head=$(git rev-parse HEAD 2>/dev/null || echo "")
-  if [[ "$start_head" != "$current_head" ]]; then
-    has_content=true
-  fi
+if [[ -n "$start_head" && "$start_head" != "unknown" && "$start_head" != "$current_head" ]]; then
+  has_content=true
 fi
 
 if [[ "$has_content" == "true" ]]; then
   summary_id=$(bd create \
     --title="Session ${short_hash} summary" \
-    --description="$(echo -e "$summary")" \
+    --description="$(printf '%b' "$summary")" \
     --type=task \
     --priority=4 \
     --json 2>/dev/null | jq -r '.id // empty' 2>/dev/null || echo "")
@@ -107,17 +107,25 @@ if [[ -n "$snapshot_ids" ]]; then
   done <<< "$snapshot_ids"
 fi
 
-# Sweep orphaned snapshots from crashed sessions
-orphan_ids=$(bd list --json 2>/dev/null \
-  | jq -r --arg label "$SNAPSHOT_LABEL" '
-    [.[] | select(.labels? and (.labels | index($label)))] | .[].id
+# Sweep orphaned snapshots from crashed sessions (only if no active marker exists)
+all_snapshots=$(bd list --json 2>/dev/null \
+  | jq -c --arg label "$SNAPSHOT_LABEL" '
+    .[] | select(.labels? and (.labels | index($label)))
+    | {id, sess: ((.labels // [])[] | select(startswith("sess:")))}
   ' 2>/dev/null || echo "")
 
-if [[ -n "$orphan_ids" ]]; then
-  while IFS= read -r id; do
-    [[ -z "$id" ]] && continue
-    bd delete "$id" 2>/dev/null || true
-  done <<< "$orphan_ids"
+if [[ -n "$all_snapshots" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    snap_id=$(echo "$line" | jq -r '.id' 2>/dev/null) || continue
+    snap_sess=$(echo "$line" | jq -r '.sess' 2>/dev/null) || continue
+    [[ -z "$snap_id" || -z "$snap_sess" ]] && continue
+    snap_hash="${snap_sess#sess:}"
+    # Only delete if no active marker file exists for this session
+    if [[ ! -f "${MARKER_DIR}/${snap_hash}" ]]; then
+      bd delete "$snap_id" 2>/dev/null || true
+    fi
+  done <<< "$all_snapshots"
 fi
 
 # Clean up marker file
