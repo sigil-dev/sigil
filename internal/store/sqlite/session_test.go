@@ -546,6 +546,44 @@ func TestSessionStore_LegacyThreatInfoBackwardCompat(t *testing.T) {
 	assert.False(t, threatDetected, "legacy {} must not have Detected=true")
 }
 
+// TestSessionStore_OriginFieldRoundTrip verifies that the Origin field on a message
+// is persisted and returned correctly by GetActiveWindow.
+func TestSessionStore_OriginFieldRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "origin-roundtrip")
+	ss, err := sqlite.NewSessionStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ss.Close() }()
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	err = ss.CreateSession(ctx, &store.Session{
+		ID:          "sess-origin",
+		WorkspaceID: "ws-1",
+		UserID:      "usr-1",
+		Status:      store.SessionStatusActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	require.NoError(t, err)
+
+	msg := &store.Message{
+		ID:        "msg-origin-1",
+		SessionID: "sess-origin",
+		Role:      store.MessageRoleUser,
+		Content:   "hello",
+		Origin:    "user_input",
+		CreatedAt: now,
+	}
+	err = ss.AppendMessage(ctx, "sess-origin", msg)
+	require.NoError(t, err)
+
+	msgs, err := ss.GetActiveWindow(ctx, "sess-origin", 10)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "user_input", msgs[0].Origin)
+}
+
 // TestParseTime_ErrorPropagation verifies that malformed timestamps cause errors
 // instead of being silently ignored.
 func TestParseTime_ErrorPropagation(t *testing.T) {

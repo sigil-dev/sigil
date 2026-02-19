@@ -162,11 +162,10 @@ func (m Message) Validate() error {
 	if !m.Role.Valid() {
 		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "message: invalid role %q", m.Role)
 	}
-	// Tool role uses ToolCallID/ToolName instead of Content; all other roles require Content.
+	// Tool role uses ToolCallID/ToolName instead of Content.
 	if m.Role != MessageRoleTool && m.Content == "" {
 		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "message: Content is required for role %q", m.Role)
 	}
-	// ToolCallID and ToolName must both be set or both be empty.
 	if (m.ToolCallID == "") != (m.ToolName == "") {
 		return sigilerr.New(sigilerr.CodeStoreInvalidInput, "message: ToolCallID and ToolName must both be set or both be empty")
 	}

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -911,6 +913,25 @@ func TestWireGateway_ScannerIsWiredAndFunctional(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWireGateway_InvalidDataDir verifies that WireGateway returns a non-nil error
+// when the data directory path cannot be created (partial-initialization cleanup path).
+// We use a file as a parent path component so that os.MkdirAll fails deterministically
+// without requiring elevated privileges.
+func TestWireGateway_InvalidDataDir(t *testing.T) {
+	// Create a regular file, then use it as a directory component in the path.
+	// os.MkdirAll will fail because the parent element is a file, not a directory.
+	f, err := os.CreateTemp(t.TempDir(), "not-a-dir-*")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	invalidDir := filepath.Join(f.Name(), "subdir")
+	cfg := testGatewayConfig()
+
+	gw, err := WireGateway(context.Background(), cfg, invalidDir)
+	require.Error(t, err, "WireGateway must return an error when the data directory cannot be created")
+	assert.Nil(t, gw, "Gateway must be nil when WireGateway fails")
 }
 
 // stubProvider is a minimal Provider implementation for negative test cases.

@@ -406,19 +406,7 @@ func DefaultRules() ([]Rule, error) {
 	}
 
 	applyOverrides := func(stage types.ScanStage) []Rule {
-		sigil := sigilSpecificRules(stage)
-		sigilNames := make(map[string]struct{}, len(sigil))
-		for _, r := range sigil {
-			sigilNames[r.name] = struct{}{}
-		}
-		db := dbByStage[stage]
-		filtered := make([]Rule, 0, len(db))
-		for _, r := range db {
-			if _, ok := sigilNames[r.name]; !ok {
-				filtered = append(filtered, r)
-			}
-		}
-		return append(filtered, sigil...)
+		return applyDBOverrides(dbByStage[stage], stage)
 	}
 
 	inputSecrets := applyOverrides(types.ScanStageInput)
@@ -428,30 +416,33 @@ func DefaultRules() ([]Rule, error) {
 	return slices.Concat(inputInjectionRules, inputSecrets, ToolRules(), toolSecrets, outputSecrets), nil
 }
 
-// secretRules returns the combined secrets-patterns-db + Sigil-specific secret
-// detection patterns for the given stage. Sigil-specific rules override DB
-// rules with the same name (better precision or coverage).
-func secretRules(stage types.ScanStage) ([]Rule, error) {
+// applyDBOverrides merges DB-sourced rules with Sigil-specific rules for a
+// given stage. Sigil-specific rules take precedence: any DB rule whose name
+// collides with a Sigil rule is excluded.
+func applyDBOverrides(db []Rule, stage types.ScanStage) []Rule {
 	sigil := sigilSpecificRules(stage)
 	sigilNames := make(map[string]struct{}, len(sigil))
 	for _, r := range sigil {
 		sigilNames[r.name] = struct{}{}
 	}
-
-	db, err := loadDBRules(stage)
-	if err != nil {
-		return nil, err
-	}
-
-	// Filter DB rules that collide with Sigil-specific names.
 	filtered := make([]Rule, 0, len(db))
 	for _, r := range db {
 		if _, ok := sigilNames[r.name]; !ok {
 			filtered = append(filtered, r)
 		}
 	}
+	return append(filtered, sigil...)
+}
 
-	return append(filtered, sigil...), nil
+// secretRules returns the combined secrets-patterns-db + Sigil-specific secret
+// detection patterns for the given stage. Sigil-specific rules override DB
+// rules with the same name (better precision or coverage).
+func secretRules(stage types.ScanStage) ([]Rule, error) {
+	db, err := loadDBRules(stage)
+	if err != nil {
+		return nil, err
+	}
+	return applyDBOverrides(db, stage), nil
 }
 
 // OutputRules returns rules for StageOutput: secret/credential detection patterns.
