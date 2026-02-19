@@ -251,9 +251,12 @@ func Normalize(s string) string {
 }
 
 // Scan checks content against rules matching the given stage.
-// The context.Context parameter is intentionally discarded: Go RE2 guarantees
-// linear-time matching, so mid-scan cancellation is unnecessary for typical
-// content sizes. The interface accepts context for future Scanner implementations.
+// The context is checked between rules (via ctx.Err() in the rule loop), not
+// during regex evaluation. Cancellation is detected only between rules, not
+// mid-rule. For content near the 1MB limit with hundreds of rules, a cancelled
+// context may not be detected until the current rule completes. This is by
+// design: Go RE2 guarantees linear-time matching, so individual rule evaluation
+// is bounded and mid-rule interruption is unnecessary.
 //
 // opts.Origin is validated and stored in the returned ScanResult for audit and
 // logging purposes only; it does not influence which rules are evaluated. Rule
@@ -387,20 +390,42 @@ func ToolRules() []Rule {
 
 // DefaultRules returns the built-in rule set for all three stages.
 // Returns an error if the embedded secrets-patterns-db cannot be loaded.
+//
+// The embedded DB is parsed only once (sync.Once in loadDBRules). DefaultRules
+// uses loadAllDBRules to stamp all three stages in a single pass over the
+// cached DB entries, avoiding three separate iteration loops.
 func DefaultRules() ([]Rule, error) {
-	input, err := InputRules()
+	allStages := []types.ScanStage{
+		types.ScanStageInput,
+		types.ScanStageTool,
+		types.ScanStageOutput,
+	}
+	dbByStage, err := loadAllDBRules(allStages)
 	if err != nil {
 		return nil, err
 	}
-	output, err := OutputRules()
-	if err != nil {
-		return nil, err
+
+	applyOverrides := func(stage types.ScanStage) []Rule {
+		sigil := sigilSpecificRules(stage)
+		sigilNames := make(map[string]struct{}, len(sigil))
+		for _, r := range sigil {
+			sigilNames[r.name] = struct{}{}
+		}
+		db := dbByStage[stage]
+		filtered := make([]Rule, 0, len(db))
+		for _, r := range db {
+			if _, ok := sigilNames[r.name]; !ok {
+				filtered = append(filtered, r)
+			}
+		}
+		return append(filtered, sigil...)
 	}
-	toolSecrets, err := ToolSecretRules()
-	if err != nil {
-		return nil, err
-	}
-	return slices.Concat(input, ToolRules(), toolSecrets, output), nil
+
+	inputSecrets := applyOverrides(types.ScanStageInput)
+	toolSecrets := applyOverrides(types.ScanStageTool)
+	outputSecrets := applyOverrides(types.ScanStageOutput)
+
+	return slices.Concat(inputInjectionRules, inputSecrets, ToolRules(), toolSecrets, outputSecrets), nil
 }
 
 // secretRules returns the combined secrets-patterns-db + Sigil-specific secret

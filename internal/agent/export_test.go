@@ -16,3 +16,6 @@ const ScannerCircuitBreakerThreshold = scannerCircuitBreakerThreshold
 
 // TruncationMarker exposes truncationMarker for white-box testing.
 const TruncationMarker = truncationMarker
+
+// ScanBlockedReason exposes scanBlockedReason for white-box testing.
+var ScanBlockedReason = scanBlockedReason

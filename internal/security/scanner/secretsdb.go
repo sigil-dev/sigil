@@ -63,6 +63,9 @@ var (
 // (common English words, short hex strings, etc.). Sigil-specific rules in
 // sigilSpecificRules() override DB rules with the same name to provide better
 // precision where the DB regex is known to be overly broad.
+//
+// Callers that need rules for all stages should prefer loadAllDBRules to avoid
+// iterating dbEntries multiple times.
 func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 	dbOnce.Do(func() {
 		var f dbFile
@@ -115,9 +118,11 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 				"failed_names", failedNames,
 				slog.String("error_code", string(sigilerr.CodeSecurityScannerFailure)),
 				slog.Bool("permanent", true))
-			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
-				"scanner startup aborted: %d high-confidence pattern(s) failed to compile: %v (permanent failure — process restart required to retry)",
-				len(failedNames), failedNames)
+			dbErr = sigilerr.New(sigilerr.CodeSecurityScannerFailure,
+				"scanner startup aborted: high-confidence pattern(s) failed to compile (permanent failure — process restart required to retry)",
+				sigilerr.Field("failed_count", len(failedNames)),
+				sigilerr.Field("failed_names", failedNames),
+			)
 			return
 		}
 
@@ -144,6 +149,32 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// loadAllDBRules returns compiled high-confidence rules for all three scan
+// stages in a single pass over dbEntries. This avoids the three separate
+// iterations that would result from calling loadDBRules once per stage.
+// The embedded YAML is still parsed only once via the shared sync.Once.
+func loadAllDBRules(stages []types.ScanStage) (map[types.ScanStage][]Rule, error) {
+	// Trigger the sync.Once parse.
+	if _, err := loadDBRules(stages[0]); err != nil {
+		return nil, err
+	}
+
+	result := make(map[types.ScanStage][]Rule, len(stages))
+	for _, stage := range stages {
+		rules := make([]Rule, 0, len(dbEntries))
+		for _, e := range dbEntries {
+			r, err := NewRule(e.name, e.pattern, stage, SeverityHigh)
+			if err != nil {
+				return nil, sigilerr.Wrapf(err, sigilerr.CodeSecurityScannerFailure,
+					"creating rule %q for stage %s", e.name, stage)
+			}
+			rules = append(rules, r)
+		}
+		result[stage] = rules
+	}
+	return result, nil
 }
 
 // toSnakeCase converts a display name like "AWS API Key" to "aws_api_key".

@@ -24,9 +24,8 @@ import (
 
 // ScannerModes holds the per-stage detection modes.
 // The zero value is intentionally invalid (all mode fields are empty strings).
-// Obtain a valid value via defaultScannerModes() (internal) or
-// NewScannerModesFromConfig() (public). Both construction paths call
-// Validate() automatically. Direct construction (ScannerModes{}) bypasses
+// Obtain a valid value via DefaultScannerModes (exported package-level var) or
+// NewScannerModesFromConfig() (public). Direct construction (ScannerModes{}) bypasses
 // validation and will be rejected by LoopConfig.Validate.
 type ScannerModes struct {
 	Input  types.ScannerMode
@@ -128,9 +127,8 @@ type LoopHooks struct {
 //
 // Breaking change (PR #17): Scanner and ScannerModes are now required fields.
 // Callers constructing LoopConfig via struct literals must provide both fields
-// or Validate() will return an error. Use DefaultLoopConfig() for safe
-// construction with sensible defaults, or NewLoopConfig() for explicit
-// configuration.
+// or Validate() will return an error. Use DefaultScannerModes for the
+// recommended defaults, or NewScannerModesFromConfig() for config-derived modes.
 type LoopConfig struct {
 	SessionManager      *SessionManager
 	Enforcer            *security.Enforcer
@@ -163,38 +161,6 @@ func (c LoopConfig) Validate() error {
 	return c.ScannerModes.Validate()
 }
 
-// NewLoopConfig creates and validates a LoopConfig. Required fields:
-// SessionManager, Enforcer, ProviderRouter, Scanner (all non-nil), and
-// ScannerModes (all three stage modes must be valid). Optional fields
-// (AuditStore, ToolDispatcher, ToolRegistry, MaxToolCallsPerTurn, Hooks)
-// may be left at their zero values and set directly on the returned config.
-func NewLoopConfig(
-	sessions *SessionManager,
-	enforcer *security.Enforcer,
-	router provider.Router,
-	sc scanner.Scanner,
-	modes ScannerModes,
-) (LoopConfig, error) {
-	cfg := LoopConfig{
-		SessionManager: sessions,
-		Enforcer:       enforcer,
-		ProviderRouter: router,
-		Scanner:        sc,
-		ScannerModes:   modes,
-	}
-	if err := cfg.Validate(); err != nil {
-		return LoopConfig{}, err
-	}
-	return cfg, nil
-}
-
-// DefaultLoopConfig returns a LoopConfig with default scanner modes and the given
-// required dependencies. Returns an error if any required dependency is nil or if
-// the default scanner modes fail validation.
-func DefaultLoopConfig(sessions *SessionManager, enforcer *security.Enforcer, router provider.Router, sc scanner.Scanner) (LoopConfig, error) {
-	return NewLoopConfig(sessions, enforcer, router, sc, defaultScannerModes)
-}
-
 // Loop is the agent's core processing pipeline.
 type Loop struct {
 	sessions               *SessionManager
@@ -207,10 +173,12 @@ type Loop struct {
 	hooks                  *LoopHooks
 	scanner                scanner.Scanner
 	scannerModes           ScannerModes
-	auditFailCount                atomic.Int64 // consecutive failures from audit()
-	auditBlockedFailCount         atomic.Int64 // consecutive failures from auditInputBlocked()
-	auditOutputBlockedFailCount   atomic.Int64 // consecutive failures from auditOutputBlocked()
-	auditToolScanFailCount        atomic.Int64 // consecutive failures from auditToolScan()
+	// auditFailCount tracks consecutive failures from the general interaction audit().
+	// auditSecurityFailCount tracks consecutive failures from all security-scan audit
+	// paths (auditScanBlocked, auditToolScan). The two counters are kept separate so
+	// general-audit noise does not mask security-scan escalation and vice versa.
+	auditFailCount         atomic.Int64
+	auditSecurityFailCount atomic.Int64
 }
 
 // NewLoop creates a Loop with the given dependencies.
@@ -308,7 +276,10 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 		if sigilerr.HasCode(err, sigilerr.CodeSecurityScannerOutputBlocked) ||
 			sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge) ||
 			sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure) {
-			l.auditOutputBlocked(ctx, msg, outputThreat, scanBlockedReason(outputThreat, err))
+			l.auditScanBlocked(ctx, msg, outputThreat, scanBlockedReason(outputThreat, err),
+			"agent_loop.output_blocked",
+			map[string]any{"stage": string(types.ScanStageOutput)},
+			"audit store append failed for output_blocked")
 		}
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "respond: session %s", msg.SessionID)
 	}
@@ -420,7 +391,10 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 				slog.String("workspace_id", msg.WorkspaceID),
 			)
 		}
-		l.auditInputBlocked(ctx, msg, inputThreat, auditReason)
+		l.auditScanBlocked(ctx, msg, inputThreat, auditReason,
+			"agent_loop.input_blocked",
+			map[string]any{"content_length": len(msg.Content)},
+			"audit store append failed for input_blocked")
 		return nil, nil, scanErr
 	}
 	// Log a SHA-256 hash of the original content at DEBUG level for forensic
@@ -724,7 +698,10 @@ func (l *Loop) runToolLoop(
 					slog.Any("error", scanErr),
 					slog.Any("error_code", sigilerr.CodeOf(scanErr)),
 				)
-				l.auditOutputBlocked(ctx, msg, intermediateThreat, scanBlockedReason(intermediateThreat, scanErr))
+				l.auditScanBlocked(ctx, msg, intermediateThreat, scanBlockedReason(intermediateThreat, scanErr),
+				"agent_loop.output_blocked",
+				map[string]any{"stage": string(types.ScanStageOutput)},
+				"audit store append failed for output_blocked")
 				return "", nil, scanErr
 			}
 			text = scannedText
@@ -939,9 +916,7 @@ func scanBlockedReason(threatInfo *store.ThreatInfo, scanErr error) string {
 	switch {
 	case sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerContentTooLarge):
 		return "content_too_large"
-	case threatInfo != nil,
-		sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerInputBlocked),
-		sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerOutputBlocked):
+	case threatInfo != nil && threatInfo.Detected:
 		return "blocked_threat"
 	default:
 		return "scanner_failure"
@@ -985,44 +960,23 @@ func buildBlockedAuditEntry(action string, msg InboundMessage, threatInfo *store
 	}
 }
 
-// auditInputBlocked records a best-effort audit entry when the input scanner
-// blocks a message. This gives security teams visibility into rejected inputs
-// without failing the already-failing request path.
+// auditScanBlocked records a best-effort audit entry when the input or output
+// scanner blocks a message. This gives security teams visibility into rejected
+// content without failing the already-failing request path.
 //
 // The reason parameter disambiguates the audit Result:
 //   - "blocked_threat"    — scanner detected a threat and blocked the message
 //   - "scanner_failure"   — scanner returned an infrastructure error
 //   - "content_too_large" — message exceeded the scanner size limit
-func (l *Loop) auditInputBlocked(ctx context.Context, msg InboundMessage, threatInfo *store.ThreatInfo, reason string) {
-	if l.auditStore == nil {
-		return
-	}
-
-	entry := buildBlockedAuditEntry("agent_loop.input_blocked", msg, threatInfo, reason,
-		map[string]any{"content_length": len(msg.Content)})
-
-	l.appendAuditEntry(ctx, entry, &l.auditBlockedFailCount, "audit store append failed for input_blocked",
-		slog.String("workspace_id", msg.WorkspaceID), slog.String("session_id", msg.SessionID))
-}
-
-// auditOutputBlocked records a best-effort audit entry when the intermediate output
-// scanner blocks a message inside runToolLoop. This gives security teams visibility
-// into rejected intermediate assistant outputs without failing the already-failing
-// request path.
 //
-// The reason parameter disambiguates the audit Result:
-//   - "blocked_threat"    — scanner detected a threat and blocked the output
-//   - "scanner_failure"   — scanner returned an infrastructure error
-//   - "content_too_large" — output exceeded the scanner size limit
-func (l *Loop) auditOutputBlocked(ctx context.Context, msg InboundMessage, threatInfo *store.ThreatInfo, reason string) {
+// action and extraDetails distinguish input vs. output scan paths; logMsg is
+// the string logged when the audit store append fails.
+func (l *Loop) auditScanBlocked(ctx context.Context, msg InboundMessage, threatInfo *store.ThreatInfo, reason string, action string, extraDetails map[string]any, logMsg string) {
 	if l.auditStore == nil {
 		return
 	}
-
-	entry := buildBlockedAuditEntry("agent_loop.output_blocked", msg, threatInfo, reason,
-		map[string]any{"stage": string(types.ScanStageOutput)})
-
-	l.appendAuditEntry(ctx, entry, &l.auditOutputBlockedFailCount, "audit store append failed for output_blocked",
+	entry := buildBlockedAuditEntry(action, msg, threatInfo, reason, extraDetails)
+	l.appendAuditEntry(ctx, entry, &l.auditSecurityFailCount, logMsg,
 		slog.String("workspace_id", msg.WorkspaceID), slog.String("session_id", msg.SessionID))
 }
 
@@ -1062,12 +1016,17 @@ func (l *Loop) auditToolScan(ctx context.Context, msg InboundMessage, toolCallID
 		}
 	} else {
 		// scanErr != nil and threatInfo == nil: scanner itself failed.
+		// Note: this branch may be unreachable in practice — handleToolScanFailure
+		// always returns a non-nil bypass ThreatInfo, so threatInfo is non-nil on
+		// all currently reachable tool-stage error paths.
 		action = "agent_loop.tool_scan_error"
 	}
 
 	result := "ok"
 	if scanErr != nil {
-		result = "blocked"
+		// Content was not blocked — it was passed through unscanned (bypassed).
+		// Use "bypassed" rather than "blocked" to accurately reflect the outcome.
+		result = "bypassed"
 		details["scan_error"] = scanErr.Error()
 		details["error_code"] = string(sigilerr.CodeOf(scanErr))
 	}
@@ -1083,12 +1042,12 @@ func (l *Loop) auditToolScan(ctx context.Context, msg InboundMessage, toolCallID
 		Result:      result,
 	}
 
-	l.appendAuditEntry(ctx, entry, &l.auditToolScanFailCount, "audit store append failed for tool scan",
+	l.appendAuditEntry(ctx, entry, &l.auditSecurityFailCount, "audit store append failed for tool scan",
 		slog.String("workspace_id", msg.WorkspaceID), slog.String("session_id", msg.SessionID), slog.String("tool_call_id", toolCallID))
 }
 
 // appendAuditEntry is the shared append+counter+escalation pattern used by
-// audit(), auditInputBlocked(), and auditToolScan(). On success it resets
+// audit(), auditScanBlocked(), and auditToolScan(). On success it resets
 // the counter; on failure it increments and logs at an escalating level.
 func (l *Loop) appendAuditEntry(ctx context.Context, entry *store.AuditEntry, counter *atomic.Int64, logMsg string, attrs ...slog.Attr) {
 	if err := l.auditStore.Append(ctx, entry); err != nil {
@@ -1142,6 +1101,7 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage types.Scan
 		Origin: origin,
 	})
 	if scanErr != nil {
+		// ── Category 1: Cancellation — always fail-closed (all stages) ──────────────
 		// Context cancellation is handled first since it applies uniformly to all
 		// stages and should not be confused with infrastructure failures. The
 		// dedicated error code (CodeSecurityScannerCancelled) allows callers to
@@ -1155,15 +1115,9 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage types.Scan
 				"scanning %s content cancelled", stage)
 		}
 
-		// content_too_large is handled before the generic error path so both
-		// tool and input/output stages can branch cleanly. For tool stage,
-		// truncate and re-scan (sigil-7g5.184). For input/output stages, fail
-		// closed (default-deny principle).
-		//
-		// For tool stage generic errors: scanner internal errors (not threat
-		// detections) are best-effort — log and continue with normalized (but
-		// unscanned-by-rules) content to preserve availability. Threat
-		// detections are handled below via ApplyMode. See D062 for rationale.
+		// ── Category 2: ContentTooLarge ────────────────────────────────────────────
+		// Tool stage: truncate and re-scan (sigil-7g5.184) to prevent bypass attacks.
+		// Input/output stages: fail closed (default-deny principle).
 		if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerContentTooLarge) {
 			if stage == types.ScanStageTool {
 				log.LogAttrs(ctx, slog.LevelWarn, "tool result exceeds scanner limit, delegating to oversized handler",
@@ -1172,32 +1126,30 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage types.Scan
 				)
 				return l.scanOversizedToolContent(ctx, content, stage, origin, mode, scannerFailCount, scanErr, log)
 			}
-			// Content too large on input/output stages: fail closed.
+			// Input/output stage: fail closed.
 			log.LogAttrs(ctx, slog.LevelError, "content exceeds scanner limit",
 				slog.String("stage", string(stage)),
 				slog.Int("content_length", len(content)),
 				slog.String("error_code", string(sigilerr.CodeSecurityScannerContentTooLarge)),
 			)
-			return "", nil, scanErr
+			return "", nil, sigilerr.Wrapf(scanErr, sigilerr.CodeSecurityScannerContentTooLarge,
+				"content too large for %s scanning", stage)
 		}
+
+		// ── Category 3: Generic scanner error ─────────────────────────────────────
+		// Tool stage: best-effort (handleToolScanFailure) — D062 decision: availability
+		// over security for tool results below the circuit-breaker threshold.
+		// Normalization (HTML decode + zero-width strip + NFKC) is applied on the
+		// best-effort path. A bypass ThreatInfo marker is returned so audit queries
+		// can distinguish "content passed unscanned" from "content scanned and found
+		// clean". Detected=false because no threat was detected (no scan occurred).
+		// Input/output stages: fail closed. CodeSecurityScannerFailure wraps with a
+		// uniform code so callers can classify infrastructure failures without
+		// enumerating scanner internals.
 		if stage == types.ScanStageTool {
-			// D062 decision: availability over security for tool results (below threshold).
-			// Normalization (via scanner.Normalize: HTML decode + zero-width strip + NFKC)
-			// is applied on the best-effort path to ensure consistent unicode handling.
-			// Stage and origin are validated earlier (and typically passed as named
-			// constants at call sites), so only regex engine failures can
-			// realistically reach this path.
-			//
-			// Return a bypass ThreatInfo marker so audit queries can distinguish
-			// "content passed unscanned" from "content scanned and found clean".
-			// Detected=false because no threat was detected (no scan occurred).
 			return l.handleToolScanFailure(ctx, content, scanErr, stage, scannerFailCount, log)
 		}
-		// Scanner internal error on input/output stages: fail closed.
-		// CodeSecurityScannerFailure is intentional here for generic scanner
-		// errors that are not content_too_large (handled above) or cancellation
-		// (handled above). Wrapping with a uniform code lets callers classify
-		// infrastructure failures without enumerating scanner internals.
+		// Input/output stage: fail closed.
 		log.LogAttrs(ctx, slog.LevelError, "scanner failure on "+string(stage)+" content",
 			slog.Any("error", scanErr),
 			slog.String("stage", string(stage)),
@@ -1247,7 +1199,7 @@ func (l *Loop) scanOversizedToolContent(ctx context.Context, content string, sta
 		// then append a truncation marker so the LLM is informed the result was cut.
 		result, threatInfo, applyErr := l.applyScannedResult(ctx, stage, mode, reScanResult, log)
 		if applyErr != nil {
-			return result, threatInfo, sigilerr.Wrapf(applyErr, sigilerr.CodeOf(applyErr),
+			return result, threatInfo, sigilerr.Wrapf(applyErr, sigilerr.CodeSecurityScannerToolBlocked,
 				"tool result truncated from %d to %d bytes before scanning", len(content), len(truncated))
 		}
 		log.Log(ctx, slog.LevelWarn, "tool result truncated for scanning")
@@ -1345,7 +1297,7 @@ func (l *Loop) handleToolScanFailure(ctx context.Context, content string, scanEr
 // it is only incremented on failure paths via handleToolScanFailure.
 //
 // When ApplyMode returns an error (block mode detected a threat), threat is returned
-// alongside the error. This is intentional: callers such as auditInputBlocked need
+// alongside the error. This is intentional: callers such as auditScanBlocked need
 // the populated ThreatInfo to record what was blocked in the audit log.
 func (l *Loop) applyScannedResult(ctx context.Context, stage types.ScanStage, mode types.ScannerMode, scanResult scanner.ScanResult, log *slog.Logger) (string, *store.ThreatInfo, error) {
 	var threat *store.ThreatInfo
@@ -1388,7 +1340,7 @@ func (l *Loop) applyScannedResult(ctx context.Context, stage types.ScanStage, mo
 	scanned, modeErr := scanner.ApplyMode(mode, stage, scanResult)
 	if modeErr != nil {
 		// Return threat alongside modeErr so callers can use ThreatInfo for audit
-		// logging even on the error path (e.g., auditInputBlocked needs threat details).
+		// logging even on the error path (e.g., auditScanBlocked needs threat details).
 		return "", threat, modeErr
 	}
 
@@ -1410,37 +1362,23 @@ func severityRank(s scanner.Severity) int {
 	}
 }
 
-// AuditFailCount returns the current consecutive audit failure count for audit().
-// Exposed for testing to verify best-effort audit semantics.
+// AuditFailCount returns the current consecutive audit failure count for the
+// general interaction audit(). Exposed for testing to verify best-effort audit
+// semantics. This counter is independent of AuditSecurityFailCount so that
+// general-audit noise does not mask security-scan escalation.
 func (l *Loop) AuditFailCount() int64 {
 	return l.auditFailCount.Load()
 }
 
-// AuditBlockedFailCount returns the current consecutive audit failure count for
-// auditInputBlocked(). This counter is independent of AuditFailCount so that
-// blocked-input audit failures do not affect the escalation threshold for
-// normal audit failures, and vice versa.
+// AuditSecurityFailCount returns the current consecutive audit failure count
+// for all security-scan audit paths (auditScanBlocked, auditToolScan). These
+// paths share a single counter because they all guard the same security boundary;
+// a persistent failure in any one of them is equally significant for escalation
+// purposes. This counter is independent of AuditFailCount so that security-scan
+// failures do not contaminate the escalation threshold for general interaction audits.
 // Exposed for testing to verify best-effort audit semantics.
-func (l *Loop) AuditBlockedFailCount() int64 {
-	return l.auditBlockedFailCount.Load()
-}
-
-// AuditOutputBlockedFailCount returns the current consecutive audit failure count for
-// auditOutputBlocked(). This counter is independent of AuditFailCount and
-// AuditBlockedFailCount so that output-blocked audit failures do not contaminate
-// the escalation thresholds of other audit paths.
-// Exposed for testing to verify best-effort audit semantics.
-func (l *Loop) AuditOutputBlockedFailCount() int64 {
-	return l.auditOutputBlockedFailCount.Load()
-}
-
-// AuditToolScanFailCount returns the current consecutive audit failure count for
-// auditToolScan(). This counter is independent of AuditFailCount and
-// AuditBlockedFailCount so that tool-scan audit failures do not contaminate
-// the escalation thresholds of other audit paths.
-// Exposed for testing to verify best-effort audit semantics.
-func (l *Loop) AuditToolScanFailCount() int64 {
-	return l.auditToolScanFailCount.Load()
+func (l *Loop) AuditSecurityFailCount() int64 {
+	return l.auditSecurityFailCount.Load()
 }
 
 // sanitizeToolError returns a user-friendly error message for tool dispatch failures,

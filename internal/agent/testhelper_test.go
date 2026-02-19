@@ -46,24 +46,20 @@ func defaultScannerModes() agent.ScannerModes {
 	}
 }
 
-// newTestLoopConfig creates a valid LoopConfig via NewLoopConfig using standard
-// test mocks: default session manager, permissive enforcer, "Hello, world!"
-// provider router, default scanner, and default scanner modes. Callers can
-// override individual fields on the returned config before passing it to NewLoop.
+// newTestLoopConfig creates a valid LoopConfig using standard test mocks:
+// default session manager, permissive enforcer, "Hello, world!" provider router,
+// default scanner, and default scanner modes. Callers can override individual
+// fields on the returned config before passing it to NewLoop.
 func newTestLoopConfig(t *testing.T) agent.LoopConfig {
 	t.Helper()
-	cfg, err := agent.NewLoopConfig(
-		newMockSessionManager(),
-		newMockEnforcer(),
-		newMockProviderRouter(),
-		newDefaultScanner(t),
-		defaultScannerModes(),
-	)
-	if err != nil {
-		t.Fatalf("newTestLoopConfig: %v", err)
+	return agent.LoopConfig{
+		SessionManager: newMockSessionManager(),
+		Enforcer:       newMockEnforcer(),
+		ProviderRouter: newMockProviderRouter(),
+		Scanner:        newDefaultScanner(t),
+		ScannerModes:   defaultScannerModes(),
+		AuditStore:     newMockAuditStore(),
 	}
-	cfg.AuditStore = newMockAuditStore()
-	return cfg
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +505,27 @@ func (s *mockAuditStoreError) Append(_ context.Context, _ *store.AuditEntry) err
 }
 
 func (s *mockAuditStoreError) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
+	return nil, nil
+}
+
+// mockAuditStoreActionFilter is an audit store that fails only for entries whose
+// Action matches one of the failActions prefixes. All other entries succeed.
+// Used to test counter independence when multiple audit paths share a store.
+type mockAuditStoreActionFilter struct {
+	failActions []string
+	err         error
+}
+
+func (s *mockAuditStoreActionFilter) Append(_ context.Context, entry *store.AuditEntry) error {
+	for _, prefix := range s.failActions {
+		if strings.HasPrefix(entry.Action, prefix) {
+			return s.err
+		}
+	}
+	return nil
+}
+
+func (s *mockAuditStoreActionFilter) Query(_ context.Context, _ store.AuditFilter) ([]*store.AuditEntry, error) {
 	return nil, nil
 }
 

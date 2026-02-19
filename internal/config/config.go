@@ -439,6 +439,13 @@ func (c *Config) validateSecurity() []error {
 	// var into cfg — it surfaces the violation as a fatal startup error so the
 	// operator is forced to remove the env var rather than silently proceeding
 	// with a potentially weakened scanner configuration.
+	//
+	// TODO(security): Ideally this check runs before WireGateway() in the start
+	// command's pre-run hook (cmd/sigil/start.go) so that env-var rejection fires
+	// before any subsystem is initialized. The current placement in Validate() is
+	// correct (it still causes startup failure) but allows Viper to merge the env
+	// value into the struct before rejection. Moving the check earlier would close
+	// the window entirely.
 	blockedScannerEnvVars := []struct {
 		envVar string
 		field  string
@@ -450,9 +457,10 @@ func (c *Config) validateSecurity() []error {
 		{"SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING", "security.scanner.disable_origin_tagging"},
 	}
 	for _, blocked := range blockedScannerEnvVars {
-		if os.Getenv(blocked.envVar) != "" {
+		if val := os.Getenv(blocked.envVar); val != "" {
 			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-				"config: %s cannot be set via environment variable", blocked.field))
+				"config: %s cannot be set via environment variable (env var %s=%q is set; unset it and use the config file instead)",
+				blocked.field, blocked.envVar, val))
 		}
 	}
 
