@@ -419,3 +419,107 @@ func TestNewMessageContent(t *testing.T) {
 	err := sigilerr.New(sigilerr.CodeAgentLoopFailure, "max iterations reached")
 	assert.Contains(t, err.Error(), "max iterations reached")
 }
+
+// ---------------------------------------------------------------------------
+// IsScannerCode
+// ---------------------------------------------------------------------------
+
+func TestIsScannerCode(t *testing.T) {
+	scannerCodes := []sigilerr.Code{
+		sigilerr.CodeSecurityScannerInputBlocked,
+		sigilerr.CodeSecurityScannerOutputBlocked,
+		sigilerr.CodeSecurityScannerToolBlocked,
+		sigilerr.CodeSecurityScannerContentTooLarge,
+		sigilerr.CodeSecurityScannerFailure,
+		sigilerr.CodeSecurityScannerCancelled,
+		sigilerr.CodeSecurityScannerCircuitBreakerOpen,
+		sigilerr.CodeSecurityScannerEmptyRuleStage,
+	}
+
+	for _, code := range scannerCodes {
+		t.Run(string(code), func(t *testing.T) {
+			err := sigilerr.New(code, "scanner error")
+			assert.True(t, sigilerr.IsScannerCode(err))
+		})
+	}
+
+	nonScannerCodes := []sigilerr.Code{
+		sigilerr.CodeServerInternalFailure,
+		sigilerr.CodeProviderUpstreamFailure,
+		sigilerr.CodeSecurityCapabilityInvalid,
+		sigilerr.CodeSecurityInvalidInput,
+	}
+
+	for _, code := range nonScannerCodes {
+		t.Run("non-scanner/"+string(code), func(t *testing.T) {
+			err := sigilerr.New(code, "non-scanner error")
+			assert.False(t, sigilerr.IsScannerCode(err))
+		})
+	}
+}
+
+func TestIsScannerCodeNil(t *testing.T) {
+	assert.False(t, sigilerr.IsScannerCode(nil))
+}
+
+// ---------------------------------------------------------------------------
+// HTTPStatus — scanner error codes
+// ---------------------------------------------------------------------------
+
+func TestHTTPStatusScannerCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		code sigilerr.Code
+		want int
+	}{
+		// Input blocked: client sent content that was rejected → 422 Unprocessable Entity.
+		{
+			name: "input blocked → 422",
+			code: sigilerr.CodeSecurityScannerInputBlocked,
+			want: http.StatusUnprocessableEntity,
+		},
+		// All other scanner codes reflect a service-side or transient condition → 503.
+		{
+			name: "output blocked → 503",
+			code: sigilerr.CodeSecurityScannerOutputBlocked,
+			want: http.StatusServiceUnavailable,
+		},
+		{
+			name: "tool blocked → 503",
+			code: sigilerr.CodeSecurityScannerToolBlocked,
+			want: http.StatusServiceUnavailable,
+		},
+		{
+			name: "circuit breaker open → 503",
+			code: sigilerr.CodeSecurityScannerCircuitBreakerOpen,
+			want: http.StatusServiceUnavailable,
+		},
+		{
+			name: "content too large → 503",
+			code: sigilerr.CodeSecurityScannerContentTooLarge,
+			want: http.StatusServiceUnavailable,
+		},
+		{
+			name: "cancelled → 503",
+			code: sigilerr.CodeSecurityScannerCancelled,
+			want: http.StatusServiceUnavailable,
+		},
+		{
+			name: "scanner failure → 503",
+			code: sigilerr.CodeSecurityScannerFailure,
+			want: http.StatusServiceUnavailable,
+		},
+		{
+			name: "empty rule stage → 503",
+			code: sigilerr.CodeSecurityScannerEmptyRuleStage,
+			want: http.StatusServiceUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := sigilerr.New(tt.code, "scanner error")
+			assert.Equal(t, tt.want, sigilerr.HTTPStatus(err))
+		})
+	}
+}

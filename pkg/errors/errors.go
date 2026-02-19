@@ -95,6 +95,7 @@ const (
 	CodeSecurityScannerFailure            Code = "security.scanner.failure"
 	CodeSecurityScannerCancelled          Code = "security.scanner.cancelled"
 	CodeSecurityScannerCircuitBreakerOpen Code = "security.scanner.circuit_breaker_open"
+	CodeSecurityScannerEmptyRuleStage     Code = "security.scanner.empty_rule_stage"
 
 	CodeChannelTokenInvalid     Code = "channel.token.invalid"
 	CodeChannelTokenCheckFailed Code = "channel.token.check_failed"
@@ -235,7 +236,8 @@ func IsScannerCode(err error) bool {
 		HasCode(err, CodeSecurityScannerContentTooLarge) ||
 		HasCode(err, CodeSecurityScannerFailure) ||
 		HasCode(err, CodeSecurityScannerCancelled) ||
-		HasCode(err, CodeSecurityScannerCircuitBreakerOpen)
+		HasCode(err, CodeSecurityScannerCircuitBreakerOpen) ||
+		HasCode(err, CodeSecurityScannerEmptyRuleStage)
 }
 
 func IsNotFound(err error) bool {
@@ -291,6 +293,13 @@ func HTTPStatus(err error) int {
 		return http.StatusGatewayTimeout
 	case IsUpstreamFailure(err):
 		return http.StatusBadGateway
+	case HasCode(err, CodeSecurityScannerInputBlocked):
+		// Client-supplied content was rejected by the scanner: 422 Unprocessable Entity.
+		return http.StatusUnprocessableEntity
+	case IsScannerCode(err):
+		// All other scanner failures (output blocked, tool blocked, circuit breaker, etc.)
+		// represent transient or service-side conditions: 503 Service Unavailable.
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

@@ -151,9 +151,11 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 	return out, nil
 }
 
-// loadAllDBRules returns compiled high-confidence rules for all three scan
-// stages. It delegates to loadDBRules for each stage so that the sync.Once
-// parse is triggered exactly once and each stage's rules are returned cleanly.
+// loadAllDBRules returns a map of stage→rules for each stage in the provided
+// slice. It calls loadDBRules once per stage, which stamps each rule with the
+// appropriate stage value. The sync.Once inside loadDBRules ensures the
+// underlying YAML parse and regex compilation happen only once regardless of
+// how many stages are requested.
 func loadAllDBRules(stages []types.ScanStage) (map[types.ScanStage][]Rule, error) {
 	result := make(map[types.ScanStage][]Rule, len(stages))
 	for _, stage := range stages {

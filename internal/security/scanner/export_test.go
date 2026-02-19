@@ -17,3 +17,6 @@ func ResetDBCache() {
 	dbEntries = nil
 	dbErr = nil
 }
+
+// ValidateStageRules exposes validateStageRules to the external test package.
+var ValidateStageRules = validateStageRules

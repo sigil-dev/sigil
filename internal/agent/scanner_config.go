@@ -19,6 +19,19 @@ var DefaultScannerModes = ScannerModes{
 	// DisableOriginTagging omitted: false (enabled) is the correct default.
 }
 
+// parseModeOrDefault returns def if raw is empty, otherwise parses and validates raw.
+// field is used in error messages to identify which scanner mode field failed validation.
+func parseModeOrDefault(raw types.ScannerMode, def types.ScannerMode, field string) (types.ScannerMode, error) {
+	if raw == "" {
+		return def, nil
+	}
+	m, err := types.ParseScannerMode(string(raw))
+	if err != nil {
+		return "", sigilerr.Wrapf(err, sigilerr.CodeConfigValidateInvalidValue, "scanner %s mode", field)
+	}
+	return m, nil
+}
+
 // NewScannerModesFromConfig converts config.ScannerConfig to agent.ScannerModes.
 // Empty fields fall back to DefaultScannerModes. Non-empty fields are validated.
 //
@@ -26,17 +39,6 @@ var DefaultScannerModes = ScannerModes{
 // tagging is enabled; true means tagging is disabled. Both the config struct and
 // ScannerModes use the same "disable" polarity so no inversion is needed.
 func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
-	parseModeOrDefault := func(raw types.ScannerMode, def types.ScannerMode, field string) (types.ScannerMode, error) {
-		if raw == "" {
-			return def, nil
-		}
-		m, err := types.ParseScannerMode(string(raw))
-		if err != nil {
-			return "", sigilerr.Wrapf(err, sigilerr.CodeConfigValidateInvalidValue, "scanner %s mode", field)
-		}
-		return m, nil
-	}
-
 	var modes ScannerModes
 	var err error
 	if modes.Input, err = parseModeOrDefault(cfg.Input, DefaultScannerModes.Input, "input"); err != nil {

@@ -1553,6 +1553,68 @@ func TestNormalize_Idempotency(t *testing.T) {
 	}
 }
 
+// Finding sigil-7g5.800 — DefaultRules must have at least 1 rule per stage.
+// validateStageRules returns CodeSecurityScannerEmptyRuleStage when any stage
+// has zero rules; it succeeds when every stage has at least one rule.
+func TestValidateStageRules(t *testing.T) {
+	inputRule, err := scanner.NewRule("input_rule", regexp.MustCompile(`foo`), types.ScanStageInput, scanner.SeverityHigh)
+	require.NoError(t, err)
+	toolRule, err := scanner.NewRule("tool_rule", regexp.MustCompile(`bar`), types.ScanStageTool, scanner.SeverityHigh)
+	require.NoError(t, err)
+	outputRule, err := scanner.NewRule("output_rule", regexp.MustCompile(`baz`), types.ScanStageOutput, scanner.SeverityHigh)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		rules       []scanner.Rule
+		wantErr     bool
+		wantErrCode sigilerr.Code
+	}{
+		{
+			name:    "all stages covered — no error",
+			rules:   []scanner.Rule{inputRule, toolRule, outputRule},
+			wantErr: false,
+		},
+		{
+			name:        "output stage empty — error",
+			rules:       []scanner.Rule{inputRule, toolRule},
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeSecurityScannerEmptyRuleStage,
+		},
+		{
+			name:        "tool stage empty — error",
+			rules:       []scanner.Rule{inputRule, outputRule},
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeSecurityScannerEmptyRuleStage,
+		},
+		{
+			name:        "input stage empty — error",
+			rules:       []scanner.Rule{toolRule, outputRule},
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeSecurityScannerEmptyRuleStage,
+		},
+		{
+			name:        "no rules at all — error",
+			rules:       []scanner.Rule{},
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeSecurityScannerEmptyRuleStage,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := scanner.ValidateStageRules(tt.rules)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.wantErrCode),
+					"expected %s, got: %v", tt.wantErrCode, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestNormalize_IterationCap verifies that deeply encoded input terminates in reasonable time.
 // The iteration cap (maxHTMLDecodeIterations=10) prevents CPU DoS via crafted inputs.
 func TestNormalize_IterationCap(t *testing.T) {

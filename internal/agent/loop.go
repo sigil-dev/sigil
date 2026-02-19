@@ -173,11 +173,9 @@ type Loop struct {
 	hooks                  *LoopHooks
 	scanner                scanner.Scanner
 	scannerModes           ScannerModes
-	// auditFailCount tracks consecutive failures from the general interaction audit().
-	// auditSecurityFailCount tracks consecutive failures from all security-scan audit
-	// paths (auditScanBlocked, auditToolScan). The two counters are kept separate so
-	// general-audit noise does not mask security-scan escalation and vice versa.
+	// auditFailCount tracks total audit-write failures for fail-open degradation.
 	auditFailCount         atomic.Int64
+	// auditSecurityFailCount tracks security-related audit-write failures separately.
 	auditSecurityFailCount atomic.Int64
 }
 
@@ -463,7 +461,7 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	for _, m := range history {
 		origin := types.Origin(m.Origin)
 		if !origin.Valid() {
-			slog.DebugContext(ctx, "message has invalid origin, falling back to role-derived",
+			slog.WarnContext(ctx, "message has invalid origin, falling back to role-derived",
 				slog.String("message_id", m.ID),
 				slog.String("stored_origin", m.Origin),
 				slog.String("role", string(m.Role)),
@@ -703,6 +701,7 @@ func (l *Loop) runToolLoop(
 				msg.SessionID, msg.WorkspaceID,
 			)
 			if scanErr != nil {
+				// Scanner failure logged at Error; no external alerting integration (Sentry/PD) exists yet.
 				slog.ErrorContext(ctx, "intermediate output scan failed in tool loop",
 					slog.String("session_id", msg.SessionID),
 					slog.String("workspace_id", msg.WorkspaceID),
@@ -926,12 +925,12 @@ func (l *Loop) audit(ctx context.Context, msg InboundMessage, out *OutboundMessa
 //   - "circuit_breaker_open" — scanner circuit breaker is open
 func scanBlockedReason(threatInfo *store.ThreatInfo, scanErr error) string {
 	switch {
+	case sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen):
+		return "circuit_breaker_open"
 	case sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerContentTooLarge):
 		return "content_too_large"
 	case threatInfo != nil && threatInfo.Detected:
 		return "blocked_threat"
-	case sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen):
-		return "circuit_breaker_open"
 	default:
 		return "scanner_failure"
 	}
@@ -1107,6 +1106,11 @@ const truncationMarker = "\n\n[TRUNCATED: tool result exceeded scan limit]"
 // scannerCircuitBreakerThreshold per-turn total failures are reached, a circuit-breaker trips
 // and tool results are blocked (fail-closed) instead of passed through unscanned.
 // scannerFailCount is the per-turn local counter (nil for non-tool stages). See D062 for rationale.
+//
+// Cancellation contract: when the context is cancelled, scanContent returns ("", nil, err) where
+// err carries CodeSecurityScannerCancelled. ThreatInfo is nil in this case — callers MUST check
+// for CodeSecurityScannerCancelled (via sigilerr.HasCode) before dereferencing the ThreatInfo
+// pointer, and MUST NOT treat a nil ThreatInfo as "no threat detected".
 func (l *Loop) scanContent(ctx context.Context, content string, stage types.ScanStage, origin types.Origin, mode types.ScannerMode, scannerFailCount *int, sessionID, workspaceID string) (string, *store.ThreatInfo, error) {
 	log := slog.With(slog.String("session_id", sessionID), slog.String("workspace_id", workspaceID))
 	scanResult, scanErr := l.scanner.Scan(ctx, content, scanner.NewScanContext(stage, origin, map[string]string{
@@ -1124,22 +1128,24 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage types.Scan
 				slog.String("stage", string(stage)),
 				slog.Any("error", scanErr),
 			)
+			// Nil-ThreatInfo cancellation path: returns ("", nil, err) with
+			// CodeSecurityScannerCancelled. ThreatInfo is nil here — it does NOT
+			// mean "no threat". Callers must guard on sigilerr.HasCode before use.
 			return "", nil, sigilerr.Wrapf(scanErr, sigilerr.CodeSecurityScannerCancelled,
 				"scanning %s content cancelled", stage)
 		}
 
-		// ── Category 2: ContentTooLarge ────────────────────────────────────────────
-		// Tool stage: truncate and re-scan (sigil-7g5.184) to prevent bypass attacks.
-		// Input/output stages: fail closed (default-deny principle).
+		// ── Tool stage: delegate all non-cancellation errors to handleToolScanError ──
+		// Tool stage has "best-effort" semantics (D062): ContentTooLarge truncates and
+		// re-scans, generic errors pass through normalized content up to the circuit-
+		// breaker threshold. Input/output stages are handled below (fail-closed).
+		if stage == types.ScanStageTool {
+			return l.handleToolScanError(ctx, content, stage, origin, mode, scanErr, scannerFailCount, sessionID, workspaceID, log)
+		}
+
+		// ── Categories 2 & 3: Input/Output stages — fail-closed ───────────────────
+		// Scanner failure logged at Error; no external alerting integration (Sentry/PD) exists yet.
 		if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerContentTooLarge) {
-			if stage == types.ScanStageTool {
-				log.LogAttrs(ctx, slog.LevelWarn, "tool result exceeds scanner limit, delegating to oversized handler",
-					slog.String("error", scanErr.Error()),
-					slog.Int("content_length", len(content)),
-				)
-				return l.scanOversizedToolContent(ctx, content, stage, origin, mode, scannerFailCount, scanErr, sessionID, workspaceID, log)
-			}
-			// Input/output stage: fail closed.
 			log.LogAttrs(ctx, slog.LevelError, "content exceeds scanner limit",
 				slog.String("stage", string(stage)),
 				slog.Int("content_length", len(content)),
@@ -1148,21 +1154,6 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage types.Scan
 			return "", nil, sigilerr.Wrapf(scanErr, sigilerr.CodeSecurityScannerContentTooLarge,
 				"content too large for %s scanning", stage)
 		}
-
-		// ── Category 3: Generic scanner error ─────────────────────────────────────
-		// Tool stage: best-effort (handleToolScanFailure) — D062 decision: availability
-		// over security for tool results below the circuit-breaker threshold.
-		// Normalization (HTML decode + zero-width strip + NFKC) is applied on the
-		// best-effort path. A bypass ThreatInfo marker is returned so audit queries
-		// can distinguish "content passed unscanned" from "content scanned and found
-		// clean". Detected=false because no threat was detected (no scan occurred).
-		// Input/output stages: fail closed. CodeSecurityScannerFailure wraps with a
-		// uniform code so callers can classify infrastructure failures without
-		// enumerating scanner internals.
-		if stage == types.ScanStageTool {
-			return l.handleToolScanFailure(ctx, content, scanErr, stage, scannerFailCount, log)
-		}
-		// Input/output stage: fail closed.
 		log.LogAttrs(ctx, slog.LevelError, "scanner failure on "+string(stage)+" content",
 			slog.Any("error", scanErr),
 			slog.String("stage", string(stage)),
@@ -1173,6 +1164,31 @@ func (l *Loop) scanContent(ctx context.Context, content string, stage types.Scan
 	}
 
 	return l.applyScannedResult(ctx, stage, mode, scanResult, log)
+}
+
+// handleToolScanError is the single entry point for all non-cancellation scanner errors on the
+// tool stage. It consolidates the two "best-effort" branches that were previously scattered
+// across scanContent (sigil-7g5.805):
+//
+//   - ContentTooLarge → delegates to scanOversizedToolContent, which truncates to
+//     maxToolContentScanSize and re-scans, closing the bypass attack vector (sigil-7g5.184).
+//   - Generic error → delegates to handleToolScanFailure, which applies the per-turn circuit-
+//     breaker escalation and returns normalized content below the threshold.
+//
+// This helper is only called when stage == ScanStageTool and scanErr is non-nil and not
+// CodeSecurityScannerCancelled (cancellation is handled before the tool-stage dispatch in
+// scanContent). scannerFailCount must not be nil.
+func (l *Loop) handleToolScanError(ctx context.Context, content string, stage types.ScanStage, origin types.Origin, mode types.ScannerMode, scanErr error, scannerFailCount *int, sessionID, workspaceID string, log *slog.Logger) (string, *store.ThreatInfo, error) {
+	if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerContentTooLarge) {
+		log.LogAttrs(ctx, slog.LevelWarn, "tool result exceeds scanner limit, delegating to oversized handler",
+			slog.String("error", scanErr.Error()),
+			slog.Int("content_length", len(content)),
+		)
+		return l.scanOversizedToolContent(ctx, content, stage, origin, mode, scannerFailCount, scanErr, sessionID, workspaceID, log)
+	}
+	// Generic scanner error: apply best-effort circuit-breaker logic.
+	// D062: availability over security for tool results below the threshold.
+	return l.handleToolScanFailure(ctx, content, scanErr, stage, scannerFailCount, log)
 }
 
 // scanOversizedToolContent handles the content_too_large error path for tool-stage scans.
@@ -1239,13 +1255,21 @@ func (l *Loop) scanOversizedToolContent(ctx context.Context, content string, sta
 	// Log both errors so operators can distinguish a double-failure from a
 	// single internal scanner failure (sigil-7g5.279). Both the primary scan
 	// error and the re-scan error are included as structured attrs (sigil-7g5.588).
-	return l.handleToolScanFailure(ctx, truncated, reScanErr, stage, scannerFailCount,
+	result, threat, err := l.handleToolScanFailure(ctx, truncated, reScanErr, stage, scannerFailCount,
 		log.With(
 			slog.String("primary_scan_error", primaryScanErr.Error()),
 			slog.String("primary_scan_error_code", string(sigilerr.CodeOf(primaryScanErr))),
 			slog.String("re_scan_error", reScanErr.Error()),
 		),
 	)
+	// Append the truncation marker so the LLM is informed that the content was
+	// cut. On the success path (re-scan succeeds) this marker is already added
+	// (sigil-7g5.798); without it here the LLM would silently receive truncated
+	// content with no indication it was incomplete.
+	if result != "" {
+		result += truncationMarker
+	}
+	return result, threat, err
 }
 
 // handleToolScanFailure centralises the circuit-breaker escalation logic shared
@@ -1264,7 +1288,7 @@ func (l *Loop) scanOversizedToolContent(ctx context.Context, content string, sta
 //     hash is over the normalized content (not scanner.Name or any scanner identifier).
 func (l *Loop) handleToolScanFailure(ctx context.Context, content string, scanErr error, stage types.ScanStage, scannerFailCount *int, log *slog.Logger) (string, *store.ThreatInfo, error) {
 	if scannerFailCount == nil {
-		return "", nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "scannerFailCount must not be nil for tool stage")
+		panic("scannerFailCount must not be nil for tool stage")
 	}
 	*scannerFailCount++
 	consecutive := int64(*scannerFailCount)
@@ -1321,8 +1345,6 @@ func (l *Loop) applyScannedResult(ctx context.Context, stage types.ScanStage, mo
 			if highestSeverity == "" || m.Severity.Rank() > highestSeverity.Rank() {
 				highestSeverity = m.Severity
 			}
-		}
-		for _, m := range scanResult.Matches {
 			log.LogAttrs(ctx, slog.LevelDebug, "security scan match detail",
 				slog.String("rule", m.Rule),
 				slog.Any("severity", m.Severity),

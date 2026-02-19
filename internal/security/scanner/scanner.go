@@ -403,12 +403,39 @@ func ToolRules() []Rule {
 	return toolStaticRules
 }
 
+// allStages is the canonical ordered list of scan stages used by DefaultRules
+// and validateStageRules.
+var allStages = []types.ScanStage{
+	types.ScanStageInput,
+	types.ScanStageTool,
+	types.ScanStageOutput,
+}
+
+// validateStageRules checks that each known scan stage has at least one rule
+// in the provided rule set. Returns an error with
+// CodeSecurityScannerEmptyRuleStage if any stage has zero rules.
+func validateStageRules(rules []Rule) error {
+	counts := make(map[types.ScanStage]int, len(allStages))
+	for _, r := range rules {
+		counts[r.stage]++
+	}
+	for _, stage := range allStages {
+		if counts[stage] == 0 {
+			return sigilerr.Errorf(sigilerr.CodeSecurityScannerEmptyRuleStage,
+				"DefaultRules produced zero rules for stage %q; embedded DB may be missing high-confidence entries",
+				stage)
+		}
+	}
+	return nil
+}
+
 // DefaultRules returns the built-in rule set for all three stages.
-// Returns an error if the embedded secrets-patterns-db cannot be loaded.
+// Returns an error if the embedded secrets-patterns-db cannot be loaded or if
+// any stage (Input, Tool, Output) ends up with zero rules.
 //
-// The embedded DB is parsed only once (sync.Once in loadDBRules). DefaultRules
-// uses loadAllDBRules to stamp all three stages in a single pass over the
-// cached DB entries, avoiding three separate iteration loops.
+// The embedded DB YAML is parsed only once (sync.Once in loadDBRules).
+// dbEntries is iterated once per stage to stamp the correct ScanStage onto
+// each Rule value.
 func DefaultRules() ([]Rule, error) {
 	dbByStage, err := loadAllDBRules([]types.ScanStage{
 		types.ScanStageInput, types.ScanStageTool, types.ScanStageOutput,
@@ -416,13 +443,17 @@ func DefaultRules() ([]Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(
+	rules := slices.Concat(
 		inputInjectionRules,
 		applyDBOverrides(dbByStage[types.ScanStageInput], types.ScanStageInput),
 		ToolRules(),
 		applyDBOverrides(dbByStage[types.ScanStageTool], types.ScanStageTool),
 		applyDBOverrides(dbByStage[types.ScanStageOutput], types.ScanStageOutput),
-	), nil
+	)
+	if err := validateStageRules(rules); err != nil {
+		return nil, err
+	}
+	return rules, nil
 }
 
 // applyDBOverrides merges DB-sourced rules with Sigil-specific rules for a

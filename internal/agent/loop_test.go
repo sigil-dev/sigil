@@ -4515,6 +4515,11 @@ func TestAgentLoop_ToolScanDoubleFailure_BelowThreshold(t *testing.T) {
 	require.NotNil(t, toolMsg.Threat, "Threat must be non-nil on bypassed tool message")
 	assert.True(t, toolMsg.Threat.Bypassed, "Threat.Bypassed must be true when double-failure occurs below threshold")
 	assert.False(t, toolMsg.Threat.Detected, "Threat.Detected must be false for a bypass (not a threat detection)")
+	// sigil-7g5.798: the truncation marker must be present so the LLM knows the
+	// content was cut. Without the fix the marker was only added on the success
+	// path, leaving the LLM with silently truncated content on the double-failure path.
+	assert.Contains(t, toolMsg.Content, agent.TruncationMarker,
+		"tool message content must contain truncation marker on double-failure path")
 }
 
 // TestAgentLoop_ToolScanDoubleFailure_AtThreshold verifies that when the double-failure
@@ -6360,6 +6365,16 @@ func TestScanBlockedReason(t *testing.T) {
 			threatInfo: nil,
 			scanErr:    nil,
 			want:       "scanner_failure",
+		},
+		{
+			// sigil-7g5.802 fix: circuit_breaker_open MUST take priority over
+			// blocked_threat. If a future code path returns a non-nil ThreatInfo
+			// with Detected=true alongside CodeSecurityScannerCircuitBreakerOpen,
+			// the audit reason must be "circuit_breaker_open", not "blocked_threat".
+			name:       "Detected=true + CodeSecurityScannerCircuitBreakerOpen → circuit_breaker_open",
+			threatInfo: store.NewThreatDetected(store.ScanStageInput, []string{"rule-injection"}),
+			scanErr:    sigilerr.New(sigilerr.CodeSecurityScannerCircuitBreakerOpen, "circuit breaker open"),
+			want:       "circuit_breaker_open",
 		},
 	}
 
