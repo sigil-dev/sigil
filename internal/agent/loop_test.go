@@ -6137,6 +6137,161 @@ func TestAgentLoop_ScanContextCancellation_InputStage(t *testing.T) {
 		"error must not be CodeAgentLoopFailure — cancellation must not be swallowed by the loop")
 }
 
+func TestAgentLoop_ScanContextCancellation_OutputStage(t *testing.T) {
+	// mockOutputCancelledScanner passes input scans regardless of context state so
+	// the loop reaches the output scanning stage. Only on the output stage does it
+	// check ctx.Err() and return CodeSecurityScannerCancelled. This verifies that
+	// the output-stage cancellation path propagates the correct error code and is
+	// not confused with CodeSecurityScannerFailure or swallowed by CodeAgentLoopFailure.
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Scanner = &mockOutputCancelledScanner{}
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	// Cancel the context before ProcessMessage. The input scan passes (scanner
+	// ignores ctx on input stage) so the loop reaches the output scan, where it
+	// observes the cancelled context and returns CodeSecurityScannerCancelled.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out, err := loop.ProcessMessage(cancelCtx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerCancelled),
+		"expected CodeSecurityScannerCancelled, got %s", sigilerr.CodeOf(err))
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"error must not be CodeSecurityScannerFailure — cancellation and failure are distinct conditions")
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"error must not be CodeAgentLoopFailure — cancellation must not be swallowed by the loop")
+}
+
+func TestAgentLoop_ScanContextCancellation_ToolStage(t *testing.T) {
+	// mockToolCancelledScanner passes input scans regardless of context state so
+	// the loop reaches the tool scanning stage. Only on the tool stage does it
+	// check ctx.Err() and return CodeSecurityScannerCancelled. This verifies that
+	// the tool-stage cancellation path propagates the correct error code and is
+	// not confused with CodeSecurityScannerFailure or swallowed by CodeAgentLoopFailure.
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-cancel",
+			Name:      "get_weather",
+			Arguments: `{}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny, 22C"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = &mockToolCancelledScanner{}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeFlag}
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	// Cancel the context before ProcessMessage. The input scan passes (scanner
+	// ignores ctx on input and output stages) so the loop reaches the tool scan,
+	// where it observes the cancelled context and returns CodeSecurityScannerCancelled.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out, err := loop.ProcessMessage(cancelCtx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerCancelled),
+		"expected CodeSecurityScannerCancelled, got %s", sigilerr.CodeOf(err))
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"error must not be CodeSecurityScannerFailure — cancellation and failure are distinct conditions")
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"error must not be CodeAgentLoopFailure — cancellation must not be swallowed by the loop")
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.762 — Cancellation must not write audit entries
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ScanContextCancellation_NoAuditEntry verifies that a scanner
+// cancellation (CodeSecurityScannerCancelled) does not produce an audit entry.
+// Cancellation is infrastructure, not a security threat, so writing a
+// "scan blocked" audit record would pollute security audit logs with noise.
+func TestAgentLoop_ScanContextCancellation_NoAuditEntry(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	auditStore := newMockAuditStore()
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Scanner = &mockCancelledScanner{}
+	cfg.AuditStore = auditStore
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	// Cancel the context before ProcessMessage so the scanner sees a done context.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out, err := loop.ProcessMessage(cancelCtx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerCancelled),
+		"expected CodeSecurityScannerCancelled, got %s", sigilerr.CodeOf(err))
+
+	auditStore.mu.Lock()
+	scanBlockedEntries := 0
+	for _, e := range auditStore.entries {
+		if e.Action == "agent_loop.input_blocked" {
+			scanBlockedEntries++
+		}
+	}
+	auditStore.mu.Unlock()
+	assert.Equal(t, 0, scanBlockedEntries,
+		"cancellation must not write scan-blocked audit entries")
+}
+
 // ---------------------------------------------------------------------------
 // sigil-7g5.717 — Unit test for scanBlockedReason
 // ---------------------------------------------------------------------------
@@ -6414,4 +6569,85 @@ func TestAgentLoop_ToolScanContentTooLarge_TruncationMarkerInHistory(t *testing.
 	require.NotNil(t, toolMsg, "tool result message must be persisted in session history")
 	assert.Contains(t, toolMsg.Content, agent.TruncationMarker,
 		"stored tool result must contain TruncationMarker to inform the LLM that data was cut")
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.763 — scanOversizedToolContent: re-scan finds threat, mode=Block
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ToolScanOversized_ReScanFindsThreat_Block verifies that when:
+//  1. The primary scan returns CodeSecurityScannerContentTooLarge (content oversized),
+//  2. The re-scan of truncated content succeeds and finds a threat match, and
+//  3. The tool scanner mode is ModeBlock,
+//
+// the loop returns an error with CodeSecurityScannerToolBlocked and an error
+// message that includes truncation byte information (from the Wrapf call in
+// scanOversizedToolContent).
+func TestAgentLoop_ToolScanOversized_ReScanFindsThreat_Block(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Content must be larger than MaxToolContentScanSize so the primary scan
+	// returns CodeSecurityScannerContentTooLarge, triggering scanOversizedToolContent.
+	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-oversize-threat",
+			Name:      "large_tool",
+			Arguments: `{}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult(oversizedResult),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	sc := &mockToolOversizedThenThreatScanner{}
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = sc
+	// Tool mode is ModeBlock: a threat found in the re-scanned truncated content
+	// must block the turn with CodeSecurityScannerToolBlocked.
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "run the large tool",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+
+	require.Error(t, procErr, "oversized tool result with threat in re-scan must be blocked in ModeBlock")
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerToolBlocked),
+		"expected CodeSecurityScannerToolBlocked, got %s", sigilerr.CodeOf(procErr))
+
+	// The error message must mention truncation bytes, confirming that the Wrapf
+	// call in scanOversizedToolContent (which wraps the block error with truncation
+	// size info) is on the exercised path.
+	assert.Contains(t, procErr.Error(), "bytes",
+		"error message must contain truncation byte info from scanOversizedToolContent")
+
+	// The scanner must have been called twice on the tool stage:
+	// once with the oversized content (content_too_large) and once with truncated content (threat found).
+	sc.mu.Lock()
+	toolCallCount := sc.toolCalls
+	sc.mu.Unlock()
+	assert.Equal(t, 2, toolCallCount, "expected two tool-stage scan calls: primary oversized + re-scan")
 }

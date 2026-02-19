@@ -1124,6 +1124,37 @@ func (s *mockToolAlwaysContentTooLargeScanner) Scan(_ context.Context, content s
 		)
 }
 
+// mockToolOversizedThenThreatScanner simulates the sigil-7g5.763 path: the first
+// tool-stage Scan call returns CodeSecurityScannerContentTooLarge (content too large),
+// and the second call (re-scan of truncated content) returns a threat match. All other
+// stages pass through cleanly so ProcessMessage can reach the tool execution path.
+type mockToolOversizedThenThreatScanner struct {
+	mu        sync.Mutex
+	toolCalls int
+}
+
+func (s *mockToolOversizedThenThreatScanner) Scan(_ context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage != types.ScanStageTool {
+		return scanner.ScanResult{Content: content}, nil
+	}
+	s.mu.Lock()
+	call := s.toolCalls
+	s.toolCalls++
+	s.mu.Unlock()
+	if call == 0 {
+		// Primary scan: content is oversized — return content_too_large.
+		return scanner.ScanResult{Content: content},
+			sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge, "content exceeds maximum length")
+	}
+	// Re-scan of truncated content: return a threat match (injection pattern detected).
+	m, _ := scanner.NewMatch("injection-pattern", 0, len(content), scanner.SeverityHigh)
+	return scanner.ScanResult{
+		Threat:  true,
+		Matches: []scanner.Match{m},
+		Content: content,
+	}, nil
+}
+
 // mockCancelledScanner checks ctx.Err() and returns CodeSecurityScannerCancelled
 // when the context is already cancelled. This simulates the RegexScanner's
 // context-cancellation path so loop tests can verify error code propagation
@@ -1135,6 +1166,36 @@ func (s *mockCancelledScanner) Scan(ctx context.Context, _ string, _ scanner.Sca
 		return scanner.ScanResult{}, sigilerr.Wrap(err, sigilerr.CodeSecurityScannerCancelled, "scan cancelled")
 	}
 	return scanner.ScanResult{}, nil
+}
+
+// mockOutputCancelledScanner passes input scans cleanly and checks ctx.Err() only
+// on the output stage, returning CodeSecurityScannerCancelled when the context is
+// cancelled. This lets tests verify that output-stage cancellation propagates the
+// correct error code without the input scan firing first.
+type mockOutputCancelledScanner struct{}
+
+func (s *mockOutputCancelledScanner) Scan(ctx context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage == types.ScanStageOutput {
+		if err := ctx.Err(); err != nil {
+			return scanner.ScanResult{}, sigilerr.Wrap(err, sigilerr.CodeSecurityScannerCancelled, "scan cancelled")
+		}
+	}
+	return scanner.ScanResult{Content: content}, nil
+}
+
+// mockToolCancelledScanner passes input and output scans cleanly and checks
+// ctx.Err() only on the tool stage, returning CodeSecurityScannerCancelled when
+// the context is cancelled. This lets tests verify that tool-stage cancellation
+// propagates the correct error code without earlier stages firing first.
+type mockToolCancelledScanner struct{}
+
+func (s *mockToolCancelledScanner) Scan(ctx context.Context, content string, opts scanner.ScanContext) (scanner.ScanResult, error) {
+	if opts.Stage == types.ScanStageTool {
+		if err := ctx.Err(); err != nil {
+			return scanner.ScanResult{}, sigilerr.Wrap(err, sigilerr.CodeSecurityScannerCancelled, "scan cancelled")
+		}
+	}
+	return scanner.ScanResult{Content: content}, nil
 }
 
 // mockInputContentTooLargeScanner returns CodeSecurityScannerContentTooLarge on the

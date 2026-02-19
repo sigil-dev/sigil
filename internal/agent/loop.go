@@ -271,9 +271,9 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	}
 
 	// Step 6: RESPOND — build outbound message, persist assistant message.
-	out, outputThreat, err := l.respond(ctx, msg.SessionID, text, usage)
+	out, outputThreat, err := l.respond(ctx, msg.SessionID, msg.WorkspaceID, text, usage)
 	if err != nil {
-		if strings.HasPrefix(string(sigilerr.CodeOf(err)), "security.scanner.") {
+		if sigilerr.IsScannerCode(err) {
 			slog.ErrorContext(ctx, "output scan rejected LLM response",
 				slog.String("session_id", msg.SessionID),
 				slog.String("workspace_id", msg.WorkspaceID),
@@ -396,11 +396,24 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 				slog.String("workspace_id", msg.WorkspaceID),
 			)
 		}
-		l.auditScanBlocked(ctx, msg, inputThreat, auditReason,
-			"agent_loop.input_blocked",
-			map[string]any{"content_length": len(msg.Content)},
-			"audit store append failed for input_blocked")
+		// Skip audit for context cancellation: cancellation is infrastructure,
+		// not a security threat, and should not pollute audit logs.
+		if !sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerCancelled) {
+			l.auditScanBlocked(ctx, msg, inputThreat, auditReason,
+				"agent_loop.input_blocked",
+				map[string]any{"content_length": len(msg.Content)},
+				"audit store append failed for input_blocked")
+		}
 		return nil, nil, scanErr
+	}
+	if inputThreat != nil && inputThreat.Detected && l.scannerModes.Input != types.ScannerModeFlag {
+		slog.WarnContext(ctx, "scan detected threat, continuing",
+			slog.String("stage", string(types.ScanStageInput)),
+			slog.String("mode", string(l.scannerModes.Input)),
+			slog.String("session_id", msg.SessionID),
+			slog.String("workspace_id", msg.WorkspaceID),
+			slog.Int("match_count", len(inputThreat.Rules)),
+		)
 	}
 	// Log a SHA-256 hash of the original content at DEBUG level for forensic
 	// traceability before replacing it with the normalized form. This allows
@@ -541,7 +554,7 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 			// as a circuit breaker, re-enabling the provider after the
 			// cooldown period for recovery.
 			l.recordProviderFailure(prov)
-			lastErr = sigilerr.Wrap(err, sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("chat call to %s", prov.Name()), sigilerr.FieldProvider(prov.Name()))
+			lastErr = sigilerr.With(sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "chat call to %s", prov.Name()), sigilerr.FieldProvider(prov.Name()))
 			providerFailures = append(providerFailures, fmt.Sprintf("%s: %s", prov.Name(), err.Error()))
 			continue
 		}
@@ -554,14 +567,14 @@ func (l *Loop) callLLM(ctx context.Context, workspaceID string, session *store.S
 		firstEvent, ok := <-eventCh
 		if !ok {
 			l.recordProviderFailure(prov)
-			lastErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("provider %s: stream closed without events", prov.Name()), sigilerr.FieldProvider(prov.Name()))
+			lastErr = sigilerr.With(sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: stream closed without events", prov.Name()), sigilerr.FieldProvider(prov.Name()))
 			providerFailures = append(providerFailures, fmt.Sprintf("%s: stream closed without events", prov.Name()))
 			continue
 		}
 
 		if firstEvent.Type == provider.EventTypeError {
 			l.recordProviderFailure(prov)
-			lastErr = sigilerr.New(sigilerr.CodeProviderUpstreamFailure, fmt.Sprintf("provider %s: %s", prov.Name(), firstEvent.Error), sigilerr.FieldProvider(prov.Name()))
+			lastErr = sigilerr.With(sigilerr.Errorf(sigilerr.CodeProviderUpstreamFailure, "provider %s: %s", prov.Name(), firstEvent.Error), sigilerr.FieldProvider(prov.Name()))
 			providerFailures = append(providerFailures, fmt.Sprintf("%s: %s", prov.Name(), firstEvent.Error))
 			l.drainEventChannel(eventCh)
 			continue
@@ -713,6 +726,15 @@ func (l *Loop) runToolLoop(
 				"audit store append failed for output_blocked")
 				return "", nil, scanErr
 			}
+			if intermediateThreat != nil && intermediateThreat.Detected && l.scannerModes.Output != types.ScannerModeFlag {
+				slog.WarnContext(ctx, "scan detected threat, continuing",
+					slog.String("stage", string(types.ScanStageOutput)),
+					slog.String("mode", string(l.scannerModes.Output)),
+					slog.String("session_id", msg.SessionID),
+					slog.String("workspace_id", msg.WorkspaceID),
+					slog.Int("match_count", len(intermediateThreat.Rules)),
+				)
+			}
 			text = scannedText
 
 			assistantMsg := &store.Message{
@@ -778,6 +800,15 @@ func (l *Loop) runToolLoop(
 			if scanErr != nil {
 				return "", nil, scanErr
 			}
+			if toolThreat != nil && toolThreat.Detected && l.scannerModes.Tool != types.ScannerModeFlag {
+				slog.WarnContext(ctx, "scan detected threat, continuing",
+					slog.String("stage", string(types.ScanStageTool)),
+					slog.String("mode", string(l.scannerModes.Tool)),
+					slog.String("session_id", msg.SessionID),
+					slog.String("workspace_id", msg.WorkspaceID),
+					slog.Int("match_count", len(toolThreat.Rules)),
+				)
+			}
 			resultContent = scannedResult
 
 			// Persist tool result message (using scanned content).
@@ -837,14 +868,23 @@ func (l *Loop) runToolLoop(
 	)
 }
 
-func (l *Loop) respond(ctx context.Context, sessionID, text string, usage *provider.Usage) (*OutboundMessage, *store.ThreatInfo, error) {
+func (l *Loop) respond(ctx context.Context, sessionID, workspaceID, text string, usage *provider.Usage) (*OutboundMessage, *store.ThreatInfo, error) {
 	// Output scanning — filter secrets before persisting/returning.
 	scanned, outputThreat, scanErr := l.scanContent(ctx, text,
 		types.ScanStageOutput, types.OriginSystem, l.scannerModes.Output, nil,
-		sessionID, "",
+		sessionID, workspaceID,
 	)
 	if scanErr != nil {
 		return nil, outputThreat, scanErr
+	}
+	if outputThreat != nil && outputThreat.Detected && l.scannerModes.Output != types.ScannerModeFlag {
+		slog.WarnContext(ctx, "scan detected threat, continuing",
+			slog.String("stage", string(types.ScanStageOutput)),
+			slog.String("mode", string(l.scannerModes.Output)),
+			slog.String("session_id", sessionID),
+			slog.String("workspace_id", workspaceID),
+			slog.Int("match_count", len(outputThreat.Rules)),
+		)
 	}
 	text = scanned
 
@@ -1221,11 +1261,11 @@ func (l *Loop) scanOversizedToolContent(ctx context.Context, content string, sta
 	// Log a warning and fall through to the best-effort normalize-and-return
 	// path without incrementing scannerFailCount.
 	if sigilerr.HasCode(reScanErr, sigilerr.CodeSecurityScannerContentTooLarge) {
-		log.LogAttrs(ctx, slog.LevelWarn, "truncated tool result still exceeds scanner limit, passing normalized content unscanned",
+		log.LogAttrs(ctx, slog.LevelError, "truncated tool result still exceeds scanner limit, passing normalized content unscanned",
 			slog.Int("original_size", len(content)),
 			slog.Int("truncated_size", len(truncated)),
 			slog.Any("stage", stage),
-			slog.Any("error_code", sigilerr.CodeSecurityScannerContentTooLarge),
+			slog.String("error_code", string(sigilerr.CodeSecurityScannerContentTooLarge)),
 		)
 		return scanner.Normalize(truncated), store.NewBypassedScan(store.ScanStageTool), nil
 	}

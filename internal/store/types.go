@@ -135,10 +135,8 @@ type Message struct {
 	ToolCallID string
 	ToolName   string
 	// Origin records the source of the message for audit purposes.
-	// Values: "user_input", "system", "tool_output" (mirrors pkg/types.Origin).
-	// Stored as a plain string to avoid coupling store to provider or types packages.
-	// Valid values are defined by the store package constants OriginUserInput,
-	// OriginSystem, OriginToolOutput (see types_validation.go).
+	// Stored as a plain string; valid values are pkg/types.OriginUserInput,
+	// pkg/types.OriginSystem, and pkg/types.OriginToolOutput.
 	//
 	// Added in PR #17. Custom MessageStore implementations MUST populate this
 	// field to preserve security audit trail integrity. An empty string is

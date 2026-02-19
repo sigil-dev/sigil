@@ -5,6 +5,7 @@ package store
 
 import (
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 )
 
 // Valid reports whether the status is a known session lifecycle state.
@@ -144,13 +145,6 @@ func (t ThreatInfo) Validate() error {
 	return nil
 }
 
-// Valid origin values (mirrors pkg/types.Origin to avoid import cycle).
-const (
-	OriginUserInput  = "user_input"
-	OriginSystem     = "system"
-	OriginToolOutput = "tool_output"
-)
-
 // Validate checks that the Message has all required fields set correctly.
 func (m Message) Validate() error {
 	if m.ID == "" {
@@ -170,13 +164,8 @@ func (m Message) Validate() error {
 		return sigilerr.New(sigilerr.CodeStoreInvalidInput, "message: ToolCallID and ToolName must both be set or both be empty")
 	}
 	// Origin is optional for backward compatibility, but if set must be a known value.
-	if m.Origin != "" {
-		switch m.Origin {
-		case OriginUserInput, OriginSystem, OriginToolOutput:
-			// valid
-		default:
-			return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "message: invalid origin %q", m.Origin)
-		}
+	if m.Origin != "" && !types.Origin(m.Origin).Valid() {
+		return sigilerr.Errorf(sigilerr.CodeStoreInvalidInput, "message: invalid origin %q", m.Origin)
 	}
 	return nil
 }

@@ -208,7 +208,9 @@ func LoadWithSecrets(path string, store secrets.Store) (*Config, error) {
 	if store == nil {
 		store = secrets.NewKeyringStore()
 	}
-	secrets.ResolveViperSecrets(v, store)
+	if err := secrets.ResolveViperSecrets(v, store); err != nil {
+		return nil, err
+	}
 
 	return FromViper(v)
 }

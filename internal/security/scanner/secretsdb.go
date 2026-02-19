@@ -152,25 +152,14 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 }
 
 // loadAllDBRules returns compiled high-confidence rules for all three scan
-// stages in a single pass over dbEntries. This avoids the three separate
-// iterations that would result from calling loadDBRules once per stage.
-// The embedded YAML is still parsed only once via the shared sync.Once.
+// stages. It delegates to loadDBRules for each stage so that the sync.Once
+// parse is triggered exactly once and each stage's rules are returned cleanly.
 func loadAllDBRules(stages []types.ScanStage) (map[types.ScanStage][]Rule, error) {
-	// Trigger the sync.Once parse.
-	if _, err := loadDBRules(stages[0]); err != nil {
-		return nil, err
-	}
-
 	result := make(map[types.ScanStage][]Rule, len(stages))
 	for _, stage := range stages {
-		rules := make([]Rule, 0, len(dbEntries))
-		for _, e := range dbEntries {
-			r, err := NewRule(e.name, e.pattern, stage, SeverityHigh)
-			if err != nil {
-				return nil, sigilerr.Wrapf(err, sigilerr.CodeSecurityScannerFailure,
-					"creating rule %q for stage %s", e.name, stage)
-			}
-			rules = append(rules, r)
+		rules, err := loadDBRules(stage)
+		if err != nil {
+			return nil, err
 		}
 		result[stage] = rules
 	}

@@ -26,10 +26,11 @@ const (
 	CodeStoreConflict               Code = "store.conflict"
 	CodeStoreInvalidInput           Code = "store.invalid_input"
 
-	CodeConfigLoadReadFailure      Code = "config.load.read.failure"
-	CodeConfigParseInvalidFormat   Code = "config.parse.invalid_format"
-	CodeConfigValidateInvalidValue Code = "config.validate.invalid_value"
-	CodeConfigAlreadyExists        Code = "config.already_exists"
+	CodeConfigLoadReadFailure           Code = "config.load.read.failure"
+	CodeConfigParseInvalidFormat        Code = "config.parse.invalid_format"
+	CodeConfigValidateInvalidValue      Code = "config.validate.invalid_value"
+	CodeConfigAlreadyExists             Code = "config.already_exists"
+	CodeConfigKeyringResolutionFailure  Code = "config.keyring.resolution.failure"
 
 	CodePluginManifestValidateInvalid    Code = "plugin.manifest.validate.invalid"
 	CodePluginCapabilityDenied           Code = "plugin.capability.denied"
@@ -224,6 +225,17 @@ func HasCode(err error, code Code) bool {
 		return false
 	}
 	return CodeOf(err) == code
+}
+
+// IsScannerCode reports whether the error's code is any security.scanner.* code.
+func IsScannerCode(err error) bool {
+	return HasCode(err, CodeSecurityScannerInputBlocked) ||
+		HasCode(err, CodeSecurityScannerOutputBlocked) ||
+		HasCode(err, CodeSecurityScannerToolBlocked) ||
+		HasCode(err, CodeSecurityScannerContentTooLarge) ||
+		HasCode(err, CodeSecurityScannerFailure) ||
+		HasCode(err, CodeSecurityScannerCancelled) ||
+		HasCode(err, CodeSecurityScannerCircuitBreakerOpen)
 }
 
 func IsNotFound(err error) bool {

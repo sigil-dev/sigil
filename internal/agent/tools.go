@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -202,18 +201,14 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*Too
 	if err != nil {
 		// Wrap context deadline exceeded as a tool timeout error.
 		if execCtx.Err() == context.DeadlineExceeded {
-			return nil, sigilerr.Wrap(
-				err,
-				sigilerr.CodeAgentToolTimeout,
-				fmt.Sprintf("tool %q execution timeout", req.ToolName),
+			return nil, sigilerr.With(
+				sigilerr.Wrapf(err, sigilerr.CodeAgentToolTimeout, "tool %q execution timeout", req.ToolName),
 				sigilerr.FieldPlugin(req.PluginName),
 				sigilerr.FieldSessionID(req.SessionID),
 			)
 		}
-		return nil, sigilerr.Wrap(
-			err,
-			sigilerr.CodePluginRuntimeCallFailure,
-			fmt.Sprintf("executing tool %q via plugin %q", req.ToolName, req.PluginName),
+		return nil, sigilerr.With(
+			sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "executing tool %q via plugin %q", req.ToolName, req.PluginName),
 			sigilerr.FieldPlugin(req.PluginName),
 			sigilerr.FieldSessionID(req.SessionID),
 		)
@@ -246,9 +241,8 @@ func (d *ToolDispatcher) ExecuteForTurn(ctx context.Context, req ToolCallRequest
 
 	count := tb.count.Add(1)
 	if int(count) > maxCalls {
-		return nil, sigilerr.New(
-			sigilerr.CodeAgentToolBudgetExceeded,
-			fmt.Sprintf("tool call budget exceeded: %d/%d calls used", count, maxCalls),
+		return nil, sigilerr.With(
+			sigilerr.Errorf(sigilerr.CodeAgentToolBudgetExceeded, "tool call budget exceeded: %d/%d calls used", count, maxCalls),
 			sigilerr.FieldSessionID(req.SessionID),
 			sigilerr.FieldWorkspaceID(req.WorkspaceID),
 		)
