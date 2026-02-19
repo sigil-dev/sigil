@@ -5,6 +5,7 @@ package config
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"sort"
@@ -418,6 +419,14 @@ func (c *Config) ValidateSecurity() []error {
 		}
 	}
 
+	// Warn when allow_permissive_input_mode is set but input mode is block (or
+	// empty, which defaults to block), because the flag has no effect in that
+	// case and the operator may have intended a different input mode.
+	if c.Security.Scanner.AllowPermissiveInputMode &&
+		(c.Security.Scanner.Input == "" || c.Security.Scanner.Input == types.ScannerModeBlock) {
+		slog.Warn("security.scanner.allow_permissive_input_mode is set but input mode is 'block' (default); the flag has no effect")
+	}
+
 	// Require explicit opt-in to use non-block modes for input scanning.
 	// Only check permissive-mode policy when the input mode is valid; invalid
 	// modes already produce an error above and would otherwise generate a
@@ -452,19 +461,29 @@ func (c *Config) ValidateSecurity() []error {
 	blockedScannerEnvVars := []struct {
 		envVar string
 		field  string
+		// boolBlockOnTrue means this is a boolean "allow/disable" flag: only
+		// block when the value is "true" (case-insensitive). Setting the var to
+		// "false" is the secure default and must not trigger a startup error.
+		// When false (the default), any non-empty value is blocked.
+		boolBlockOnTrue bool
 	}{
-		{"SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE", "security.scanner.allow_permissive_input_mode"},
-		{"SIGIL_SECURITY_SCANNER_INPUT", "security.scanner.input"},
-		{"SIGIL_SECURITY_SCANNER_TOOL", "security.scanner.tool"},
-		{"SIGIL_SECURITY_SCANNER_OUTPUT", "security.scanner.output"},
-		{"SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING", "security.scanner.disable_origin_tagging"},
+		{"SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE", "security.scanner.allow_permissive_input_mode", true},
+		{"SIGIL_SECURITY_SCANNER_INPUT", "security.scanner.input", false},
+		{"SIGIL_SECURITY_SCANNER_TOOL", "security.scanner.tool", false},
+		{"SIGIL_SECURITY_SCANNER_OUTPUT", "security.scanner.output", false},
+		{"SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING", "security.scanner.disable_origin_tagging", true},
 	}
 	for _, blocked := range blockedScannerEnvVars {
-		if val := os.Getenv(blocked.envVar); val != "" {
-			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-				"config: %s cannot be set via environment variable (env var %s=%q is set; unset it and use the config file instead)",
-				blocked.field, blocked.envVar, val))
+		val := os.Getenv(blocked.envVar)
+		if val == "" {
+			continue
 		}
+		if blocked.boolBlockOnTrue && !strings.EqualFold(val, "true") {
+			continue
+		}
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: %s cannot be set via environment variable (env var %s=%q is set; unset it and use the config file instead)",
+			blocked.field, blocked.envVar, val))
 	}
 
 	return errs

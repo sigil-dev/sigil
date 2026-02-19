@@ -54,10 +54,14 @@ var sigilPatterns = []sigilRuleSpec{
 		severity: SeverityHigh,
 	},
 	{
-		// openai_legacy_key: matches sk-[40+ chars]. Intentionally broad —
-		// defense-in-depth at SeverityMedium.
+		// openai_legacy_key: matches sk-[48+ chars]. Minimum length is 48 so that
+		// legacy keys (sk- + 48 alphanum = 51 chars total) are still caught, while
+		// modern project keys (sk-proj-... adds 5 chars over sk-, shifting total
+		// well beyond 51 chars) continue to match only openai_api_key above.
+		// Go RE2 has no lookaheads, so length discrimination prevents
+		// double-matches in audit logs.
 		name:     "openai_legacy_key",
-		pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{40,}`),
+		pattern:  regexp.MustCompile(`sk-[A-Za-z0-9]{48,}`),
 		severity: SeverityMedium,
 	},
 	{

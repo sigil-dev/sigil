@@ -110,10 +110,30 @@ security:
     input: block
 
     # Tool output scanning mode. Default: flag
-    # Controls how tool output containing detected sensitive content is handled.
-    # - block: Plugin tool is rejected if output contains detected secrets
-    # - flag:  Plugin tool output is allowed but marked for review (default)
-    # - redact: Detected sensitive patterns are stripped from tool output
+    # Controls how tool results containing injection patterns are handled before
+    # being passed to the LLM.
+    #
+    # Mode behavior:
+    # - flag  : Detected injection patterns are logged as warnings but the tool
+    #           result is still passed to the LLM unchanged. This is the default
+    #           because it prioritizes availability — tools continue to function
+    #           even when scanner heuristics fire on benign content. Use this
+    #           when tool sources are trusted or false-positive rate is high.
+    # - block : Tool results that contain detected injection patterns are rejected
+    #           outright; the agent receives an error instead of the tainted
+    #           content. Recommended for production deployments where tool sources
+    #           are untrusted (e.g., web-fetch, external APIs, user-supplied URLs).
+    #           This is the hardened setting that prevents prompt-injection via
+    #           malicious tool output from reaching the LLM context.
+    # - redact: Detected sensitive patterns are stripped from tool output before
+    #           it is passed to the LLM. Preserves partial tool results at the
+    #           cost of potentially incomplete context.
+    #
+    # Production guidance:
+    #   If your deployment processes tool results from untrusted sources, set
+    #   this to 'block'. The 'flag' default is intentionally availability-first
+    #   to avoid breaking workflows during initial rollout; it is NOT suitable
+    #   as a long-term security posture when tool sources are not fully trusted.
     tool: flag
 
     # Assistant output scanning mode. Default: redact

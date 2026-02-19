@@ -810,6 +810,21 @@ func (l *Loop) runToolLoop(
 				resultContent = result.Content
 			}
 
+			// Pre-scanner truncation: cap tool result content to the scanner's own
+			// maxContentLength before the primary scan call. This prevents legitimate
+			// large-but-oversized tool responses (e.g. web fetches) from triggering
+			// the ContentTooLarge path and incrementing the circuit-breaker counter,
+			// which would otherwise cause a per-turn DoS (sigil-7g5.947).
+			if len(resultContent) > maxToolResultScanSize {
+				slog.DebugContext(ctx, "tool result truncated before scan",
+					slog.String("session_id", msg.SessionID),
+					slog.String("tool_name", tc.Name),
+					slog.Int("original_len", len(resultContent)),
+					slog.Int("truncated_to", maxToolResultScanSize),
+				)
+				resultContent = resultContent[:maxToolResultScanSize]
+			}
+
 			// Tool result scanning — check for instruction injection before persisting.
 			scannedResult, toolThreat, scanErr := l.scanContent(ctx, resultContent, scanRequest{
 				stage:            types.ScanStageTool,
@@ -1081,14 +1096,18 @@ func (l *Loop) auditToolScan(ctx context.Context, msg InboundMessage, toolCallID
 		details["scan_error"] = scanErr.Error()
 		details["error_code"] = string(sigilerr.CodeOf(scanErr))
 	} else if scanErr != nil {
-		// Content was not blocked — it was passed through unscanned (bypassed).
-		// Distinguish circuit-breaker trips from ordinary bypasses so audit consumers
-		// can identify when the scanner is degraded rather than just busy.
 		details["stage"] = string(threatInfo.Stage)
+		isBlockErr := sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerToolBlocked) ||
+			sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerInputBlocked) ||
+			sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerOutputBlocked)
 		if threatInfo.Bypassed {
+			// Scanner failed; content was passed through unscanned (bypass path).
+			// Distinguish circuit-breaker trips from ordinary bypasses for audit consumers.
 			action = "agent_loop.tool_scan_bypassed"
 			details["bypassed"] = true
-		} else {
+		} else if isBlockErr {
+			// Block mode: applyScannedResult detected a threat and returned a block error
+			// with Bypassed=false. This is the legitimate block path — emit threat audit.
 			action = "agent_loop.tool_scan_threat"
 			details["threat_detected"] = true
 			details["threat_rules"] = threatInfo.Rules
@@ -1098,10 +1117,19 @@ func (l *Loop) auditToolScan(ctx context.Context, msg InboundMessage, toolCallID
 			if threatInfo.HighestSeverity != "" {
 				details["highest_severity"] = threatInfo.HighestSeverity
 			}
-		}
-		if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen) {
-			result = "circuit_breaker_open"
 		} else {
+			// Defensive: should be unreachable — handleToolScanFailure always sets
+			// Bypassed=true, and block errors are handled above. Record as scan_error
+			// to avoid emitting misleading threat_detected=true on a scanner failure.
+			action = "agent_loop.tool_scan_error"
+			details["scan_error_unreachable_branch"] = true
+		}
+		switch {
+		case sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen):
+			result = "circuit_breaker_open"
+		case isBlockErr:
+			result = "blocked"
+		default:
 			result = "bypassed"
 		}
 		details["scan_error"] = scanErr.Error()
@@ -1191,6 +1219,15 @@ func (r scanRequest) scanContext() scanner.ScanContext {
 		"workspace_id": r.workspaceID,
 	})
 }
+
+// maxToolResultScanSize is the pre-scanner truncation limit for tool results. Tool
+// results are truncated to this size before the primary scan call so that the scanner
+// never returns CodeSecurityScannerContentTooLarge on the first scan. Without this
+// truncation, a legitimate tool response (e.g. a large web page fetch) can trip the
+// circuit breaker by exhausting scannerCircuitBreakerThreshold via the ContentTooLarge
+// path — a per-turn DoS (sigil-7g5.947). This limit matches the scanner's own
+// maxContentLength (1MB); content already within that limit passes through unmodified.
+const maxToolResultScanSize = 1 << 20 // 1MB — matches scanner's maxContentLength
 
 // maxToolContentScanSize is the truncation limit applied to oversized tool results
 // before re-scanning. A malicious tool could return content larger than the scanner's
@@ -1432,6 +1469,10 @@ func collectMatchRules(ctx context.Context, log *slog.Logger, stage types.ScanSt
 		if highestSeverity == "" || m.Severity.Rank() > highestSeverity.Rank() {
 			highestSeverity = m.Severity
 		}
+		// WARNING: Debug-level logging here includes individual rule names and severities.
+		// Do NOT enable debug logging in production environments where untrusted input
+		// reaches the scanner — rule match details could confirm to a log-monitoring
+		// attacker which secret patterns matched their injected content.
 		log.LogAttrs(ctx, slog.LevelDebug, "security scan match detail",
 			slog.String("rule", m.Rule),
 			slog.Any("severity", m.Severity),
@@ -1454,6 +1495,10 @@ func logThreatDetection(ctx context.Context, log *slog.Logger, mode types.Scanne
 		if highestSeverity.Rank() >= scanner.SeverityHigh.Rank() {
 			level = slog.LevelError
 		}
+		// WARNING: content_hash is a SHA-256 prefix of the scanned content. For short,
+		// predictable secrets an attacker could precompute hashes to confirm a match.
+		// Do NOT enable this log path in production with untrusted input unless the
+		// hash length (contentHashPrefix) is sufficient to prevent precomputation.
 		log.LogAttrs(ctx, level, "scanner flag mode: threats detected in content",
 			slog.Int("match_count", len(scanResult.Matches)),
 			slog.String("highest_severity", string(highestSeverity)),

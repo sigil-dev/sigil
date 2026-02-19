@@ -4,6 +4,7 @@
 package scanner
 
 import (
+	"cmp"
 	"context"
 	"html"
 	"log/slog"
@@ -183,6 +184,12 @@ func NewRule(name string, pattern *regexp.Regexp, stage types.ScanStage, severit
 // DefaultMaxContentLength is the default maximum content size accepted by RegexScanner (1MB).
 const DefaultMaxContentLength = 1 << 20 // 1MB
 
+// maxPreNormContentLength is the hard cap applied BEFORE normalization to prevent
+// CPU-bound DoS via large inputs to Normalize() (which runs up to 10 passes of
+// html.UnescapeString + NFKC). 5MB is chosen as a safe upper bound that is large
+// enough for any legitimate message but prevents runaway CPU on crafted payloads.
+const maxPreNormContentLength = 5 * 1024 * 1024 // 5MB
+
 // RegexScanner implements Scanner using compiled regexes.
 type RegexScanner struct {
 	rules            []Rule
@@ -293,6 +300,19 @@ func (s *RegexScanner) Scan(ctx context.Context, content string, opts ScanContex
 	// Metadata was already deep-copied by NewScanContext; no additional copy needed.
 	// Callers constructing ScanContext directly accept ownership of the map.
 
+	// Pre-normalization size guard: Normalize() runs up to 10 iterations of
+	// html.UnescapeString() plus NFKC normalization. Without this check an
+	// authenticated caller can POST 50MB of HTML entities and consume unbounded
+	// CPU before the post-normalization 1MB check fires.
+	if len(content) > maxPreNormContentLength {
+		return ScanResult{}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+			"content exceeds pre-normalization size limit",
+			sigilerr.Field("length", len(content)),
+			sigilerr.Field("max_length", maxPreNormContentLength),
+			sigilerr.Field("stage", string(opts.Stage)),
+		)
+	}
+
 	content = Normalize(content)
 
 	if len(content) > s.maxContentLength {
@@ -375,6 +395,26 @@ var toolStaticRules = []Rule{
 		types.ScanStageTool, SeverityHigh),
 	mustNewRule("role_impersonation_close",
 		regexp.MustCompile(`(?i)\[/INST\]`),
+		types.ScanStageTool, SeverityHigh),
+	// The following five rules mirror inputInjectionRules but apply at ScanStageTool
+	// so that prompt-injection attacks embedded in tool results are also detected.
+	// Allow up to 3 optional words between the verb and the target noun phrase.
+	mustNewRule("instruction_override",
+		regexp.MustCompile(`(?i)(ignore|disregard|override|forget|do\s+not\s+follow)(\s+\w+){0,3}\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)`),
+		types.ScanStageTool, SeverityHigh),
+	mustNewRule("role_confusion",
+		regexp.MustCompile(`(?i)you\s+are\s+now\s+\w+[,.]?\s*(do|ignore|forget|disregard)`),
+		types.ScanStageTool, SeverityHigh),
+	mustNewRule("delimiter_abuse",
+		regexp.MustCompile("(?i)```system\\b"),
+		types.ScanStageTool, SeverityMedium),
+	// new_task_injection: 'new task' and 'from now on' require attack-intent
+	// keywords in proximity to avoid false positives on benign tool outputs.
+	mustNewRule("new_task_injection",
+		regexp.MustCompile(`(?i)((?:new\s+task|from\s+now\s+on)\s*[,:;.!]?\s*(?:ignore|disregard|forget|override|bypass|do\s+not\s+follow|stop\s+following)|pretend\s+(?:the\s+)?(?:above|previous)\s+(?:rules?|instructions?|guidelines?)\s+(?:do\s+not|don'?t)\s+exist)`),
+		types.ScanStageTool, SeverityMedium),
+	mustNewRule("system_block_injection",
+		regexp.MustCompile(`(?i)(?:<\|?system\|?>|\[system\]|<<SYS>>)`),
 		types.ScanStageTool, SeverityHigh),
 }
 
@@ -553,7 +593,7 @@ func redact(content string, matches []Match) string {
 		return content
 	}
 
-	slices.SortFunc(valid, func(a, b Match) int { return a.location - b.location })
+	slices.SortFunc(valid, func(a, b Match) int { return cmp.Compare(a.location, b.location) })
 
 	// Merge overlapping ranges.
 	type span struct{ start, end int }
