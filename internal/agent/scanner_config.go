@@ -26,33 +26,27 @@ var DefaultScannerModes = ScannerModes{
 // tagging is enabled; true means tagging is disabled. Both the config struct and
 // ScannerModes use the same "disable" polarity so no inversion is needed.
 func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
+	parseModeOrDefault := func(raw types.ScannerMode, def types.ScannerMode, field string) (types.ScannerMode, error) {
+		if raw == "" {
+			return def, nil
+		}
+		m, err := types.ParseScannerMode(string(raw))
+		if err != nil {
+			return "", sigilerr.Wrapf(err, sigilerr.CodeConfigValidateInvalidValue, "scanner %s mode", field)
+		}
+		return m, nil
+	}
+
 	var modes ScannerModes
-	if cfg.Input != "" {
-		m, err := types.ParseScannerMode(string(cfg.Input))
-		if err != nil {
-			return ScannerModes{}, sigilerr.Wrapf(err, sigilerr.CodeConfigValidateInvalidValue, "scanner input mode")
-		}
-		modes.Input = m
-	} else {
-		modes.Input = DefaultScannerModes.Input
+	var err error
+	if modes.Input, err = parseModeOrDefault(cfg.Input, DefaultScannerModes.Input, "input"); err != nil {
+		return ScannerModes{}, err
 	}
-	if cfg.Tool != "" {
-		m, err := types.ParseScannerMode(string(cfg.Tool))
-		if err != nil {
-			return ScannerModes{}, sigilerr.Wrapf(err, sigilerr.CodeConfigValidateInvalidValue, "scanner tool mode")
-		}
-		modes.Tool = m
-	} else {
-		modes.Tool = DefaultScannerModes.Tool
+	if modes.Tool, err = parseModeOrDefault(cfg.Tool, DefaultScannerModes.Tool, "tool"); err != nil {
+		return ScannerModes{}, err
 	}
-	if cfg.Output != "" {
-		m, err := types.ParseScannerMode(string(cfg.Output))
-		if err != nil {
-			return ScannerModes{}, sigilerr.Wrapf(err, sigilerr.CodeConfigValidateInvalidValue, "scanner output mode")
-		}
-		modes.Output = m
-	} else {
-		modes.Output = DefaultScannerModes.Output
+	if modes.Output, err = parseModeOrDefault(cfg.Output, DefaultScannerModes.Output, "output"); err != nil {
+		return ScannerModes{}, err
 	}
 	modes.DisableOriginTagging = cfg.DisableOriginTagging
 	if err := modes.Validate(); err != nil {

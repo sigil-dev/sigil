@@ -3,8 +3,6 @@
 
 package agent
 
-import "github.com/sigil-dev/sigil/internal/security/scanner"
-
 // SanitizeToolError exposes sanitizeToolError for white-box testing.
 // The method receiver is a zero-value Loop which is sufficient for the
 // sanitisation logic (no fields accessed).
@@ -25,8 +23,3 @@ var ScanBlockedReason = scanBlockedReason
 // ExportBuildBlockedAuditEntry exposes buildBlockedAuditEntry for white-box testing.
 var ExportBuildBlockedAuditEntry = buildBlockedAuditEntry
 
-// ExportSeverityRank exposes severityRank for white-box testing.
-var ExportSeverityRank = severityRank
-
-// SeverityRankFunc type alias for test usage.
-type SeverityRankFunc = func(scanner.Severity) int

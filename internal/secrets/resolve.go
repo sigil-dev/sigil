@@ -74,7 +74,7 @@ func ResolveViperSecrets(v *viper.Viper, store Store) error {
 
 		resolved, err := ResolveKeyringURI(store, val)
 		if err != nil {
-			errs = append(errs, "config key "+key+" still contains unresolved keyring URI: "+val)
+			errs = append(errs, "config key "+key+": "+err.Error())
 			continue
 		}
 

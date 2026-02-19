@@ -35,6 +35,21 @@ func (s Severity) Valid() bool {
 	}
 }
 
+// Rank returns a numeric rank for the severity so that severities can be
+// compared ordinally (higher rank = more severe).
+func (s Severity) Rank() int {
+	switch s {
+	case SeverityHigh:
+		return 3
+	case SeverityMedium:
+		return 2
+	case SeverityLow:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // ScanContext provides context for the scan.
 type ScanContext struct {
 	Stage types.ScanStage
@@ -395,25 +410,19 @@ func ToolRules() []Rule {
 // uses loadAllDBRules to stamp all three stages in a single pass over the
 // cached DB entries, avoiding three separate iteration loops.
 func DefaultRules() ([]Rule, error) {
-	allStages := []types.ScanStage{
-		types.ScanStageInput,
-		types.ScanStageTool,
-		types.ScanStageOutput,
-	}
-	dbByStage, err := loadAllDBRules(allStages)
+	dbByStage, err := loadAllDBRules([]types.ScanStage{
+		types.ScanStageInput, types.ScanStageTool, types.ScanStageOutput,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	applyOverrides := func(stage types.ScanStage) []Rule {
-		return applyDBOverrides(dbByStage[stage], stage)
-	}
-
-	inputSecrets := applyOverrides(types.ScanStageInput)
-	toolSecrets := applyOverrides(types.ScanStageTool)
-	outputSecrets := applyOverrides(types.ScanStageOutput)
-
-	return slices.Concat(inputInjectionRules, inputSecrets, ToolRules(), toolSecrets, outputSecrets), nil
+	return slices.Concat(
+		inputInjectionRules,
+		applyDBOverrides(dbByStage[types.ScanStageInput], types.ScanStageInput),
+		ToolRules(),
+		applyDBOverrides(dbByStage[types.ScanStageTool], types.ScanStageTool),
+		applyDBOverrides(dbByStage[types.ScanStageOutput], types.ScanStageOutput),
+	), nil
 }
 
 // applyDBOverrides merges DB-sourced rules with Sigil-specific rules for a
@@ -421,16 +430,9 @@ func DefaultRules() ([]Rule, error) {
 // collides with a Sigil rule is excluded.
 func applyDBOverrides(db []Rule, stage types.ScanStage) []Rule {
 	sigil := sigilSpecificRules(stage)
-	sigilNames := make(map[string]struct{}, len(sigil))
-	for _, r := range sigil {
-		sigilNames[r.name] = struct{}{}
-	}
-	filtered := make([]Rule, 0, len(db))
-	for _, r := range db {
-		if _, ok := sigilNames[r.name]; !ok {
-			filtered = append(filtered, r)
-		}
-	}
+	filtered := slices.DeleteFunc(slices.Clone(db), func(r Rule) bool {
+		return slices.ContainsFunc(sigil, func(s Rule) bool { return s.name == r.name })
+	})
 	return append(filtered, sigil...)
 }
 
