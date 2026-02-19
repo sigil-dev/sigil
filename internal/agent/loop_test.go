@@ -6,6 +6,7 @@ package agent_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -1983,6 +1984,12 @@ func TestAgentLoop_AuditStoreConsecutiveFailures(t *testing.T) {
 // This corresponds to finding sigil-7g5.345 (separate counters for audit()
 // and security-scan paths).
 func TestAgentLoop_AuditBlockedInputConsecutiveFailures(t *testing.T) {
+	// Capture slog output so we can assert the escalation from Warn to Error.
+	logHandler := &testLogHandler{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(logHandler))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
 	sm := newMockSessionManager()
 	ctx := context.Background()
 
@@ -2024,8 +2031,20 @@ func TestAgentLoop_AuditBlockedInputConsecutiveFailures(t *testing.T) {
 	}
 
 	// After scannerCircuitBreakerThreshold failures the log level has escalated
-	// to Error (tested implicitly via the counter value reaching the threshold).
+	// to Error. Verify that at least one captured log record is at Error level,
+	// ensuring the escalation code path is actually exercised.
 	assert.Equal(t, int64(agent.ScannerCircuitBreakerThreshold), loop.AuditSecurityFailCount())
+
+	var hasErrorLog bool
+	for _, rec := range logHandler.Records() {
+		if rec.Level >= slog.LevelError {
+			hasErrorLog = true
+			break
+		}
+	}
+	assert.True(t, hasErrorLog,
+		"expected at least one slog.LevelError record after %d consecutive audit failures (escalation threshold)",
+		agent.ScannerCircuitBreakerThreshold)
 }
 
 // ---------------------------------------------------------------------------
@@ -7176,4 +7195,81 @@ func TestAgentLoop_InvalidOriginFallback(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.922 — Real RegexScanner must honour context cancellation at input stage
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_RealScanner_CancelledContext_InputStage verifies that the real
+// RegexScanner (not a mock) returns CodeSecurityScannerCancelled when the context
+// is cancelled before the scan begins. A regression that removes the ctx.Done()
+// check from RegexScanner.Scan() would cause this test to pass without error,
+// whereas the mock-based cancellation tests would continue to pass because they
+// simulate the cancellation response themselves.
+func TestAgentLoop_RealScanner_CancelledContext_InputStage(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// newTestLoopConfig wires a real RegexScanner via newDefaultScanner — do NOT
+	// override cfg.Scanner so the real implementation is exercised end-to-end.
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	// Pre-cancel the context so the real scanner observes ctx.Done() on entry.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out, err := loop.ProcessMessage(cancelCtx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "hello",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerCancelled),
+		"real RegexScanner must return CodeSecurityScannerCancelled on cancelled context, got %s",
+		sigilerr.CodeOf(err))
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerFailure),
+		"cancellation must not be misclassified as CodeSecurityScannerFailure")
+	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
+		"cancellation must not be swallowed by CodeAgentLoopFailure")
+}
+
+// ---------------------------------------------------------------------------
+// testLogHandler — slog.Handler that captures log records for assertions
+// ---------------------------------------------------------------------------
+
+// testLogHandler is a thread-safe slog.Handler that accumulates every log
+// record it receives. Use Records() to retrieve captured entries.
+type testLogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *testLogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *testLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *testLogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *testLogHandler) WithGroup(_ string) slog.Handler      { return h }
+
+// Records returns a snapshot of all captured records.
+func (h *testLogHandler) Records() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]slog.Record, len(h.records))
+	copy(out, h.records)
+	return out
 }
