@@ -136,6 +136,13 @@ func NewRegistry() *Registry {
 	}
 }
 
+// Count returns the number of registered providers.
+func (r *Registry) Count() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.providers)
+}
+
 // Register adds a provider to the registry.
 func (r *Registry) Register(name string, p Provider) {
 	r.mu.Lock()

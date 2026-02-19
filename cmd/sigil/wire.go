@@ -77,18 +77,27 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating data directory: %w", err)
 	}
 
+	// cleanups holds Close functions for resources that have been successfully
+	// initialized. On error, they are called in reverse order (LIFO) to ensure
+	// proper teardown ordering. On success, the Gateway.Close method is
+	// responsible for cleanup and this defer is a no-op.
+	var cleanups []func() error
+	defer func() {
+		if retErr != nil {
+			for i := len(cleanups) - 1; i >= 0; i-- {
+				if err := cleanups[i](); err != nil {
+					slog.Warn("cleanup error during WireGateway failure", "error", err)
+				}
+			}
+		}
+	}()
+
 	// 1. Gateway store (users, pairings, audit log).
 	gs, err := store.NewGatewayStore(storeCfg, dataDir)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating gateway store: %w", err)
 	}
-	defer func() {
-		if retErr != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
-		}
-	}()
+	cleanups = append(cleanups, gs.Close)
 
 	// 2. Security enforcer.
 	enforcer := security.NewEnforcer(gs.AuditLog())
@@ -121,8 +130,17 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 
 	// 4. Provider registry — register built-in providers and wire routing.
 	provReg := provider.NewRegistry()
+	cleanups = append(cleanups, provReg.Close)
 
 	registerBuiltinProviders(cfg, provReg)
+
+	// Fail fast if providers were configured but none initialized successfully.
+	// Continuing without any LLM provider would let the agent loop start and
+	// then fail on the first inference request with a confusing error.
+	if provReg.Count() == 0 && len(cfg.Providers) > 0 {
+		return nil, sigilerr.New(sigilerr.CodeCLISetupFailure,
+			"all configured providers failed to initialize — no LLM providers available")
+	}
 
 	// Wire default model and failover chain from config so the agent loop
 	// can route requests without "no default provider configured" errors.
@@ -139,6 +157,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 
 	// 5. Workspace manager.
 	wsMgr := workspace.NewManager(filepath.Join(dataDir, "workspaces"), storeCfg)
+	cleanups = append(cleanups, wsMgr.Close)
 
 	// Configure workspaces from config.
 	if cfg.Workspaces != nil {
@@ -247,6 +266,11 @@ func (gw *Gateway) Close() error {
 	var errs []error
 	if gw.server != nil {
 		if err := gw.server.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if gw.pluginManager != nil {
+		if err := gw.pluginManager.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}

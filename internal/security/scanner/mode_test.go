@@ -143,6 +143,54 @@ func TestApplyMode_UnknownMode(t *testing.T) {
 		"expected CodeSecurityScannerFailure, got: %v", err)
 }
 
+// TestApplyMode_FlagModeNoThreatNormalized verifies that when ScannerModeFlag is
+// used and no threat is detected, ApplyMode returns the normalized content from
+// ScanResult.Content — not the original raw input. Unicode evasion characters
+// (e.g. zero-width spaces) must be absent from the returned string.
+//
+// Finding sigil-860 — flag mode was not explicitly tested to confirm it returns
+// ScanResult.Content (normalized) rather than the original raw input on clean scans.
+func TestApplyMode_FlagModeNoThreatNormalized(t *testing.T) {
+	// Raw input contains a zero-width space (\u200b) after "hel".
+	raw := "hel\u200blo world"
+	// The normalized form strips the zero-width space.
+	want := "hello world"
+
+	result := scanner.ScanResult{
+		Threat:  false,
+		Content: want,
+		Matches: nil,
+	}
+
+	got, err := scanner.ApplyMode(types.ScannerModeFlag, types.ScanStageInput, result)
+	require.NoError(t, err)
+	assert.Equal(t, want, got, "flag mode should return normalized content, not raw input")
+	assert.NotEqual(t, raw, got, "returned content must differ from raw input (evasion chars removed)")
+	assert.NotContains(t, got, "\u200b", "returned content must not contain zero-width space")
+}
+
+// TestApplyMode_RedactZeroLengthMatch verifies that a Match with length=0 is
+// silently ignored: no [REDACTED] token is emitted and the original content is
+// returned unchanged.
+//
+// Finding sigil-867 — redact() boundary: zero-length match must be a no-op
+// (start == end → skip [REDACTED] emission) to avoid inserting spurious tokens.
+func TestApplyMode_RedactZeroLengthMatch(t *testing.T) {
+	// NewMatch allows length=0 (invariant is >= 0, not > 0).
+	zeroLen := mustMatch("rule-zero", 3, 0, scanner.SeverityHigh)
+
+	result := scanner.ScanResult{
+		Threat:  true,
+		Content: "hello",
+		Matches: []scanner.Match{zeroLen},
+	}
+
+	got, err := scanner.ApplyMode(types.ScannerModeRedact, types.ScanStageInput, result)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", got, "zero-length match must not insert [REDACTED] token")
+	assert.NotContains(t, got, "[REDACTED]", "no redaction token expected for zero-length match")
+}
+
 // TestApplyMode_RedactByteOffsets exercises the byte-offset arithmetic in
 // redact() via the public ApplyMode API. It constructs ScanResult values
 // directly with controlled Match entries to cover boundary conditions that

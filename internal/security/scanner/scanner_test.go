@@ -1529,6 +1529,10 @@ func TestNormalize(t *testing.T) {
 			input: "",
 			want:  "",
 		},
+
+		// All zero-width characters: a string consisting entirely of invisible/zero-width
+		// characters normalizes to the empty string after stripping.
+		{name: "all zero-width chars collapse to empty", input: "\u200b\u200c\u200d\ufeff", want: ""},
 	}
 
 	for _, tt := range tests {

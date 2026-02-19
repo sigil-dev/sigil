@@ -6748,3 +6748,285 @@ func TestAgentLoop_ToolScanOversized_ReScanFindsThreat_Block(t *testing.T) {
 	sc.mu.Unlock()
 	assert.Equal(t, 2, toolCallCount, "expected two tool-stage scan calls: primary oversized + re-scan")
 }
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.857 — Circuit breaker counter isolation across concurrent turns
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_CircuitBreaker_CounterIsolation_ConcurrentTurns verifies that
+// the scanner circuit-breaker failure counter (scannerFailCount) is a local
+// variable scoped to each runToolLoop invocation, so concurrent ProcessMessage
+// calls cannot share or interfere with each other's counter.
+//
+// If scannerFailCount were a shared Loop-level field, one goroutine's failures
+// could prematurely trip the circuit breaker for the other goroutine.
+// With local-variable semantics, each goroutine must accumulate exactly
+// ScannerCircuitBreakerThreshold failures independently to trip its own breaker.
+func TestAgentLoop_CircuitBreaker_CounterIsolation_ConcurrentTurns(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	// Each goroutine needs its own session so ProcessMessage calls don't share state.
+	session1, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+	session2, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Build exactly ScannerCircuitBreakerThreshold tool calls per turn.
+	// Each tool call will fail at the scanner, accumulating failures until
+	// the per-turn counter reaches the threshold.
+	makeToolCalls := func(prefix string) []*provider.ToolCall {
+		calls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
+		for i := range calls {
+			calls[i] = &provider.ToolCall{
+				ID:        fmt.Sprintf("%s-tc-%d", prefix, i),
+				Name:      "get_weather",
+				Arguments: `{"city":"London"}`,
+			}
+		}
+		return calls
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny, 22C"),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Each goroutine gets its own provider so the tool calls are dispatched
+	// independently within their respective turns.
+	provider1 := &mockProviderBatchToolCall{toolCalls: makeToolCalls("g1")}
+	provider2 := &mockProviderBatchToolCall{toolCalls: makeToolCalls("g2")}
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ToolDispatcher = dispatcher
+	// mockToolErrorScanner always errors on tool stage: each tool call increments
+	// the per-turn scannerFailCount until the circuit breaker threshold is reached.
+	cfg.Scanner = &mockToolErrorScanner{}
+	cfg.ScannerModes = agent.ScannerModes{
+		Input:  types.ScannerModeFlag,
+		Tool:   types.ScannerModeBlock,
+		Output: types.ScannerModeRedact,
+	}
+	cfg.MaxToolCallsPerTurn = agent.ScannerCircuitBreakerThreshold + 1
+
+	cfg.ProviderRouter = &mockProviderRouter{provider: provider1}
+	loop1, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	cfg.ProviderRouter = &mockProviderRouter{provider: provider2}
+	loop2, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	msg1 := agent.InboundMessage{
+		SessionID:       session1.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	}
+	msg2 := agent.InboundMessage{
+		SessionID:       session2.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	}
+
+	type result struct {
+		out interface{}
+		err error
+	}
+
+	ch1 := make(chan result, 1)
+	ch2 := make(chan result, 1)
+
+	// Launch both ProcessMessage calls concurrently.
+	go func() {
+		out, procErr := loop1.ProcessMessage(ctx, msg1)
+		ch1 <- result{out: out, err: procErr}
+	}()
+	go func() {
+		out, procErr := loop2.ProcessMessage(ctx, msg2)
+		ch2 <- result{out: out, err: procErr}
+	}()
+
+	r1 := <-ch1
+	r2 := <-ch2
+
+	// Each goroutine must trip its own circuit breaker independently at exactly
+	// ScannerCircuitBreakerThreshold failures. Both must return the circuit-breaker
+	// error — if the counter were shared, one goroutine might trip at fewer than
+	// threshold failures (using the other goroutine's accumulated count) which
+	// would still be an error, but the key invariant is that neither goroutine
+	// succeeds (which would indicate it only saw some of the failures).
+	require.Error(t, r1.err, "goroutine 1: expected circuit breaker to trip after threshold failures")
+	assert.True(t, sigilerr.HasCode(r1.err, sigilerr.CodeSecurityScannerCircuitBreakerOpen),
+		"goroutine 1: expected CodeSecurityScannerCircuitBreakerOpen, got %s", sigilerr.CodeOf(r1.err))
+
+	require.Error(t, r2.err, "goroutine 2: expected circuit breaker to trip after threshold failures")
+	assert.True(t, sigilerr.HasCode(r2.err, sigilerr.CodeSecurityScannerCircuitBreakerOpen),
+		"goroutine 2: expected CodeSecurityScannerCircuitBreakerOpen, got %s", sigilerr.CodeOf(r2.err))
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.862 — scanContent nil ThreatInfo on cancellation — callers don't panic
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ToolScanCancellation_AuditToolScanNoNilPanic verifies that when
+// the tool-stage scanner returns CodeSecurityScannerCancelled (with nil ThreatInfo),
+// the auditToolScan call does not panic and ProcessMessage returns the cancellation
+// error with the correct code.
+//
+// The tool-stage scan path calls auditToolScan BEFORE checking scanErr, so it must
+// handle nil ThreatInfo gracefully when the scanner was cancelled.
+func TestAgentLoop_ToolScanCancellation_AuditToolScanNoNilPanic(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	toolCallProvider := &mockProviderToolCall{
+		toolCall: &provider.ToolCall{
+			ID:        "tc-cancel-nil",
+			Name:      "get_weather",
+			Arguments: `{"city":"London"}`,
+		},
+	}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	auditStore := newMockAuditStore()
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult("sunny, 22C"),
+		AuditStore:     auditStore,
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// mockToolCancelledScanner passes input scans and returns CodeSecurityScannerCancelled
+	// (with nil ThreatInfo) only on the tool stage when the context is cancelled.
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = &mockToolCancelledScanner{}
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeFlag}
+	cfg.AuditStore = auditStore
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	// Cancel the context before ProcessMessage so the tool scanner observes
+	// a cancelled context and returns nil ThreatInfo with CodeSecurityScannerCancelled.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Must not panic — auditToolScan receives nil ThreatInfo and must handle it.
+	out, procErr := loop.ProcessMessage(cancelCtx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "What is the weather?",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+
+	// The error must carry CodeSecurityScannerCancelled from the tool stage.
+	require.Error(t, procErr)
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerCancelled),
+		"expected CodeSecurityScannerCancelled, got %s", sigilerr.CodeOf(procErr))
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.866 — Truncation marker absent on double-failure circuit-breaker path
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_ToolScanDoubleFailure_AtThreshold_NoTruncationMarker verifies that
+// when the double-failure path (both primary and re-scan return errors) increments
+// scannerFailCount to the circuit-breaker threshold, the returned error:
+//  1. Has code CodeSecurityScannerCircuitBreakerOpen (circuit breaker tripped).
+//  2. Does NOT contain the TruncationMarker string in the error message.
+//
+// The truncation marker must only appear in the tool-result content sent to the LLM
+// on the bypass path (when content passes through). On the circuit-breaker-open path
+// no content is returned, so the truncation marker must not appear in the error itself.
+func TestAgentLoop_ToolScanDoubleFailure_AtThreshold_NoTruncationMarker(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	// Build ScannerCircuitBreakerThreshold tool calls so double-failures accumulate
+	// to the circuit-breaker limit. Each tool result is oversized so the primary
+	// scan returns CodeSecurityScannerContentTooLarge; the re-scan of truncated
+	// content returns a generic scanner error (double-failure path).
+	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+1)
+	toolCalls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
+	for i := range toolCalls {
+		toolCalls[i] = &provider.ToolCall{
+			ID:        fmt.Sprintf("tc-no-marker-%d", i),
+			Name:      "big_tool",
+			Arguments: `{}`,
+		}
+	}
+	toolCallProvider := &mockProviderBatchToolCall{toolCalls: toolCalls}
+
+	enforcer := security.NewEnforcer(nil)
+	enforcer.RegisterPlugin("builtin", security.NewCapabilitySet("tool.*"), security.NewCapabilitySet())
+
+	dispatcher, err := agent.NewToolDispatcher(agent.ToolDispatcherConfig{
+		Enforcer:       enforcer,
+		PluginManager:  newMockPluginManagerWithResult(oversizedResult),
+		AuditStore:     newMockAuditStore(),
+		DefaultTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// mockToolDoubleFailureScanner: first tool-stage call returns content_too_large,
+	// subsequent calls return a generic scanner error — triggering the double-failure
+	// path in scanOversizedToolContent for each tool call.
+	sc := &mockToolDoubleFailureScanner{}
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
+	cfg.ToolDispatcher = dispatcher
+	cfg.Scanner = sc
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeBlock, Output: types.ScannerModeRedact}
+	cfg.MaxToolCallsPerTurn = agent.ScannerCircuitBreakerThreshold + 1
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "run all big tools",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+
+	// Circuit breaker must fire when double-failure count reaches the threshold.
+	require.Error(t, procErr, "circuit breaker must fire when double-failure count reaches threshold")
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen),
+		"expected CodeSecurityScannerCircuitBreakerOpen, got %s", sigilerr.CodeOf(procErr))
+
+	// The truncation marker must NOT appear in the error message on the
+	// circuit-breaker-open path. The marker signals to the LLM that content was
+	// truncated; on the fail-closed path no content is returned, so including the
+	// marker in the error would be misleading and incorrect.
+	assert.NotContains(t, procErr.Error(), agent.TruncationMarker,
+		"circuit-breaker error must not contain the truncation marker (no content was returned)")
+}

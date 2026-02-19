@@ -117,6 +117,13 @@ func (m *Manager) Get(name string) (*Instance, error) {
 	return inst, nil
 }
 
+// Close shuts down the plugin manager and any running plugin processes.
+// Currently a no-op placeholder; will be extended when process-tier plugins
+// are launched and need graceful shutdown via go-plugin client.Kill().
+func (m *Manager) Close() error {
+	return nil
+}
+
 func (m *Manager) List() []*Instance {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

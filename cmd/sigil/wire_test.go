@@ -214,15 +214,12 @@ func TestWireGateway_ProviderSkipsEmptyAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
 	cfg.Providers = map[string]config.ProviderConfig{
-		"anthropic": {APIKey: ""}, // empty — should be skipped
+		"anthropic": {APIKey: ""}, // empty — skipped; all providers fail → startup error
 	}
 
-	gw, err := WireGateway(context.Background(), cfg, dir)
-	require.NoError(t, err)
-	defer func() { _ = gw.Close() }()
-
-	_, err = gw.ProviderRegistry().Get("anthropic")
-	assert.Error(t, err, "provider with empty API key should not be registered")
+	_, err := WireGateway(context.Background(), cfg, dir)
+	require.Error(t, err, "all providers having empty API keys should cause startup failure")
+	assert.Contains(t, err.Error(), "no LLM providers available")
 }
 
 func TestWireGateway_ProviderCreationFailureSkipped(t *testing.T) {
@@ -239,12 +236,9 @@ func TestWireGateway_ProviderCreationFailureSkipped(t *testing.T) {
 		"anthropic": {APIKey: "test-key"},
 	}
 
-	gw, err := WireGateway(context.Background(), cfg, dir)
-	require.NoError(t, err, "provider creation failure should not prevent startup")
-	defer func() { _ = gw.Close() }()
-
-	_, err = gw.ProviderRegistry().Get("anthropic")
-	assert.Error(t, err, "failed provider should not be registered")
+	_, err := WireGateway(context.Background(), cfg, dir)
+	require.Error(t, err, "all providers failing initialization should cause startup failure")
+	assert.Contains(t, err.Error(), "no LLM providers available")
 }
 
 func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
@@ -254,12 +248,9 @@ func TestWireGateway_UnknownProviderSkipped(t *testing.T) {
 		"unknown-provider": {APIKey: "some-key"},
 	}
 
-	gw, err := WireGateway(context.Background(), cfg, dir)
-	require.NoError(t, err, "unknown provider should not cause startup failure")
-	defer func() { _ = gw.Close() }()
-
-	_, err = gw.ProviderRegistry().Get("unknown-provider")
-	assert.Error(t, err, "unknown provider should not be registered")
+	_, err := WireGateway(context.Background(), cfg, dir)
+	require.Error(t, err, "all providers being unknown should cause startup failure")
+	assert.Contains(t, err.Error(), "no LLM providers available")
 }
 
 // Test constant-time token comparison prevents timing attacks

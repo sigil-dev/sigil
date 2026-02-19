@@ -128,6 +128,10 @@ func NewMatch(rule string, location, length int, severity Severity) (Match, erro
 
 // Scanner scans content for threats.
 type Scanner interface {
+	// Scan inspects content for threats according to the given ScanContext.
+	// On success, it returns a populated ScanResult and a nil error.
+	// When Scan returns a non-nil error, the returned ScanResult is the zero
+	// value and MUST NOT be used by callers.
 	Scan(ctx context.Context, content string, opts ScanContext) (ScanResult, error)
 }
 
@@ -292,14 +296,12 @@ func (s *RegexScanner) Scan(ctx context.Context, content string, opts ScanContex
 	content = Normalize(content)
 
 	if len(content) > s.maxContentLength {
-		return ScanResult{
-				Content: content,
-			}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
-				"content exceeds maximum length",
-				sigilerr.Field("length", len(content)),
-				sigilerr.Field("max_length", s.maxContentLength),
-				sigilerr.Field("stage", string(opts.Stage)),
-			)
+		return ScanResult{}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
+			"content exceeds maximum length",
+			sigilerr.Field("length", len(content)),
+			sigilerr.Field("max_length", s.maxContentLength),
+			sigilerr.Field("stage", string(opts.Stage)),
+		)
 	}
 
 	result := ScanResult{Content: content}
@@ -437,9 +439,7 @@ func validateStageRules(rules []Rule) error {
 // dbEntries is iterated once per stage to stamp the correct ScanStage onto
 // each Rule value.
 func DefaultRules() ([]Rule, error) {
-	dbByStage, err := loadAllDBRules([]types.ScanStage{
-		types.ScanStageInput, types.ScanStageTool, types.ScanStageOutput,
-	})
+	dbByStage, err := loadAllDBRules(allStages)
 	if err != nil {
 		return nil, err
 	}
@@ -502,12 +502,16 @@ func ApplyMode(mode types.ScannerMode, stage types.ScanStage, result ScanResult)
 		if len(result.Matches) > 0 {
 			firstRule = result.Matches[0].Rule
 		}
-		code := sigilerr.CodeSecurityScannerInputBlocked
+		var code sigilerr.Code
 		switch stage {
+		case types.ScanStageInput:
+			code = sigilerr.CodeSecurityScannerInputBlocked
 		case types.ScanStageTool:
 			code = sigilerr.CodeSecurityScannerToolBlocked
 		case types.ScanStageOutput:
 			code = sigilerr.CodeSecurityScannerOutputBlocked
+		default:
+			code = sigilerr.CodeSecurityScannerInputBlocked
 		}
 		return "", sigilerr.New(code,
 			"content blocked by security scanner",
