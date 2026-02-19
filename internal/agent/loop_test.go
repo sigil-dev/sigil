@@ -3594,7 +3594,7 @@ func TestSanitizeToolError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := agent.SanitizeToolError(context.Background(), tt.err, "test-tool", "test-plugin", "test-session")
+			got := agent.SanitizeToolError(context.Background(), tt.err, "test-tool", "test-plugin", "test-session", "test-workspace")
 			assert.Equal(t, tt.wantMsg, got)
 			// Verify no internal details from the error are present in the output.
 			assert.NotContains(t, got, "internal:")
@@ -6031,6 +6031,66 @@ func TestAgentLoop_ToolScanBlock_AuditEntry(t *testing.T) {
 	assert.Equal(t, true, threatEntry.Details["threat_detected"],
 		"audit entry Details[\"threat_detected\"] must be true")
 	rules, ok := threatEntry.Details["threat_rules"].([]string)
+	assert.True(t, ok, "audit entry Details[\"threat_rules\"] must be a []string")
+	assert.NotEmpty(t, rules, "audit entry Details[\"threat_rules\"] must be non-empty")
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.829 — applyScannedResult returns ThreatInfo alongside block error
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_OutputScanBlock_AuditEntry verifies that when the output scanner
+// mode is ModeBlock and the LLM emits a secret, the audit entry for
+// agent_loop.output_blocked carries non-nil ThreatInfo (threat_detected=true,
+// non-empty threat_rules). Together with TestAgentLoop_InputScannerBlocks and
+// TestAgentLoop_ToolScanBlock_AuditEntry, this covers all three stages of
+// applyScannedResult's contract: non-nil ThreatInfo is returned alongside block
+// errors so audit paths can log what was blocked.
+func TestAgentLoop_OutputScanBlock_AuditEntry(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	auditStore := newMockAuditStore()
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = newMockProviderRouterWithResponse("Your key is AKIAIOSFODNN7EXAMPLE ok?")
+	cfg.ScannerModes = agent.ScannerModes{Input: types.ScannerModeFlag, Tool: types.ScannerModeFlag, Output: types.ScannerModeBlock}
+	cfg.AuditStore = auditStore
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:       session.ID,
+		WorkspaceID:     "ws-1",
+		UserID:          "user-1",
+		Content:         "Show me the key.",
+		WorkspaceAllow:  security.NewCapabilitySet("tool.*"),
+		UserPermissions: security.NewCapabilitySet("tool.*"),
+	})
+
+	require.Error(t, procErr, "output scan block must return error")
+	assert.Nil(t, out)
+	assert.True(t, sigilerr.HasCode(procErr, sigilerr.CodeSecurityScannerOutputBlocked),
+		"expected CodeSecurityScannerOutputBlocked, got %s", sigilerr.CodeOf(procErr))
+
+	auditStore.mu.Lock()
+	defer auditStore.mu.Unlock()
+
+	var blockedEntry *store.AuditEntry
+	for _, entry := range auditStore.entries {
+		if entry.Action == "agent_loop.output_blocked" {
+			blockedEntry = entry
+			break
+		}
+	}
+	require.NotNil(t, blockedEntry,
+		"audit store must contain an agent_loop.output_blocked entry when output scan blocks a secret")
+	assert.Equal(t, "blocked_threat", blockedEntry.Result)
+	assert.Equal(t, true, blockedEntry.Details["threat_detected"],
+		"audit entry Details[\"threat_detected\"] must be true")
+	rules, ok := blockedEntry.Details["threat_rules"].([]string)
 	assert.True(t, ok, "audit entry Details[\"threat_rules\"] must be a []string")
 	assert.NotEmpty(t, rules, "audit entry Details[\"threat_rules\"] must be non-empty")
 }

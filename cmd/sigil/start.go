@@ -58,6 +58,12 @@ func runStart(cmd *cobra.Command, _ []string) error {
 		dataDir = filepath.Join(home, ".sigil")
 	}
 
+	// Run security validation early, before any subsystem initialization, to
+	// reject env-var-based scanner mode weakening before WireGateway reads modes.
+	if secErrs := cfg.ValidateSecurity(); len(secErrs) > 0 {
+		return sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "security validation: %v", secErrs[0])
+	}
+
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

@@ -642,6 +642,15 @@ func TestNewScanContext_MetadataIsolation(t *testing.T) {
 	assert.False(t, hasInjected, "ScanContext.Metadata must not contain keys added after construction")
 }
 
+// TestNewScanContext_NilMetadata verifies that passing nil metadata to NewScanContext
+// produces a ScanContext with Metadata == nil (not an allocated empty map).
+func TestNewScanContext_NilMetadata(t *testing.T) {
+	sc := scanner.NewScanContext(types.ScanStageInput, types.OriginUserInput, nil)
+	assert.Nil(t, sc.Metadata, "ScanContext.Metadata must be nil when nil is passed, not an empty map")
+	assert.Equal(t, types.ScanStageInput, sc.Stage)
+	assert.Equal(t, types.OriginUserInput, sc.Origin)
+}
+
 // mustMatch is a test helper that creates a Match via NewMatch, panicking on error.
 func mustMatch(rule string, location, length int, severity scanner.Severity) scanner.Match {
 	m, err := scanner.NewMatch(rule, location, length, severity)

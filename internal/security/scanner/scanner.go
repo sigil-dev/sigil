@@ -535,24 +535,21 @@ func redact(content string, matches []Match) string {
 		return content
 	}
 
-	// Sort by location ascending.
-	sorted := make([]Match, len(matches))
-	copy(sorted, matches)
-
-	// Skip invalid matches (defensive against non-regex Scanner implementations).
-	sorted = slices.DeleteFunc(sorted, func(m Match) bool {
+	// Filter invalid matches (defensive against non-regex Scanner implementations),
+	// then sort by location ascending.
+	valid := slices.DeleteFunc(slices.Clone(matches), func(m Match) bool {
 		return m.location < 0 || m.length < 0
 	})
-	if len(sorted) == 0 {
+	if len(valid) == 0 {
 		return content
 	}
 
-	slices.SortFunc(sorted, func(a, b Match) int { return a.location - b.location })
+	slices.SortFunc(valid, func(a, b Match) int { return a.location - b.location })
 
 	// Merge overlapping ranges.
 	type span struct{ start, end int }
-	spans := []span{{sorted[0].location, sorted[0].location + sorted[0].length}}
-	for _, m := range sorted[1:] {
+	spans := []span{{valid[0].location, valid[0].location + valid[0].length}}
+	for _, m := range valid[1:] {
 		last := &spans[len(spans)-1]
 		end := m.location + m.length
 		if m.location <= last.end {

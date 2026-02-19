@@ -225,7 +225,7 @@ func (c *Config) Validate() []error {
 	errs = append(errs, c.validateStorage()...)
 	errs = append(errs, c.validateModels()...)
 	errs = append(errs, c.validateSessions()...)
-	errs = append(errs, c.validateSecurity()...)
+	errs = append(errs, c.ValidateSecurity()...)
 
 	return errs
 }
@@ -393,7 +393,10 @@ func (c *Config) validateSessions() []error {
 	return errs
 }
 
-func (c *Config) validateSecurity() []error {
+// ValidateSecurity checks scanner mode validity, permissive-mode policy, and
+// rejects scanner-related environment variables. Exported so cmd/sigil/start.go
+// can call it in the Cobra pre-run hook before WireGateway().
+func (c *Config) ValidateSecurity() []error {
 	var errs []error
 
 	// Validate scanner modes using types.ScannerMode.Valid(), which is the
@@ -442,12 +445,10 @@ func (c *Config) validateSecurity() []error {
 	// operator is forced to remove the env var rather than silently proceeding
 	// with a potentially weakened scanner configuration.
 	//
-	// TODO(security): Ideally this check runs before WireGateway() in the start
-	// command's pre-run hook (cmd/sigil/start.go) so that env-var rejection fires
-	// before any subsystem is initialized. The current placement in Validate() is
-	// correct (it still causes startup failure) but allows Viper to merge the env
-	// value into the struct before rejection. Moving the check earlier would close
-	// the window entirely.
+	// Security note: This check also runs early in the start command's RunE
+	// (cmd/sigil/start.go) via cfg.ValidateSecurity() before WireGateway(), so
+	// env-var rejection fires before any subsystem is initialized. The duplicate
+	// call here in Validate() ensures coverage for non-start boot paths.
 	blockedScannerEnvVars := []struct {
 		envVar string
 		field  string
