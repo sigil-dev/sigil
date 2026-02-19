@@ -23,3 +23,6 @@ var ScanBlockedReason = scanBlockedReason
 // ExportBuildBlockedAuditEntry exposes buildBlockedAuditEntry for white-box testing.
 var ExportBuildBlockedAuditEntry = buildBlockedAuditEntry
 
+// AuditLogEscalationThreshold exposes auditLogEscalationThreshold for white-box testing.
+const AuditLogEscalationThreshold = auditLogEscalationThreshold
+

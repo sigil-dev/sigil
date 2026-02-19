@@ -516,7 +516,7 @@ func ApplyMode(mode types.ScannerMode, stage types.ScanStage, result ScanResult)
 		case types.ScanStageOutput:
 			code = sigilerr.CodeSecurityScannerOutputBlocked
 		default:
-			code = sigilerr.CodeSecurityScannerInputBlocked
+			return "", sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure, "ApplyMode: unexpected scan stage %q", stage)
 		}
 		return "", sigilerr.New(code,
 			"content blocked by security scanner",

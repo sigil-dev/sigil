@@ -75,7 +75,7 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 				slog.String("error_code", string(sigilerr.CodeSecurityScannerFailure)),
 				slog.Bool("permanent", true))
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
-				"parsing secrets-patterns-db YAML (permanent failure — process restart required to retry): %w", err)
+				"embedded scanner rules YAML is malformed (binary rebuild required to fix): %w", err)
 			return
 		}
 
@@ -119,7 +119,7 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 				slog.String("error_code", string(sigilerr.CodeSecurityScannerFailure)),
 				slog.Bool("permanent", true))
 			dbErr = sigilerr.New(sigilerr.CodeSecurityScannerFailure,
-				"scanner startup aborted: high-confidence pattern(s) failed to compile (permanent failure — process restart required to retry)",
+				"scanner startup aborted: embedded scanner pattern(s) failed to compile (binary rebuild required)",
 				sigilerr.Field("failed_count", len(failedNames)),
 				sigilerr.Field("failed_names", failedNames),
 			)
@@ -128,7 +128,7 @@ func loadDBRules(stage types.ScanStage) ([]Rule, error) {
 
 		if len(dbEntries) == 0 {
 			dbErr = sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
-				"zero high-confidence patterns loaded from secrets-patterns-db (%d duplicates skipped) (permanent failure — process restart required to retry)",
+				"zero high-confidence patterns loaded from embedded scanner rules (%d duplicates skipped) (binary rebuild required to fix)",
 				duplicateCount)
 		}
 	})

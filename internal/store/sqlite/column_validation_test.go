@@ -177,6 +177,40 @@ func TestAddColumnIfMissing_Validation(t *testing.T) {
 	}
 }
 
+// TestAddColumnIfMissing_Idempotency verifies that calling addColumnIfMissing
+// twice with the same column name is a no-op: the second call must not return
+// an error and must not corrupt the schema (no duplicate columns).
+func TestAddColumnIfMissing_Idempotency(t *testing.T) {
+	db := openTestDB(t)
+
+	// First call: column does not exist yet — should add it.
+	err := addColumnIfMissing(db, "t", "extra", "TEXT")
+	require.NoError(t, err, "first addColumnIfMissing should succeed")
+
+	// Second call: column already exists — must be a no-op, not an error.
+	err = addColumnIfMissing(db, "t", "extra", "TEXT")
+	require.NoError(t, err, "second addColumnIfMissing (duplicate) must be a no-op")
+
+	// Confirm the schema has exactly the expected columns and no duplicates.
+	rows, err := db.Query("PRAGMA table_info(t)")
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+
+	var cols []string
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltValue sql.NullString
+		var pk int
+		require.NoError(t, rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk))
+		cols = append(cols, name)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Equal(t, []string{"id", "extra"}, cols, "schema must contain exactly the original column plus the added one, with no duplicates")
+}
+
 // TestSafeDefTokenRe_CharacterClassRange verifies that safeDefTokenRe treats
 // hyphen as a literal character rather than creating a range from space
 // (U+0020) to hyphen (U+002D). Regression test for sigil-7g5.652.

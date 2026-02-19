@@ -12,6 +12,23 @@ import (
 // DefaultScannerModes is the single source of truth for scanner mode defaults.
 // Input: block (reject prompt injection), Tool: flag (mark for review), Output: redact (strip secrets).
 // DisableOriginTagging defaults to false (tagging enabled) — the zero value is the safe default.
+//
+// WARNING: Tool stage uses ScannerModeFlag by default (D062 availability tradeoff).
+//
+// ScannerModeFlag detects injection patterns in tool results and emits structured log
+// entries, but it does NOT block or modify the content. Tool results containing injection
+// patterns are passed through to the LLM unmodified. This is an intentional tradeoff:
+// blocking tool results breaks agent workflows when tools return content that resembles
+// injection syntax (e.g., formatted output, code, structured data).
+//
+// Operators who require blocking defense at the tool stage MUST explicitly set the
+// Tool mode to ScannerModeBlock or ScannerModeRedact in their sigil.yaml:
+//
+//	scanner:
+//	  tool: block    # reject tool results containing injection patterns
+//	  tool: redact   # strip injection patterns from tool results before passing to LLM
+//
+// See D062 and D073 in docs/decisions/decision-log.md for the full rationale.
 var DefaultScannerModes = ScannerModes{
 	Input:  types.ScannerModeBlock,
 	Tool:   types.ScannerModeFlag,

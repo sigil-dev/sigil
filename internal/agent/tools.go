@@ -141,8 +141,14 @@ type ToolDispatcher struct {
 	// turnBudgets tracks per-turn call counts keyed by TurnID.
 	turnBudgets sync.Map // map[string]*turnBudget
 
-	// auditFailCount tracks consecutive audit append failures for monitoring.
+	// auditFailCount tracks consecutive audit append failures for escalating log levels.
+	// Resets to 0 on each successful append so that intermittent failures do not
+	// permanently elevate the log level. See auditFailTotal for a counter that never resets.
 	auditFailCount atomic.Int64
+	// auditFailTotal is a cumulative (never-reset) count of all audit append failures
+	// across the lifetime of this ToolDispatcher. Unlike auditFailCount, it is not reset
+	// on success, so intermittent FAIL-SUCCESS-FAIL-SUCCESS patterns remain visible to operators.
+	auditFailTotal atomic.Int64
 }
 
 // NewToolDispatcher creates a ToolDispatcher with the given configuration.
@@ -292,14 +298,22 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 	// Best-effort audit; do not fail the tool execution on audit errors.
 	if err := d.auditStore.Append(ctx, entry); err != nil {
 		consecutive := d.auditFailCount.Add(1)
-		logAuditFailure(ctx, consecutive, "audit store append failed",
+		cumulative := d.auditFailTotal.Add(1)
+		attrs := []slog.Attr{
 			slog.Any("error", err),
 			slog.String("plugin", req.PluginName),
 			slog.String("tool", req.ToolName),
 			slog.String("session_id", req.SessionID),
 			slog.Int64("consecutive_failures", consecutive),
-		)
+		}
+		if consecutive >= auditLogEscalationThreshold {
+			// Include cumulative total at error level so operators can see how many
+			// failures have occurred overall, even across success-interspersed sequences.
+			attrs = append(attrs, slog.Int64("total_failures", cumulative))
+		}
+		logAuditFailure(ctx, consecutive, "audit store append failed", attrs...)
 	} else {
+		// Reset consecutive counter; auditFailTotal tracks cumulative failures for operator visibility.
 		d.auditFailCount.Store(0)
 	}
 }

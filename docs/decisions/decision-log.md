@@ -1110,3 +1110,25 @@ All other rows in the defense matrix (tool escalation, infinite loops, cost expl
 **Rationale:** Stage-only rule selection keeps the scanner simple and predictable. Origin adds audit granularity (e.g., "was this scan for user input or system prompt?") without affecting security posture. Adding origin-based rule filtering would increase scanner complexity with questionable value.
 
 **Ref:** PR #17, sigil-7g5.494, D062, `internal/security/scanner/scanner.go:271-274`
+
+---
+
+## D073: DefaultScannerModes.Tool Uses ScannerModeFlag, Not ScannerModeBlock
+
+**Status:** Accepted
+
+**Question:** Should `DefaultScannerModes.Tool` use `ScannerModeBlock` instead of `ScannerModeFlag`?
+
+**Context:** `ScannerModeFlag` detects injection patterns in tool results and emits structured log entries, but does not block or modify content. Tool results containing injection patterns are passed through to the LLM unmodified. This is a known gap relative to maximum-security posture. D062 documents an explicit availability-over-security tradeoff for the tool stage: blocking tool results breaks agent workflows when tools return content that resembles injection syntax (formatted output, code, structured data).
+
+**Options considered:**
+
+1. `ScannerModeBlock` — maximum security; reject tool results containing injection patterns. Rejected: breaks agent workflows when legitimate tool output triggers scanner rules.
+2. `ScannerModeRedact` — sanitize injection patterns before passing to LLM. Rejected as default: alters tool output in ways that can corrupt structured data or code; surprising to operators who haven't opted in.
+3. `ScannerModeFlag` (current, per D062 design) — log detected patterns, pass content through unmodified. Accepted.
+
+**Decision:** Keep `DefaultScannerModes.Tool` as `ScannerModeFlag`. Add prominent warning documentation in `scanner_config.go` directing operators who require blocking to configure `tool: block` or `tool: redact` explicitly.
+
+**Rationale:** D062 documents this tradeoff deliberately. Tool results with blocked content break agent workflows. Flag mode provides audit trails sufficient for detection and incident response. Operators who require a stricter posture can configure it via `sigil.yaml`. The warning comment in `scanner_config.go` ensures the non-blocking default is visible to anyone reading the code.
+
+**Ref:** sigil-7g5.918, D062, `internal/agent/scanner_config.go`
