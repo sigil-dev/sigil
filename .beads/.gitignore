@@ -40,6 +40,9 @@ beads.right.meta.json
 sync_base.jsonl
 export-state/
 
+# Session marker files (ephemeral, per-machine)
+.session/
+
 # Dolt database (managed by Dolt remotes, not git)
 dolt/
 dolt-access.lock
