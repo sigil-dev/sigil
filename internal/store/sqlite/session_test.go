@@ -15,6 +15,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/store"
 	"github.com/sigil-dev/sigil/internal/store/sqlite"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -454,7 +455,7 @@ func TestSessionStore_ThreatInfo_OutputStage(t *testing.T) {
 	require.NoError(t, err)
 
 	// Append an assistant message with an output-stage threat detection.
-	threat := store.NewThreatDetected(store.ScanStageOutput, []string{"rule-prompt-leak", "rule-pii"})
+	threat := store.NewThreatDetected(types.ScanStageOutput, []string{"rule-prompt-leak", "rule-pii"})
 	msg := &store.Message{
 		ID:        "msg-output-threat-1",
 		SessionID: "sess-threat-output",
@@ -475,7 +476,7 @@ func TestSessionStore_ThreatInfo_OutputStage(t *testing.T) {
 	require.NotNil(t, got.Threat, "Threat field must be non-nil after round-trip")
 	assert.True(t, got.Threat.Scanned, "Threat.Scanned should be true")
 	assert.True(t, got.Threat.Detected, "Threat.Detected should be true")
-	assert.Equal(t, store.ScanStageOutput, got.Threat.Stage, "Stage must be ScanStageOutput, not ScanStageInput")
+	assert.Equal(t, types.ScanStageOutput, got.Threat.Stage, "Stage must be ScanStageOutput, not ScanStageInput")
 	assert.Equal(t, []string{"rule-prompt-leak", "rule-pii"}, got.Threat.Rules, "matched rules must be preserved")
 }
 

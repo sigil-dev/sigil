@@ -9,6 +9,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -276,7 +277,7 @@ func TestTokenBudget_Validate(t *testing.T) {
 // --- ThreatInfo constructors ---
 
 func TestNewCleanScan(t *testing.T) {
-	for _, stage := range []store.ScanStage{store.ScanStageInput, store.ScanStageTool} {
+	for _, stage := range []store.ScanStage{types.ScanStageInput, types.ScanStageTool} {
 		ti := store.NewCleanScan(stage)
 		assert.True(t, ti.Scanned)
 		assert.False(t, ti.Detected)
@@ -287,7 +288,7 @@ func TestNewCleanScan(t *testing.T) {
 }
 
 func TestNewThreatDetected(t *testing.T) {
-	for _, stage := range []store.ScanStage{store.ScanStageInput, store.ScanStageTool} {
+	for _, stage := range []store.ScanStage{types.ScanStageInput, types.ScanStageTool} {
 		ti := store.NewThreatDetected(stage, []string{"test_rule"})
 		assert.True(t, ti.Scanned)
 		assert.True(t, ti.Detected)
@@ -299,7 +300,7 @@ func TestNewThreatDetected(t *testing.T) {
 }
 
 func TestNewBypassedScan(t *testing.T) {
-	for _, stage := range []store.ScanStage{store.ScanStageInput, store.ScanStageTool} {
+	for _, stage := range []store.ScanStage{types.ScanStageInput, types.ScanStageTool} {
 		ti := store.NewBypassedScan(stage)
 		assert.False(t, ti.Scanned)
 		assert.False(t, ti.Detected)
@@ -323,7 +324,7 @@ func TestThreatInfo_Validate(t *testing.T) {
 		{"detected no rules", store.ThreatInfo{Scanned: true, Detected: true, Rules: nil}, true},
 		{"detected without scanned", store.ThreatInfo{Detected: true, Rules: []string{"rule-1"}}, true},
 		{"not detected with rules", store.ThreatInfo{Detected: false, Rules: []string{"rule-1"}}, true},
-		{"bypassed not detected", store.ThreatInfo{Detected: false, Bypassed: true, Stage: store.ScanStageTool}, false},
+		{"bypassed not detected", store.ThreatInfo{Detected: false, Bypassed: true, Stage: types.ScanStageTool}, false},
 		{"bypassed and detected is invalid", store.ThreatInfo{Scanned: true, Detected: true, Bypassed: true}, true},
 		{"bypassed and scanned is invalid", store.ThreatInfo{Scanned: true, Bypassed: true}, true},
 	}

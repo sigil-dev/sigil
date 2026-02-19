@@ -12,6 +12,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
 	"github.com/sigil-dev/sigil/internal/store"
+	"github.com/sigil-dev/sigil/pkg/types"
 )
 
 func TestBuildBlockedAuditEntry(t *testing.T) {
@@ -45,7 +46,7 @@ func TestBuildBlockedAuditEntry(t *testing.T) {
 		{
 			name:          "detected threat sets threat_detected, threat_rules, threat_stage",
 			action:        "agent_loop.input_blocked",
-			threatInfo:    store.NewThreatDetected(store.ScanStageInput, []string{"rule-abc"}),
+			threatInfo:    store.NewThreatDetected(types.ScanStageInput, []string{"rule-abc"}),
 			reason:        "blocked_threat",
 			extraDetails:  nil,
 			wantResult:    "blocked_threat",
@@ -54,7 +55,7 @@ func TestBuildBlockedAuditEntry(t *testing.T) {
 		{
 			name:            "bypassed scan (not detected) does not set threat_detected",
 			action:          "agent_loop.input_blocked",
-			threatInfo:      store.NewBypassedScan(store.ScanStageTool),
+			threatInfo:      store.NewBypassedScan(types.ScanStageTool),
 			reason:          "scanner_failure",
 			extraDetails:    nil,
 			wantResult:      "scanner_failure",

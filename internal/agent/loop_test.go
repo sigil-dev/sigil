@@ -5076,6 +5076,8 @@ func TestAgentLoop_ToolScanCircuitBreaker_AuditsEntry(t *testing.T) {
 		"audit entry Details[\"bypassed\"] must be true on circuit-breaker path")
 	assert.NotEmpty(t, cbEntry.Details["scan_error"],
 		"audit entry Details[\"scan_error\"] must be set to the circuit-breaker error message")
+	assert.Equal(t, "circuit_breaker_open", cbEntry.Result,
+		"audit entry Result must be \"circuit_breaker_open\" when circuit breaker fires")
 }
 
 // ---------------------------------------------------------------------------
@@ -6401,7 +6403,7 @@ func TestScanBlockedReason(t *testing.T) {
 		},
 		{
 			name:       "non-nil threatInfo with Detected=true + CodeSecurityScannerInputBlocked → blocked_threat",
-			threatInfo: store.NewThreatDetected(store.ScanStageInput, []string{"rule-injection"}),
+			threatInfo: store.NewThreatDetected(types.ScanStageInput, []string{"rule-injection"}),
 			scanErr:    sigilerr.New(sigilerr.CodeSecurityScannerInputBlocked, "input blocked"),
 			want:       "blocked_threat",
 		},
@@ -6410,7 +6412,7 @@ func TestScanBlockedReason(t *testing.T) {
 			// must NOT map to "blocked_threat" — it is a scanner infrastructure
 			// failure where content was passed through unscanned.
 			name:       "non-nil threatInfo with Detected=false (bypass marker) → scanner_failure",
-			threatInfo: store.NewBypassedScan(store.ScanStageTool),
+			threatInfo: store.NewBypassedScan(types.ScanStageTool),
 			scanErr:    sigilerr.New(sigilerr.CodeSecurityScannerFailure, "scanner internal error"),
 			want:       "scanner_failure",
 		},
@@ -6432,7 +6434,7 @@ func TestScanBlockedReason(t *testing.T) {
 			// with Detected=true alongside CodeSecurityScannerCircuitBreakerOpen,
 			// the audit reason must be "circuit_breaker_open", not "blocked_threat".
 			name:       "Detected=true + CodeSecurityScannerCircuitBreakerOpen → circuit_breaker_open",
-			threatInfo: store.NewThreatDetected(store.ScanStageInput, []string{"rule-injection"}),
+			threatInfo: store.NewThreatDetected(types.ScanStageInput, []string{"rule-injection"}),
 			scanErr:    sigilerr.New(sigilerr.CodeSecurityScannerCircuitBreakerOpen, "circuit breaker open"),
 			want:       "circuit_breaker_open",
 		},
@@ -7029,4 +7031,149 @@ func TestAgentLoop_ToolScanDoubleFailure_AtThreshold_NoTruncationMarker(t *testi
 	// marker in the error would be misleading and incorrect.
 	assert.NotContains(t, procErr.Error(), agent.TruncationMarker,
 		"circuit-breaker error must not contain the truncation marker (no content was returned)")
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.889 — Origin field populated on provider.Messages
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_OriginFieldPopulated verifies that provider.Messages sent to the LLM
+// have their Origin field correctly populated: user messages carry OriginUserInput
+// and the system prompt is delivered via ChatRequest.SystemPrompt (not as a message
+// with OriginSystem in the messages array).
+func TestAgentLoop_OriginFieldPopulated(t *testing.T) {
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-1", "user-1")
+	require.NoError(t, err)
+
+	capturer := &mockProviderCapturing{}
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.ProviderRouter = newMockProviderRouterCapturing(capturer)
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-1",
+		UserID:      "user-1",
+		Content:     "origin check",
+	})
+	require.NoError(t, err)
+
+	messages := capturer.getCapturedMessages()
+	require.NotEmpty(t, messages, "provider should have received messages")
+
+	// Every user-role message must carry OriginUserInput.
+	for _, msg := range messages {
+		if msg.Role == store.MessageRoleUser {
+			assert.Equal(t, types.OriginUserInput, msg.Origin,
+				"user message must have OriginUserInput, got %q", msg.Origin)
+		}
+	}
+
+	// The system prompt must be delivered via ChatRequest.SystemPrompt, not as a
+	// message in the array, so no message should carry OriginSystem.
+	for _, msg := range messages {
+		assert.NotEqual(t, types.OriginSystem, msg.Origin,
+			"system messages must be delivered via ChatRequest.SystemPrompt, not in the messages array")
+	}
+
+	// Origin field must never be empty for any message the loop sends.
+	for i, msg := range messages {
+		assert.NotEmpty(t, msg.Origin,
+			"message[%d] (role=%s) must have a non-empty Origin field", i, msg.Role)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sigil-7g5.892 — Role-derived Origin fallback for messages with empty Origin
+// ---------------------------------------------------------------------------
+
+// TestAgentLoop_InvalidOriginFallback verifies that when a message is loaded from
+// the session store with an empty (invalid) Origin field, the agent loop falls back
+// to the role-derived Origin before sending the message to the provider.
+// This covers the legacy-migration path in prepare() where stored messages may not
+// have the Origin column populated.
+func TestAgentLoop_InvalidOriginFallback(t *testing.T) {
+	tests := []struct {
+		name       string
+		role       store.MessageRole
+		wantOrigin types.Origin
+	}{
+		{
+			name:       "assistant message with empty Origin falls back to OriginSystem",
+			role:       store.MessageRoleAssistant,
+			wantOrigin: types.OriginSystem,
+		},
+		{
+			name:       "user message with empty Origin falls back to OriginUserInput",
+			role:       store.MessageRoleUser,
+			wantOrigin: types.OriginUserInput,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm, ss := newMockSessionManagerWithStore()
+			ctx := context.Background()
+
+			session, err := sm.Create(ctx, "ws-1", "user-1")
+			require.NoError(t, err)
+
+			// Inject a pre-existing message directly into the store with an empty
+			// Origin field, simulating a legacy record that pre-dates the Origin column.
+			legacyMsg := &store.Message{
+				ID:        "legacy-msg-1",
+				SessionID: session.ID,
+				Role:      tt.role,
+				Content:   "legacy content",
+				Origin:    "", // intentionally empty / invalid
+			}
+			require.NoError(t, ss.AppendMessage(ctx, session.ID, legacyMsg))
+
+			// For an assistant message we need a follow-up user turn so the loop has
+			// something to respond to. For a user message the direct ProcessMessage
+			// will add its own user message after the legacy one.
+			capturer := &mockProviderCapturing{}
+			cfg := newTestLoopConfig(t)
+			cfg.SessionManager = sm
+			cfg.ProviderRouter = newMockProviderRouterCapturing(capturer)
+			loop, err := agent.NewLoop(cfg)
+			require.NoError(t, err)
+
+			_, err = loop.ProcessMessage(ctx, agent.InboundMessage{
+				SessionID:   session.ID,
+				WorkspaceID: "ws-1",
+				UserID:      "user-1",
+				Content:     "follow-up message",
+			})
+			require.NoError(t, err)
+
+			messages := capturer.getCapturedMessages()
+			require.NotEmpty(t, messages, "provider should have received messages")
+
+			// Find the legacy message in the provider's message array and assert it
+			// has the role-derived Origin, not an empty one.
+			var found bool
+			for _, msg := range messages {
+				if msg.Content == "legacy content" {
+					found = true
+					assert.Equal(t, tt.wantOrigin, msg.Origin,
+						"legacy message with empty Origin must use role-derived fallback, got %q", msg.Origin)
+					assert.NotEmpty(t, msg.Origin,
+						"role-derived fallback must produce a non-empty Origin")
+				}
+			}
+			assert.True(t, found, "legacy message should appear in the provider's message array")
+
+			// All messages must have non-empty Origin regardless of their source.
+			for i, msg := range messages {
+				assert.NotEmpty(t, msg.Origin,
+					"message[%d] (role=%s, content=%q) must have a non-empty Origin", i, msg.Role, msg.Content)
+			}
+		})
+	}
 }

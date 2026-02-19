@@ -51,6 +51,10 @@ func NewScannerModesFromConfig(cfg config.ScannerConfig) (ScannerModes, error) {
 		return ScannerModes{}, err
 	}
 	modes.DisableOriginTagging = cfg.DisableOriginTagging
+	// NOTE: AllowPermissiveInputMode is intentionally not copied here.
+	// It is an admission gate enforced by config.Validate() before this
+	// function is called. See config.go Validate() for the permissive
+	// input mode check.
 	if err := modes.Validate(); err != nil {
 		return ScannerModes{}, err
 	}

@@ -52,6 +52,17 @@ func TestApplyMode(t *testing.T) {
 			wantErr:     false,
 			wantContent: "SYSTEM: secret prompt here",
 		},
+		// Finding sigil-7g5.887 — flag mode on output stage with actual threat must
+		// return the original content un-redacted and un-blocked, distinguishing it
+		// from redact (which replaces matches) and block (which returns an error).
+		{
+			name:        "flag mode output stage returns content un-redacted with threat",
+			content:     "Your key is AKIAIOSFODNN7EXAMPLE",
+			stage:       types.ScanStageOutput,
+			mode:        types.ScannerModeFlag,
+			wantErr:     false,
+			wantContent: "Your key is AKIAIOSFODNN7EXAMPLE",
+		},
 		// Finding .263 — stage-specific error codes for block mode.
 		{
 			name:        "block mode tool stage returns CodeSecurityScannerToolBlocked",

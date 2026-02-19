@@ -12,3 +12,8 @@ import (
 var ConvertMessages = func(msgs []provider.Message, originTagging bool) ([]*genai.Content, error) {
 	return convertMessages(msgs, originTagging)
 }
+
+// BuildConfig exposes buildConfig for white-box testing.
+var BuildConfig = func(req provider.ChatRequest) *genai.GenerateContentConfig {
+	return buildConfig(req)
+}

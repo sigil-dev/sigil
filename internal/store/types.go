@@ -68,12 +68,6 @@ const (
 // Aliased from pkg/types for backward compatibility.
 type ScanStage = types.ScanStage
 
-const (
-	ScanStageInput  ScanStage = types.ScanStageInput
-	ScanStageTool   ScanStage = types.ScanStageTool
-	ScanStageOutput ScanStage = types.ScanStageOutput
-)
-
 // ThreatInfo records security scanner findings for audit persistence.
 //
 // Three semantic states are encoded using the Scanned and Detected fields:
@@ -106,6 +100,14 @@ type ThreatInfo struct {
 	// Audit queries MUST treat Bypassed=true as distinct
 	// from a confirmed clean scan result.
 	Bypassed bool `json:"bypassed,omitempty"`
+	// MatchCount is the total number of pattern matches from the scan.
+	// Populated only when Detected=true (zero otherwise). Used to enrich
+	// audit entries so operators can assess threat volume without re-scanning.
+	MatchCount int `json:"match_count,omitempty"`
+	// HighestSeverity is the severity of the most severe match from the scan.
+	// Populated only when Detected=true (empty string otherwise). Stored as a
+	// string to avoid a cross-package import cycle between store and scanner.
+	HighestSeverity string `json:"highest_severity,omitempty"`
 }
 
 // NewCleanScan returns a ThreatInfo for content that was scanned and found clean.

@@ -267,6 +267,14 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 		var loopUsage *provider.Usage
 		loopText, loopUsage, err = l.runToolLoop(ctx, msg, session, messages, text, toolCalls, usage)
 		if err != nil {
+			if sigilerr.IsScannerCode(err) {
+				slog.ErrorContext(ctx, "tool scan blocked tool loop",
+					slog.String("session_id", msg.SessionID),
+					slog.String("workspace_id", msg.WorkspaceID),
+					slog.Any("error", err),
+					slog.Any("error_code", sigilerr.CodeOf(err)),
+				)
+			}
 			return nil, err
 		}
 		text = loopText
@@ -277,12 +285,21 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	out, outputThreat, err := l.respond(ctx, msg.SessionID, msg.WorkspaceID, text, usage)
 	if err != nil {
 		if sigilerr.IsScannerCode(err) {
-			slog.ErrorContext(ctx, "output scan rejected LLM response",
-				slog.String("session_id", msg.SessionID),
-				slog.String("workspace_id", msg.WorkspaceID),
-				slog.Any("error", err),
-				slog.Any("error_code", sigilerr.CodeOf(err)),
-			)
+			if sigilerr.HasCode(err, sigilerr.CodeSecurityScannerEmptyRuleStage) {
+				slog.ErrorContext(ctx, "scanner misconfigured: no rules for output stage — all output blocked",
+					slog.String("session_id", msg.SessionID),
+					slog.String("workspace_id", msg.WorkspaceID),
+					slog.Any("error", err),
+					slog.Any("error_code", sigilerr.CodeOf(err)),
+				)
+			} else {
+				slog.ErrorContext(ctx, "output scan rejected LLM response",
+					slog.String("session_id", msg.SessionID),
+					slog.String("workspace_id", msg.WorkspaceID),
+					slog.Any("error", err),
+					slog.Any("error_code", sigilerr.CodeOf(err)),
+				)
+			}
 			// Skip audit for context cancellation: cancellation is infrastructure,
 			// not a security threat, and should not pollute audit logs.
 			if !sigilerr.HasCode(err, sigilerr.CodeSecurityScannerCancelled) {
@@ -437,10 +454,6 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 		"session_id", msg.SessionID,
 		"workspace_id", msg.WorkspaceID,
 	)
-	// Note: msg.Content is replaced with the scanner-normalized form.
-	// scanner.Normalize applies HTML entity decoding, zero-width character
-	// stripping, and NFKC normalization. The normalized content is persisted,
-	// not the original user input.
 	msg.Content = scanned
 
 	session, err := l.sessions.Get(ctx, msg.SessionID)
@@ -486,11 +499,16 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 	for _, m := range history {
 		origin := types.Origin(m.Origin)
 		if !origin.Valid() {
-			slog.WarnContext(ctx, "message has invalid origin, falling back to role-derived",
+			logLevel := slog.LevelWarn
+			if m.Role == store.MessageRoleAssistant {
+				logLevel = slog.LevelError
+			}
+			slog.Log(ctx, logLevel, "message has invalid origin, falling back to role-derived",
 				slog.String("message_id", m.ID),
 				slog.String("stored_origin", m.Origin),
 				slog.String("role", string(m.Role)),
 				slog.String("session_id", msg.SessionID),
+				slog.String("error_code", string(sigilerr.CodeStoreInvalidInput)),
 			)
 			origin = originFromRole(m.Role)
 		}
@@ -1061,6 +1079,12 @@ func (l *Loop) auditToolScan(ctx context.Context, msg InboundMessage, toolCallID
 			action = "agent_loop.tool_scan_threat"
 			details["threat_detected"] = true
 			details["threat_rules"] = threatInfo.Rules
+			if threatInfo.MatchCount > 0 {
+				details["match_count"] = threatInfo.MatchCount
+			}
+			if threatInfo.HighestSeverity != "" {
+				details["highest_severity"] = threatInfo.HighestSeverity
+			}
 		}
 	} else {
 		// Defensive: handleToolScanFailure always returns non-nil ThreatInfo,
@@ -1083,8 +1107,13 @@ func (l *Loop) auditToolScan(ctx context.Context, msg InboundMessage, toolCallID
 		details["error_code"] = string(sigilerr.CodeOf(scanErr))
 	} else if scanErr != nil {
 		// Content was not blocked — it was passed through unscanned (bypassed).
-		// Use "bypassed" rather than "blocked" to accurately reflect the outcome.
-		result = "bypassed"
+		// Distinguish circuit-breaker trips from ordinary bypasses so audit consumers
+		// can identify when the scanner is degraded rather than just busy.
+		if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerCircuitBreakerOpen) {
+			result = "circuit_breaker_open"
+		} else {
+			result = "bypassed"
+		}
 		details["scan_error"] = scanErr.Error()
 		details["error_code"] = string(sigilerr.CodeOf(scanErr))
 	} else if threatInfo != nil && threatInfo.Bypassed {
@@ -1138,6 +1167,13 @@ type scanRequest struct {
 	scannerFailCount *int // nil for non-tool stages
 }
 
+func (r scanRequest) scanContext() scanner.ScanContext {
+	return scanner.NewScanContext(r.stage, r.origin, map[string]string{
+		"session_id":   r.sessionID,
+		"workspace_id": r.workspaceID,
+	})
+}
+
 // maxToolContentScanSize is the truncation limit applied to oversized tool results
 // before re-scanning. A malicious tool could return content larger than the scanner's
 // maximum (1MB) to trigger a content_too_large error and bypass scanning. Truncating
@@ -1175,10 +1211,7 @@ const truncationMarker = "\n\n[TRUNCATED: tool result exceeded scan limit]"
 // pointer, and MUST NOT treat a nil ThreatInfo as "no threat detected".
 func (l *Loop) scanContent(ctx context.Context, content string, req scanRequest) (string, *store.ThreatInfo, error) {
 	log := slog.With(slog.String("session_id", req.sessionID), slog.String("workspace_id", req.workspaceID))
-	scanResult, scanErr := l.scanner.Scan(ctx, content, scanner.NewScanContext(req.stage, req.origin, map[string]string{
-		"session_id":   req.sessionID,
-		"workspace_id": req.workspaceID,
-	}))
+	scanResult, scanErr := l.scanner.Scan(ctx, content, req.scanContext())
 	if scanErr != nil {
 		// ── Category 1: Cancellation — always fail-closed (all stages) ──────────────
 		// Context cancellation is handled first since it applies uniformly to all
@@ -1193,8 +1226,7 @@ func (l *Loop) scanContent(ctx context.Context, content string, req scanRequest)
 			// Nil-ThreatInfo cancellation path: returns ("", nil, err) with
 			// CodeSecurityScannerCancelled. ThreatInfo is nil here — it does NOT
 			// mean "no threat". Callers must guard on sigilerr.HasCode before use.
-			return "", nil, sigilerr.Wrapf(scanErr, sigilerr.CodeSecurityScannerCancelled,
-				"scanning %s content cancelled", req.stage)
+			return "", nil, scanErr
 		}
 
 		// ── Configuration error: empty rule stage ────────────────────────────────
@@ -1250,6 +1282,9 @@ func (l *Loop) scanContent(ctx context.Context, content string, req scanRequest)
 // generic best-effort path (increment scannerFailCount, log, and either circuit-break or
 // return normalized content).
 func (l *Loop) scanOversizedToolContent(ctx context.Context, content string, req scanRequest, primaryScanErr error, log *slog.Logger) (string, *store.ThreatInfo, error) {
+	if req.scannerFailCount == nil {
+		panic("scanOversizedToolContent called without scannerFailCount")
+	}
 	// Truncate to strictly below the scanner limit so the re-scan cannot hit
 	// content_too_large again on the raw bytes (normalization expansion may
 	// still cause a double-failure, which is handled below).
@@ -1265,10 +1300,7 @@ func (l *Loop) scanOversizedToolContent(ctx context.Context, content string, req
 		slog.Int("truncated_size", len(truncated)),
 		slog.Any("stage", req.stage),
 	)
-	reScanResult, reScanErr := l.scanner.Scan(ctx, truncated, scanner.NewScanContext(req.stage, req.origin, map[string]string{
-		"session_id":   req.sessionID,
-		"workspace_id": req.workspaceID,
-	}))
+	reScanResult, reScanErr := l.scanner.Scan(ctx, truncated, req.scanContext())
 	if reScanErr == nil {
 		// Re-scan succeeded: apply mode against the truncated+scanned result,
 		// then append a truncation marker so the LLM is informed the result was cut.
@@ -1294,7 +1326,7 @@ func (l *Loop) scanOversizedToolContent(ctx context.Context, content string, req
 			slog.Any("stage", req.stage),
 			slog.String("error_code", string(sigilerr.CodeSecurityScannerContentTooLarge)),
 		)
-		return scanner.Normalize(truncated), store.NewBypassedScan(store.ScanStageTool), nil
+		return scanner.Normalize(truncated), store.NewBypassedScan(types.ScanStageTool), nil
 	}
 
 	// Re-scan also failed: delegate to handleToolScanFailure for circuit-breaker
@@ -1394,12 +1426,19 @@ func collectMatchRules(ctx context.Context, log *slog.Logger, stage types.ScanSt
 	return rules, highestSeverity
 }
 
-// logThreatDetection emits a warn-level log for a threat detection. Flag mode gets
-// enhanced logging with content hash and highest severity; other modes get a
-// consolidated summary.
+// logThreatDetection emits a log for a threat detection. Flag mode gets enhanced
+// logging with content hash and highest severity; high-severity flag-mode
+// detections are escalated to Error level. Other modes log at Warn.
 func logThreatDetection(ctx context.Context, log *slog.Logger, mode types.ScannerMode, stage types.ScanStage, highestSeverity scanner.Severity, scanResult scanner.ScanResult) {
 	if mode == types.ScannerModeFlag {
-		log.LogAttrs(ctx, slog.LevelWarn, "scanner flag mode: threats detected in content",
+		// Escalate to Error for high-severity flag-mode detections: the content is
+		// passed through unblocked, so a high-severity match warrants immediate
+		// operator attention beyond a mere warning.
+		level := slog.LevelWarn
+		if highestSeverity.Rank() >= scanner.SeverityHigh.Rank() {
+			level = slog.LevelError
+		}
+		log.LogAttrs(ctx, level, "scanner flag mode: threats detected in content",
 			slog.Int("match_count", len(scanResult.Matches)),
 			slog.String("highest_severity", string(highestSeverity)),
 			slog.String("scanner_mode", string(mode)),
@@ -1428,6 +1467,8 @@ func (l *Loop) applyScannedResult(ctx context.Context, stage types.ScanStage, mo
 	if scanResult.Threat {
 		rules, highestSeverity := collectMatchRules(ctx, log, stage, mode, scanResult.Matches)
 		threat = store.NewThreatDetected(stage, rules)
+		threat.MatchCount = len(scanResult.Matches)
+		threat.HighestSeverity = string(highestSeverity)
 		logThreatDetection(ctx, log, mode, stage, highestSeverity, scanResult)
 	} else {
 		threat = store.NewCleanScan(stage)
@@ -1442,7 +1483,6 @@ func (l *Loop) applyScannedResult(ctx context.Context, stage types.ScanStage, mo
 
 	return scanned, threat, nil
 }
-
 
 // AuditFailCount returns the current consecutive audit failure count for the
 // general interaction audit(). Exposed for testing to verify best-effort audit

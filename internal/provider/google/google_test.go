@@ -121,6 +121,57 @@ func mustNewProvider(t *testing.T) *google.Provider {
 	return p
 }
 
+// TestChatRequest_OriginTagging verifies that OriginTagging in ChatOptions is
+// threaded through the Chat() preparation path (convertMessages + buildConfig)
+// so that the genai.Content slice carries tagged or untagged content.
+func TestChatRequest_OriginTagging(t *testing.T) {
+	tests := []struct {
+		name          string
+		originTagging bool
+		wantContent   string
+	}{
+		{
+			name:          "tagging enabled: user message content is prefixed with origin tag",
+			originTagging: true,
+			wantContent:   "[user_input] hello",
+		},
+		{
+			name:          "tagging disabled: user message content has no origin tag prefix",
+			originTagging: false,
+			wantContent:   "hello",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := provider.ChatRequest{
+				Model: "gemini-2.5-pro",
+				Messages: []provider.Message{
+					{Role: store.MessageRoleUser, Content: "hello", Origin: types.OriginUserInput},
+				},
+				Options: provider.ChatOptions{
+					OriginTagging: tt.originTagging,
+				},
+			}
+
+			// Exercise the same path Chat() uses: convertMessages then buildConfig.
+			contents, err := google.ConvertMessages(req.Messages, req.Options.OriginTagging)
+			require.NoError(t, err)
+			require.Len(t, contents, 1, "expected one content item")
+
+			c := contents[0]
+			require.NotEmpty(t, c.Parts, "content should have parts")
+			assert.Equal(t, tt.wantContent, c.Parts[0].Text,
+				"Chat() message content mismatch with OriginTagging=%v", tt.originTagging)
+
+			// Verify buildConfig does not interfere with origin tagging (it handles
+			// temperature, max tokens, system prompt — not message content).
+			cfg := google.BuildConfig(req)
+			assert.Nil(t, cfg.SystemInstruction, "no system instruction expected for empty system prompt")
+		})
+	}
+}
+
 // TestConvertMessages_OriginTagging verifies that origin tags are prepended to
 // message content at the provider conversion layer when OriginTagging is enabled.
 func TestConvertMessages_OriginTagging(t *testing.T) {

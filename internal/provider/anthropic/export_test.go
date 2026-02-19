@@ -12,3 +12,8 @@ import (
 var ConvertMessages = func(msgs []provider.Message, originTagging bool) ([]anthropicsdk.MessageParam, error) {
 	return convertMessages(msgs, originTagging)
 }
+
+// BuildParams exposes buildParams for white-box testing.
+var BuildParams = func(req provider.ChatRequest) (anthropicsdk.MessageNewParams, error) {
+	return buildParams(req)
+}

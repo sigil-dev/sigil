@@ -111,6 +111,53 @@ func mustNewProvider(t *testing.T) *anthropic.Provider {
 	return p
 }
 
+// TestBuildParams_OriginTagging verifies that OriginTagging in ChatOptions is
+// threaded through buildParams — the function Chat() delegates to — so that
+// the Anthropic SDK MessageNewParams carries tagged or untagged content.
+func TestBuildParams_OriginTagging(t *testing.T) {
+	tests := []struct {
+		name          string
+		originTagging bool
+		wantContent   string
+	}{
+		{
+			name:          "tagging enabled: user message content is prefixed with origin tag",
+			originTagging: true,
+			wantContent:   "[user_input] hello",
+		},
+		{
+			name:          "tagging disabled: user message content has no origin tag prefix",
+			originTagging: false,
+			wantContent:   "hello",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := provider.ChatRequest{
+				Model: "claude-opus-4-6",
+				Messages: []provider.Message{
+					{Role: store.MessageRoleUser, Content: "hello", Origin: types.OriginUserInput},
+				},
+				Options: provider.ChatOptions{
+					OriginTagging: tt.originTagging,
+				},
+			}
+
+			params, err := anthropic.BuildParams(req)
+			require.NoError(t, err)
+			require.Len(t, params.Messages, 1, "expected one message in params")
+
+			msg := params.Messages[0]
+			require.NotEmpty(t, msg.Content, "message content should not be empty")
+			block := msg.Content[0]
+			require.NotNil(t, block.OfText, "expected text block")
+			assert.Equal(t, tt.wantContent, block.OfText.Text,
+				"buildParams message content mismatch with OriginTagging=%v", tt.originTagging)
+		})
+	}
+}
+
 // TestConvertMessages_OriginTagging verifies that origin tags are prepended to
 // message content at the provider conversion layer when OriginTagging is enabled.
 func TestConvertMessages_OriginTagging(t *testing.T) {

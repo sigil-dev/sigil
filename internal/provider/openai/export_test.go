@@ -12,3 +12,8 @@ import (
 var ConvertMessages = func(msgs []provider.Message, systemPrompt string, originTagging bool) ([]openaisdk.ChatCompletionMessageParamUnion, error) {
 	return convertMessages(msgs, systemPrompt, originTagging)
 }
+
+// BuildParams exposes buildParams for white-box testing.
+var BuildParams = func(req provider.ChatRequest) (openaisdk.ChatCompletionNewParams, error) {
+	return buildParams(req)
+}

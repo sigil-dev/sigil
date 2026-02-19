@@ -461,8 +461,13 @@ func DefaultRules() ([]Rule, error) {
 // collides with a Sigil rule is excluded.
 func applyDBOverrides(db []Rule, stage types.ScanStage) []Rule {
 	sigil := sigilSpecificRules(stage)
+	override := make(map[string]struct{}, len(sigil))
+	for _, s := range sigil {
+		override[s.name] = struct{}{}
+	}
 	filtered := slices.DeleteFunc(slices.Clone(db), func(r Rule) bool {
-		return slices.ContainsFunc(sigil, func(s Rule) bool { return s.name == r.name })
+		_, ok := override[r.name]
+		return ok
 	})
 	return append(filtered, sigil...)
 }
