@@ -2984,10 +2984,10 @@ func TestAgentLoop_ToolScanContentTooLarge_TruncatesAndRescans(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	// Build a tool result larger than agent.MaxToolContentScanSize (512KB).
-	// The mock scanner uses MaxToolContentScanSize as its threshold so that
-	// content[:MaxToolContentScanSize] passes on re-scan.
-	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+	// Build a tool result larger than agent.DefaultMaxToolContentScanSize (512KB).
+	// The mock scanner uses DefaultMaxToolContentScanSize as its threshold so that
+	// content[:DefaultMaxToolContentScanSize] passes on re-scan.
+	oversizedResult := strings.Repeat("x", agent.DefaultMaxToolContentScanSize+100)
 
 	toolCallProvider := &mockProviderToolCall{
 		toolCall: &provider.ToolCall{
@@ -3008,7 +3008,7 @@ func TestAgentLoop_ToolScanContentTooLarge_TruncatesAndRescans(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sc := &mockToolContentTooLargeScanner{sizeThreshold: agent.MaxToolContentScanSize}
+	sc := &mockToolContentTooLargeScanner{sizeThreshold: agent.DefaultMaxToolContentScanSize}
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
@@ -3034,7 +3034,7 @@ func TestAgentLoop_ToolScanContentTooLarge_TruncatesAndRescans(t *testing.T) {
 	assert.Equal(t, 2, sc.scanCount, "expected two tool-stage scan calls: initial + re-scan after truncation")
 
 	// The content seen by the re-scan must be within the truncation limit.
-	assert.LessOrEqual(t, len(sc.lastToolContent), agent.MaxToolContentScanSize,
+	assert.LessOrEqual(t, len(sc.lastToolContent), agent.DefaultMaxToolContentScanSize,
 		"re-scanned content must be <= maxToolContentScanSize")
 
 	// Successful truncation+rescan is not a scanner failure — no circuit breaker effect.
@@ -3057,7 +3057,7 @@ func TestAgentLoop_ToolScanTruncation_UTF8Boundary(t *testing.T) {
 
 	// Prefix: ASCII fill so that the 4-byte emoji starts 3 bytes before the
 	// truncation boundary, ensuring the cut lands in the middle of the sequence.
-	prefixLen := agent.MaxToolContentScanSize - 3
+	prefixLen := agent.DefaultMaxToolContentScanSize - 3
 	prefix := strings.Repeat("a", prefixLen)
 	emoji := "\U0001F600" // 4 bytes: 0xF0 0x9F 0x98 0x80
 	// Suffix pushes total length past the limit so truncation is triggered.
@@ -3082,7 +3082,7 @@ func TestAgentLoop_ToolScanTruncation_UTF8Boundary(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sc := &mockToolContentTooLargeScanner{sizeThreshold: agent.MaxToolContentScanSize}
+	sc := &mockToolContentTooLargeScanner{sizeThreshold: agent.DefaultMaxToolContentScanSize}
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
@@ -3108,7 +3108,7 @@ func TestAgentLoop_ToolScanTruncation_UTF8Boundary(t *testing.T) {
 		"truncated content must be valid UTF-8; got invalid sequence")
 
 	// Must be within the size limit.
-	assert.LessOrEqual(t, len(sc.lastToolContent), agent.MaxToolContentScanSize,
+	assert.LessOrEqual(t, len(sc.lastToolContent), agent.DefaultMaxToolContentScanSize,
 		"truncated content must be <= maxToolContentScanSize")
 }
 
@@ -3141,7 +3141,7 @@ func TestAgentLoop_ToolScanOversized_BothScansContentTooLarge(t *testing.T) {
 	// reject both the original AND truncated content for every call.
 	// If scannerFailCount were incremented on this path, the circuit breaker
 	// would trip before the last tool call and ProcessMessage would error.
-	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+	oversizedResult := strings.Repeat("x", agent.DefaultMaxToolContentScanSize+100)
 	toolCalls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
 	for i := range toolCalls {
 		toolCalls[i] = &provider.ToolCall{
@@ -4477,7 +4477,7 @@ func TestAgentLoop_ToolScanDoubleFailure_BelowThreshold(t *testing.T) {
 
 	// Content must be larger than maxToolContentScanSize (512KB) so the initial
 	// scan returns CodeSecurityScannerContentTooLarge.
-	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+1)
+	oversizedResult := strings.Repeat("x", agent.DefaultMaxToolContentScanSize+1)
 
 	toolCallProvider := &mockProviderToolCall{
 		toolCall: &provider.ToolCall{
@@ -4551,7 +4551,7 @@ func TestAgentLoop_ToolScanDoubleFailure_AtThreshold(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build threshold tool calls so double-failures accumulate to the limit.
-	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+1)
+	oversizedResult := strings.Repeat("x", agent.DefaultMaxToolContentScanSize+1)
 	toolCalls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
 	for i := range toolCalls {
 		toolCalls[i] = &provider.ToolCall{
@@ -5864,7 +5864,7 @@ func TestAgentLoop_ToolScan_ReScanAlsoContentTooLarge_DoesNotIncrementCircuitBre
 	// double-ContentTooLarge path must NOT increment the counter.
 
 	// Content larger than maxToolContentScanSize triggers the re-scan path.
-	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+	oversizedResult := strings.Repeat("x", agent.DefaultMaxToolContentScanSize+100)
 
 	sc := &mockToolAlwaysContentTooLargeScanner{}
 
@@ -6628,10 +6628,10 @@ func TestAgentLoop_ToolScanContentTooLarge_TruncationMarkerInHistory(t *testing.
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	// Build a tool result larger than MaxToolContentScanSize so truncation triggers.
-	// The mock scanner uses MaxToolContentScanSize as its threshold so that
-	// the truncated content (< MaxToolContentScanSize) passes on re-scan.
-	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+	// Build a tool result larger than DefaultMaxToolContentScanSize so truncation triggers.
+	// The mock scanner uses DefaultMaxToolContentScanSize as its threshold so that
+	// the truncated content (< DefaultMaxToolContentScanSize) passes on re-scan.
+	oversizedResult := strings.Repeat("x", agent.DefaultMaxToolContentScanSize+100)
 
 	toolCallProvider := &mockProviderToolCall{
 		toolCall: &provider.ToolCall{
@@ -6652,7 +6652,7 @@ func TestAgentLoop_ToolScanContentTooLarge_TruncationMarkerInHistory(t *testing.
 	})
 	require.NoError(t, err)
 
-	sc := &mockToolContentTooLargeScanner{sizeThreshold: agent.MaxToolContentScanSize}
+	sc := &mockToolContentTooLargeScanner{sizeThreshold: agent.DefaultMaxToolContentScanSize}
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.ProviderRouter = &mockProviderRouter{provider: toolCallProvider}
@@ -6707,9 +6707,9 @@ func TestAgentLoop_ToolScanOversized_ReScanFindsThreat_Block(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-1", "user-1")
 	require.NoError(t, err)
 
-	// Content must be larger than MaxToolContentScanSize so the primary scan
+	// Content must be larger than DefaultMaxToolContentScanSize so the primary scan
 	// returns CodeSecurityScannerContentTooLarge, triggering scanOversizedToolContent.
-	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+100)
+	oversizedResult := strings.Repeat("x", agent.DefaultMaxToolContentScanSize+100)
 
 	toolCallProvider := &mockProviderToolCall{
 		toolCall: &provider.ToolCall{
@@ -6993,7 +6993,7 @@ func TestAgentLoop_ToolScanDoubleFailure_AtThreshold_NoTruncationMarker(t *testi
 	// to the circuit-breaker limit. Each tool result is oversized so the primary
 	// scan returns CodeSecurityScannerContentTooLarge; the re-scan of truncated
 	// content returns a generic scanner error (double-failure path).
-	oversizedResult := strings.Repeat("x", agent.MaxToolContentScanSize+1)
+	oversizedResult := strings.Repeat("x", agent.DefaultMaxToolContentScanSize+1)
 	toolCalls := make([]*provider.ToolCall, agent.ScannerCircuitBreakerThreshold)
 	for i := range toolCalls {
 		toolCalls[i] = &provider.ToolCall{

@@ -192,8 +192,9 @@ const maxPreNormContentLength = 5 * 1024 * 1024 // 5MB
 
 // RegexScanner implements Scanner using compiled regexes.
 type RegexScanner struct {
-	rules            []Rule
-	maxContentLength int
+	rules                  []Rule
+	maxContentLength       int
+	maxPreNormContentLength int
 }
 
 // ScannerOption configures a RegexScanner.
@@ -205,12 +206,22 @@ func WithMaxContentLength(n int) ScannerOption {
 	return func(s *RegexScanner) { s.maxContentLength = n }
 }
 
+// WithMaxPreNormContentLength sets the hard cap applied BEFORE normalization.
+// Values <= 0 cause NewRegexScanner to return an error.
+func WithMaxPreNormContentLength(n int) ScannerOption {
+	return func(s *RegexScanner) { s.maxPreNormContentLength = n }
+}
+
 // NewRegexScanner creates a scanner with the given rules and optional configuration.
 func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error) {
 	// Clone the slice to decouple ownership from the caller. *regexp.Regexp is
 	// goroutine-safe per the stdlib guarantee, so no re-compilation is needed.
 	copied := slices.Clone(rules)
-	s := &RegexScanner{rules: copied, maxContentLength: DefaultMaxContentLength}
+	s := &RegexScanner{
+		rules:                   copied,
+		maxContentLength:        DefaultMaxContentLength,
+		maxPreNormContentLength: maxPreNormContentLength,
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -221,6 +232,10 @@ func NewRegexScanner(rules []Rule, opts ...ScannerOption) (*RegexScanner, error)
 	if s.maxContentLength <= 0 {
 		return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
 			"maxContentLength must be > 0, got %d", s.maxContentLength)
+	}
+	if s.maxPreNormContentLength <= 0 {
+		return nil, sigilerr.Errorf(sigilerr.CodeSecurityScannerFailure,
+			"maxPreNormContentLength must be > 0, got %d", s.maxPreNormContentLength)
 	}
 	return s, nil
 }
@@ -304,11 +319,11 @@ func (s *RegexScanner) Scan(ctx context.Context, content string, opts ScanContex
 	// html.UnescapeString() plus NFKC normalization. Without this check an
 	// authenticated caller can POST 50MB of HTML entities and consume unbounded
 	// CPU before the post-normalization 1MB check fires.
-	if len(content) > maxPreNormContentLength {
+	if len(content) > s.maxPreNormContentLength {
 		return ScanResult{}, sigilerr.New(sigilerr.CodeSecurityScannerContentTooLarge,
 			"content exceeds pre-normalization size limit",
 			sigilerr.Field("length", len(content)),
-			sigilerr.Field("max_length", maxPreNormContentLength),
+			sigilerr.Field("max_length", s.maxPreNormContentLength),
 			sigilerr.Field("stage", string(opts.Stage)),
 		)
 	}

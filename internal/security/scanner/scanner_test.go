@@ -574,6 +574,65 @@ func TestWithMaxContentLength_LimitsContent(t *testing.T) {
 		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
 }
 
+func TestWithMaxPreNormContentLength_Validation(t *testing.T) {
+	validRule, err := scanner.NewRule("rule", regexp.MustCompile(`x`), types.ScanStageInput, scanner.SeverityLow)
+	require.NoError(t, err)
+	rules := []scanner.Rule{validRule}
+
+	tests := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{"positive value", 1024, false},
+		{"zero value", 0, true},
+		{"negative value", -1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := scanner.NewRegexScanner(rules, scanner.WithMaxPreNormContentLength(tt.value))
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "maxPreNormContentLength must be > 0")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestWithMaxPreNormContentLength_LimitsContent(t *testing.T) {
+	validRule, err := scanner.NewRule("rule", regexp.MustCompile(`x`), types.ScanStageInput, scanner.SeverityLow)
+	require.NoError(t, err)
+
+	// Set pre-norm limit to 200 bytes. Content of 201 bytes should be rejected
+	// BEFORE normalization.
+	s, err := scanner.NewRegexScanner([]scanner.Rule{validRule},
+		scanner.WithMaxContentLength(1024),
+		scanner.WithMaxPreNormContentLength(200),
+	)
+	require.NoError(t, err)
+
+	content := strings.Repeat("a", 201)
+	_, err = s.Scan(context.Background(), content, scanner.ScanContext{
+		Stage:  types.ScanStageInput,
+		Origin: types.OriginUserInput,
+	})
+	require.Error(t, err, "content of 201 bytes must be rejected with maxPreNormContentLength=200")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityScannerContentTooLarge),
+		"expected CodeSecurityScannerContentTooLarge, got: %v", err)
+
+	// 200 bytes should pass the pre-norm check (and also pass the post-norm check
+	// since maxContentLength=1024).
+	smallContent := strings.Repeat("a", 200)
+	_, err = s.Scan(context.Background(), smallContent, scanner.ScanContext{
+		Stage:  types.ScanStageInput,
+		Origin: types.OriginUserInput,
+	})
+	require.NoError(t, err, "content of 200 bytes should be accepted")
+}
+
 // Finding sigil-7g5.692 — secretRules deduplication: when a DB rule and a Sigil-specific
 // rule share the same name, the final rule set must contain exactly one rule with that
 // name, and it must be the Sigil version (verified by its pattern).

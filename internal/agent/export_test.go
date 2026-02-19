@@ -8,8 +8,11 @@ package agent
 // sanitisation logic (no fields accessed).
 var SanitizeToolError = (&Loop{}).sanitizeToolError
 
-// MaxToolContentScanSize exposes maxToolContentScanSize for white-box testing.
-const MaxToolContentScanSize = maxToolContentScanSize
+// DefaultMaxToolContentScanSize exposes defaultMaxToolContentScanSize for white-box testing.
+const DefaultMaxToolContentScanSize = defaultMaxToolContentScanSize
+
+// DefaultMaxToolResultScanSize exposes defaultMaxToolResultScanSize for white-box testing.
+const DefaultMaxToolResultScanSize = defaultMaxToolResultScanSize
 
 // ScannerCircuitBreakerThreshold exposes scannerCircuitBreakerThreshold for white-box testing.
 const ScannerCircuitBreakerThreshold = scannerCircuitBreakerThreshold

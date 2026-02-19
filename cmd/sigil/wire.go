@@ -108,7 +108,10 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "loading scanner rules: %w", err)
 	}
-	sc, err := scanner.NewRegexScanner(defaultRules)
+	sc, err := scanner.NewRegexScanner(defaultRules,
+		scanner.WithMaxContentLength(cfg.Security.Scanner.Limits.MaxContentLength),
+		scanner.WithMaxPreNormContentLength(cfg.Security.Scanner.Limits.MaxPreNormContentLength),
+	)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating security scanner: %w", err)
 	}

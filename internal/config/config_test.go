@@ -120,6 +120,12 @@ func validConfig() *config.Config {
 				Input:  "block",
 				Tool:   "block",
 				Output: "redact",
+				Limits: config.ScannerLimitsConfig{
+					MaxContentLength:        1048576,
+					MaxPreNormContentLength:  5242880,
+					MaxToolResultScanSize:    1048576,
+					MaxToolContentScanSize:   524288,
+				},
 			},
 		},
 	}
@@ -634,6 +640,146 @@ func TestConfig_ScannerModeEnvVarsRejected(t *testing.T) {
 			envVar:      "SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING",
 			envVal:      "true",
 			wantErrFrag: "security.scanner.disable_origin_tagging cannot be set via environment variable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.envVar, tt.envVal)
+
+			v := viper.New()
+			config.SetDefaults(v)
+			config.SetupEnv(v)
+
+			_, err := config.FromViper(v)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErrFrag)
+		})
+	}
+}
+
+func TestConfig_ScannerLimitsDefaults(t *testing.T) {
+	v := viper.New()
+	config.SetDefaults(v)
+
+	assert.Equal(t, 1048576, v.GetInt("security.scanner.limits.max_content_length"))
+	assert.Equal(t, 5242880, v.GetInt("security.scanner.limits.max_pre_norm_content_length"))
+	assert.Equal(t, 1048576, v.GetInt("security.scanner.limits.max_tool_result_scan_size"))
+	assert.Equal(t, 524288, v.GetInt("security.scanner.limits.max_tool_content_scan_size"))
+}
+
+func TestConfig_ScannerLimitsValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		overrides   map[string]int
+		wantErr     string
+	}{
+		{
+			name:    "defaults are valid",
+			wantErr: "",
+		},
+		{
+			name:      "max_content_length below minimum",
+			overrides: map[string]int{"security.scanner.limits.max_content_length": 1000},
+			wantErr:   "max_content_length must be >= 65536",
+		},
+		{
+			name:      "max_content_length above maximum",
+			overrides: map[string]int{"security.scanner.limits.max_content_length": 20_000_000},
+			wantErr:   "max_content_length must be <= 10485760",
+		},
+		{
+			name:      "max_pre_norm_content_length below minimum",
+			overrides: map[string]int{"security.scanner.limits.max_pre_norm_content_length": 100},
+			wantErr:   "max_pre_norm_content_length must be >= 65536",
+		},
+		{
+			name:      "max_tool_result_scan_size below minimum",
+			overrides: map[string]int{"security.scanner.limits.max_tool_result_scan_size": 0},
+			wantErr:   "max_tool_result_scan_size must be >= 65536",
+		},
+		{
+			name:      "max_tool_content_scan_size above maximum",
+			overrides: map[string]int{"security.scanner.limits.max_tool_content_scan_size": 20_000_000},
+			wantErr:   "max_tool_content_scan_size must be <= 10485760",
+		},
+		{
+			name: "tool_content_scan_size must be less than content_length",
+			overrides: map[string]int{
+				"security.scanner.limits.max_content_length":       524288,
+				"security.scanner.limits.max_tool_content_scan_size": 524288,
+			},
+			wantErr: "max_tool_content_scan_size (524288) must be < max_content_length (524288)",
+		},
+		{
+			name: "tool_result_scan_size must be >= tool_content_scan_size",
+			overrides: map[string]int{
+				"security.scanner.limits.max_tool_result_scan_size":  100000,
+				"security.scanner.limits.max_tool_content_scan_size": 200000,
+			},
+			wantErr: "max_tool_result_scan_size (100000) must be >= max_tool_content_scan_size (200000)",
+		},
+		{
+			name: "valid custom limits",
+			overrides: map[string]int{
+				"security.scanner.limits.max_content_length":         2097152,
+				"security.scanner.limits.max_pre_norm_content_length": 8388608,
+				"security.scanner.limits.max_tool_result_scan_size":  2097152,
+				"security.scanner.limits.max_tool_content_scan_size": 1048576,
+			},
+			wantErr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := viper.New()
+			config.SetDefaults(v)
+			for k, val := range tt.overrides {
+				v.Set(k, val)
+			}
+
+			_, err := config.FromViper(v)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfig_ScannerLimitsEnvVarsRejected(t *testing.T) {
+	tests := []struct {
+		name        string
+		envVar      string
+		envVal      string
+		wantErrFrag string
+	}{
+		{
+			name:        "max_content_length env var rejected",
+			envVar:      "SIGIL_SECURITY_SCANNER_LIMITS_MAX_CONTENT_LENGTH",
+			envVal:      "2097152",
+			wantErrFrag: "max_content_length cannot be set via environment variable",
+		},
+		{
+			name:        "max_pre_norm_content_length env var rejected",
+			envVar:      "SIGIL_SECURITY_SCANNER_LIMITS_MAX_PRE_NORM_CONTENT_LENGTH",
+			envVal:      "8388608",
+			wantErrFrag: "max_pre_norm_content_length cannot be set via environment variable",
+		},
+		{
+			name:        "max_tool_result_scan_size env var rejected",
+			envVar:      "SIGIL_SECURITY_SCANNER_LIMITS_MAX_TOOL_RESULT_SCAN_SIZE",
+			envVal:      "2097152",
+			wantErrFrag: "max_tool_result_scan_size cannot be set via environment variable",
+		},
+		{
+			name:        "max_tool_content_scan_size env var rejected",
+			envVar:      "SIGIL_SECURITY_SCANNER_LIMITS_MAX_TOOL_CONTENT_SCAN_SIZE",
+			envVal:      "524288",
+			wantErrFrag: "max_tool_content_scan_size cannot be set via environment variable",
 		},
 	}
 

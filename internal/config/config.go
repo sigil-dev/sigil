@@ -125,10 +125,11 @@ type SecurityConfig struct {
 
 // ScannerConfig controls per-hook scanner detection modes.
 type ScannerConfig struct {
-	Input                    types.ScannerMode `mapstructure:"input"`
-	Tool                     types.ScannerMode `mapstructure:"tool"`
-	Output                   types.ScannerMode `mapstructure:"output"`
-	AllowPermissiveInputMode bool              `mapstructure:"allow_permissive_input_mode"`
+	Input                    types.ScannerMode  `mapstructure:"input"`
+	Tool                     types.ScannerMode  `mapstructure:"tool"`
+	Output                   types.ScannerMode  `mapstructure:"output"`
+	AllowPermissiveInputMode bool               `mapstructure:"allow_permissive_input_mode"`
+	Limits                   ScannerLimitsConfig `mapstructure:"limits"`
 	// DisableOriginTagging controls whether origin tag prepending is disabled.
 	// When false (the default), origin tags ([user_input], [tool_output], etc.)
 	// are prepended to message content when sending to LLM providers.
@@ -137,6 +138,23 @@ type ScannerConfig struct {
 	//
 	// The zero value (false) is the safe default: tagging enabled.
 	DisableOriginTagging bool `mapstructure:"disable_origin_tagging"`
+}
+
+// ScannerLimitsConfig controls content size limits for the security scanner pipeline.
+// All values are in bytes. See D064 and D074 in docs/decisions/decision-log.md for rationale.
+type ScannerLimitsConfig struct {
+	// MaxContentLength is the maximum content size the scanner accepts post-normalization.
+	// Content exceeding this is rejected. Default: 1MB (1048576).
+	MaxContentLength int `mapstructure:"max_content_length"`
+	// MaxPreNormContentLength is the hard cap applied BEFORE normalization to prevent
+	// CPU DoS via large inputs to Normalize(). Default: 5MB (5242880).
+	MaxPreNormContentLength int `mapstructure:"max_pre_norm_content_length"`
+	// MaxToolResultScanSize is the pre-scanner truncation limit for tool results.
+	// Tool results exceeding this are truncated before the primary scan. Default: 1MB (1048576).
+	MaxToolResultScanSize int `mapstructure:"max_tool_result_scan_size"`
+	// MaxToolContentScanSize is the truncation target for oversized tool results
+	// before re-scanning. Must be < MaxContentLength. Default: 512KB (524288).
+	MaxToolContentScanSize int `mapstructure:"max_tool_content_scan_size"`
 }
 
 // SetDefaults applies Sigil's default configuration values to v.
@@ -157,6 +175,10 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("security.scanner.output", "redact")
 	v.SetDefault("security.scanner.allow_permissive_input_mode", false)
 	v.SetDefault("security.scanner.disable_origin_tagging", false)
+	v.SetDefault("security.scanner.limits.max_content_length", 1048576)          // 1MB
+	v.SetDefault("security.scanner.limits.max_pre_norm_content_length", 5242880) // 5MB
+	v.SetDefault("security.scanner.limits.max_tool_result_scan_size", 1048576)   // 1MB
+	v.SetDefault("security.scanner.limits.max_tool_content_scan_size", 524288)   // 512KB
 }
 
 // SetupEnv configures environment variable binding on v with prefix SIGIL_.
@@ -438,6 +460,43 @@ func (c *Config) ValidateSecurity() []error {
 		))
 	}
 
+	// Validate scanner limits: range checks ensure limits are within safe bounds.
+	// Min 64KB (below this scanning is effectively useless), max 10MB (above this risks CPU DoS).
+	const (
+		scannerLimitMin = 65536      // 64KB
+		scannerLimitMax = 10485760   // 10MB
+	)
+	limits := c.Security.Scanner.Limits
+	for _, lv := range []struct {
+		field string
+		value int
+	}{
+		{"security.scanner.limits.max_content_length", limits.MaxContentLength},
+		{"security.scanner.limits.max_pre_norm_content_length", limits.MaxPreNormContentLength},
+		{"security.scanner.limits.max_tool_result_scan_size", limits.MaxToolResultScanSize},
+		{"security.scanner.limits.max_tool_content_scan_size", limits.MaxToolContentScanSize},
+	} {
+		if lv.value < scannerLimitMin {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: %s must be >= %d (64KB), got %d", lv.field, scannerLimitMin, lv.value))
+		} else if lv.value > scannerLimitMax {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: %s must be <= %d (10MB), got %d", lv.field, scannerLimitMax, lv.value))
+		}
+	}
+	// Cross-field constraints: truncation target must be below scan limit,
+	// and pre-scanner truncation must be >= post-scanner truncation target.
+	if limits.MaxToolContentScanSize >= limits.MaxContentLength {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: security.scanner.limits.max_tool_content_scan_size (%d) must be < max_content_length (%d)",
+			limits.MaxToolContentScanSize, limits.MaxContentLength))
+	}
+	if limits.MaxToolResultScanSize < limits.MaxToolContentScanSize {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: security.scanner.limits.max_tool_result_scan_size (%d) must be >= max_tool_content_scan_size (%d)",
+			limits.MaxToolResultScanSize, limits.MaxToolContentScanSize))
+	}
+
 	// Scanner mode env vars are rejected at validate-time to prevent environment
 	// variable injection from weakening security scanning in production. Environment
 	// variables are less auditable than config files (they can be injected by
@@ -472,6 +531,10 @@ func (c *Config) ValidateSecurity() []error {
 		{"SIGIL_SECURITY_SCANNER_TOOL", "security.scanner.tool", false},
 		{"SIGIL_SECURITY_SCANNER_OUTPUT", "security.scanner.output", false},
 		{"SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING", "security.scanner.disable_origin_tagging", true},
+		{"SIGIL_SECURITY_SCANNER_LIMITS_MAX_CONTENT_LENGTH", "security.scanner.limits.max_content_length", false},
+		{"SIGIL_SECURITY_SCANNER_LIMITS_MAX_PRE_NORM_CONTENT_LENGTH", "security.scanner.limits.max_pre_norm_content_length", false},
+		{"SIGIL_SECURITY_SCANNER_LIMITS_MAX_TOOL_RESULT_SCAN_SIZE", "security.scanner.limits.max_tool_result_scan_size", false},
+		{"SIGIL_SECURITY_SCANNER_LIMITS_MAX_TOOL_CONTENT_SCAN_SIZE", "security.scanner.limits.max_tool_content_scan_size", false},
 	}
 	for _, blocked := range blockedScannerEnvVars {
 		val := os.Getenv(blocked.envVar)

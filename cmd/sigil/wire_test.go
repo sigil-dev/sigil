@@ -32,6 +32,16 @@ func testGatewayConfig() *config.Config {
 		Storage: config.StorageConfig{
 			Backend: "sqlite",
 		},
+		Security: config.SecurityConfig{
+			Scanner: config.ScannerConfig{
+				Limits: config.ScannerLimitsConfig{
+					MaxContentLength:        1048576,
+					MaxPreNormContentLength:  5242880,
+					MaxToolResultScanSize:    1048576,
+					MaxToolContentScanSize:   524288,
+				},
+			},
+		},
 	}
 }
 

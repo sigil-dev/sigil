@@ -140,6 +140,12 @@ type LoopConfig struct {
 	Hooks               *LoopHooks
 	Scanner             scanner.Scanner
 	ScannerModes        ScannerModes
+	// MaxToolResultScanSize is the pre-scanner truncation limit for tool results.
+	// When <= 0, defaults to 1MB.
+	MaxToolResultScanSize int
+	// MaxToolContentScanSize is the truncation target for oversized tool results
+	// before re-scanning. When <= 0, defaults to 512KB.
+	MaxToolContentScanSize int
 }
 
 // Validate checks that all required fields in LoopConfig are set.
@@ -170,6 +176,8 @@ type Loop struct {
 	toolDispatcher         *ToolDispatcher
 	toolRegistry           ToolRegistry
 	maxToolCallsPerTurn    int
+	maxToolResultScanSize  int
+	maxToolContentScanSize int
 	hooks                  *LoopHooks
 	scanner                scanner.Scanner
 	scannerModes           ScannerModes
@@ -205,17 +213,28 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		maxCalls = defaultMaxToolCallsPerTurn
 	}
 
+	toolResultScanSize := cfg.MaxToolResultScanSize
+	if toolResultScanSize <= 0 {
+		toolResultScanSize = defaultMaxToolResultScanSize
+	}
+	toolContentScanSize := cfg.MaxToolContentScanSize
+	if toolContentScanSize <= 0 {
+		toolContentScanSize = defaultMaxToolContentScanSize
+	}
+
 	return &Loop{
-		sessions:            cfg.SessionManager,
-		enforcer:            cfg.Enforcer,
-		providerRouter:      cfg.ProviderRouter,
-		auditStore:          cfg.AuditStore,
-		toolDispatcher:      cfg.ToolDispatcher,
-		toolRegistry:        cfg.ToolRegistry,
-		maxToolCallsPerTurn: maxCalls,
-		hooks:               orDefaultHooks(cfg.Hooks),
-		scanner:             cfg.Scanner,
-		scannerModes:        cfg.ScannerModes,
+		sessions:               cfg.SessionManager,
+		enforcer:               cfg.Enforcer,
+		providerRouter:         cfg.ProviderRouter,
+		auditStore:             cfg.AuditStore,
+		toolDispatcher:         cfg.ToolDispatcher,
+		toolRegistry:           cfg.ToolRegistry,
+		maxToolCallsPerTurn:    maxCalls,
+		maxToolResultScanSize:  toolResultScanSize,
+		maxToolContentScanSize: toolContentScanSize,
+		hooks:                  orDefaultHooks(cfg.Hooks),
+		scanner:                cfg.Scanner,
+		scannerModes:           cfg.ScannerModes,
 	}, nil
 }
 
@@ -815,14 +834,14 @@ func (l *Loop) runToolLoop(
 			// large-but-oversized tool responses (e.g. web fetches) from triggering
 			// the ContentTooLarge path and incrementing the circuit-breaker counter,
 			// which would otherwise cause a per-turn DoS (sigil-7g5.947).
-			if len(resultContent) > maxToolResultScanSize {
+			if len(resultContent) > l.maxToolResultScanSize {
 				slog.DebugContext(ctx, "tool result truncated before scan",
 					slog.String("session_id", msg.SessionID),
 					slog.String("tool_name", tc.Name),
 					slog.Int("original_len", len(resultContent)),
-					slog.Int("truncated_to", maxToolResultScanSize),
+					slog.Int("truncated_to", l.maxToolResultScanSize),
 				)
-				resultContent = resultContent[:maxToolResultScanSize]
+				resultContent = resultContent[:l.maxToolResultScanSize]
 			}
 
 			// Tool result scanning — check for instruction injection before persisting.
@@ -1220,21 +1239,14 @@ func (r scanRequest) scanContext() scanner.ScanContext {
 	})
 }
 
-// maxToolResultScanSize is the pre-scanner truncation limit for tool results. Tool
-// results are truncated to this size before the primary scan call so that the scanner
-// never returns CodeSecurityScannerContentTooLarge on the first scan. Without this
-// truncation, a legitimate tool response (e.g. a large web page fetch) can trip the
-// circuit breaker by exhausting scannerCircuitBreakerThreshold via the ContentTooLarge
-// path — a per-turn DoS (sigil-7g5.947). This limit matches the scanner's own
-// maxContentLength (1MB); content already within that limit passes through unmodified.
-const maxToolResultScanSize = 1 << 20 // 1MB — matches scanner's maxContentLength
+// defaultMaxToolResultScanSize is the default pre-scanner truncation limit for tool results.
+// Configurable via LoopConfig.MaxToolResultScanSize / security.scanner.limits.max_tool_result_scan_size.
+const defaultMaxToolResultScanSize = 1 << 20 // 1MB — matches scanner's DefaultMaxContentLength
 
-// maxToolContentScanSize is the truncation limit applied to oversized tool results
-// before re-scanning. A malicious tool could return content larger than the scanner's
-// maximum (1MB) to trigger a content_too_large error and bypass scanning. Truncating
-// to 512KB and re-scanning closes that bypass while still scanning the leading content
-// where prompt-injection payloads are most likely to appear.
-const maxToolContentScanSize = 512 * 1024 // 512KB
+// defaultMaxToolContentScanSize is the default truncation limit applied to oversized tool
+// results before re-scanning. Configurable via LoopConfig.MaxToolContentScanSize /
+// security.scanner.limits.max_tool_content_scan_size.
+const defaultMaxToolContentScanSize = 512 * 1024 // 512KB
 
 // scannerCircuitBreakerThreshold is the number of per-turn total tool-stage scanner
 // failures after which the best-effort path switches to fail-closed. Once this
@@ -1338,7 +1350,7 @@ func (l *Loop) scanOversizedToolContent(ctx context.Context, content string, req
 	// Truncate to strictly below the scanner limit so the re-scan cannot hit
 	// content_too_large again on the raw bytes (normalization expansion may
 	// still cause a double-failure, which is handled below).
-	n := min(len(content), maxToolContentScanSize-1)
+	n := min(len(content), l.maxToolContentScanSize-1)
 	// Walk backwards to find a valid UTF-8 rune boundary so we do not
 	// split a multi-byte codepoint (sigil-7g5.273).
 	for n > 0 && n < len(content) && !utf8.RuneStart(content[n]) {

@@ -1132,3 +1132,32 @@ All other rows in the defense matrix (tool escalation, infinite loops, cost expl
 **Rationale:** D062 documents this tradeoff deliberately. Tool results with blocked content break agent workflows. Flag mode provides audit trails sufficient for detection and incident response. Operators who require a stricter posture can configure it via `sigil.yaml`. The warning comment in `scanner_config.go` ensures the non-blocking default is visible to anyone reading the code.
 
 **Ref:** sigil-7g5.918, D062, `internal/agent/scanner_config.go`
+
+---
+
+## D074: Scanner Size Limits Made Operator-Configurable
+
+**Status:** Accepted
+
+**Question:** Should the hardcoded scanner size constants (DefaultMaxContentLength, maxPreNormContentLength, maxToolResultScanSize, maxToolContentScanSize) be exposed as operator-configurable values?
+
+**Context:** PR #17 introduced hardcoded size constants across the scanner and agent loop packages. Different deployments need different limits: large-context models (Gemini 1.5 Pro with 1M tokens) may need larger limits, while memory-constrained or strict-security deployments need smaller ones. The constants were chosen without explicit reference to model context windows or API limits.
+
+**Options considered:**
+
+1. Keep hardcoded — rejected: operators cannot tune for their deployment.
+2. Expose all size constants — rejected: some constants (maxArgLen, scannerCircuitBreakerThreshold, maxHTMLDecodeIterations) are implementation details, not security knobs.
+3. Expose the four operator-relevant size limits via `security.scanner.limits.*` — accepted.
+
+**Decision:** Expose four size constants as configurable values under `security.scanner.limits.*` in `sigil.yaml`:
+
+- `max_content_length` (default 1MB): primary scanner size limit post-normalization
+- `max_pre_norm_content_length` (default 5MB): hard cap before normalization (CPU DoS prevention)
+- `max_tool_result_scan_size` (default 1MB): pre-scanner truncation for tool results
+- `max_tool_content_scan_size` (default 512KB): truncation target for oversized tool results before re-scan
+
+Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` < `max_content_length`, `max_tool_result_scan_size` >= `max_tool_content_scan_size`. Environment variable overrides are blocked (same pattern as scanner modes) to prevent env injection from weakening security limits.
+
+**Rationale:** These four constants are the operator-tunable security knobs that directly affect what content passes through the scanner pipeline. The other constants (circuit breaker threshold, HTML decode iterations, max arg length) are internal safety mechanisms that should not be tuned per-deployment. The 64KB–10MB range prevents both useless scanning (below 64KB) and CPU DoS (above 10MB).
+
+**Ref:** D064, sigil-7g5.956, `internal/config/config.go`, `internal/security/scanner/scanner.go`, `internal/agent/loop.go`
