@@ -1304,7 +1304,6 @@ func TestRoutes_SendMessage_UnparsableErrorEvent_Truncated(t *testing.T) {
 	// Verify the message is truncated with "..." suffix
 	assert.Contains(t, responseBody, "...")
 }
-
 // --- Part 1: Unknown event type warning ---
 
 func TestRoutes_SendMessage_UnknownEventType_DoesNotPanic(t *testing.T) {
@@ -1324,7 +1323,7 @@ func TestRoutes_SendMessage_UnknownEventType_DoesNotPanic(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	// Should succeed — unknown events are warnings, not errors.
+	// Should succeed - unknown events are warnings, not errors.
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp struct {
@@ -1439,7 +1438,7 @@ func TestRoutes_SendMessage_ErrorEvent_OtherErrorCodes_Returns502(t *testing.T) 
 
 func TestRoutes_SendMessage_ErrorEvent_CodeFieldParsed(t *testing.T) {
 	// Verify the code field is parsed from the SSE error payload.
-	// A security code → 400; this test exercises the code parsing path.
+	// A security code -> 400; this test exercises the code parsing path.
 	events := []server.SSEEvent{
 		{Event: "error", Data: `{"code":"security.scanner.input_blocked","message":"your input was blocked","error":"security.scanner.input_blocked"}`},
 	}
@@ -1453,4 +1452,46 @@ func TestRoutes_SendMessage_ErrorEvent_CodeFieldParsed(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "your input was blocked")
+}
+
+func TestRoutes_SendMessage_NoStreamHandler_Returns503(t *testing.T) {
+	// Verify runtime behavior: when no stream handler is configured, POST /api/v1/chat
+	// must return 503 with a Retry-After header.
+	srv := newTestServerWithData(t) // StreamHandler intentionally omitted
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, "5", w.Header().Get("Retry-After"))
+}
+
+func TestRoutes_SendMessage_OpenAPIIncludes503(t *testing.T) {
+	// Verify the OpenAPI spec declares 503 as a valid response for send-message.
+	// handleSendMessage returns 503 when the stream handler is nil; the Errors slice
+	// must include StatusServiceUnavailable so the generated spec reflects reality.
+	srv := newTestServerWithData(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var spec struct {
+		Paths map[string]map[string]struct {
+			OperationID string         `json:"operationId"`
+			Responses   map[string]any `json:"responses"`
+		} `json:"paths"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	post, ok := spec.Paths["/api/v1/chat"]["post"]
+	require.True(t, ok, "POST /api/v1/chat must be in the OpenAPI spec")
+	assert.Equal(t, "send-message", post.OperationID)
+	assert.Contains(t, post.Responses, "503",
+		"send-message must declare 503 Service Unavailable in its OpenAPI responses")
 }

@@ -89,7 +89,7 @@ func (s *Server) registerRoutes() {
 		Path:        "/api/v1/chat",
 		Summary:     "Send a message to the agent",
 		Tags:        []string{"chat"},
-		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests},
+		Errors:      []int{http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable},
 	}, s.handleSendMessage)
 
 	// User endpoints
