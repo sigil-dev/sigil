@@ -1459,6 +1459,48 @@ func TestRoutes_SendMessage_ErrorEvent_OtherErrorCodes_Returns502(t *testing.T) 
 	}
 }
 
+func TestRoutes_SendMessage_ErrorEvent_BudgetAndTimeoutCodes(t *testing.T) {
+	tests := []struct {
+		name       string
+		data       string
+		wantStatus int
+	}{
+		{
+			name:       "budget exceeded → 429",
+			data:       `{"code":"agent.tool.budget_exceeded","message":"tool call budget exceeded"}`,
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name:       "provider budget exceeded → 429",
+			data:       `{"code":"provider.budget.exceeded","message":"provider budget exceeded"}`,
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name:       "tool timeout → 504",
+			data:       `{"code":"agent.tool.timeout","message":"tool execution timed out"}`,
+			wantStatus: http.StatusGatewayTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := []server.SSEEvent{
+				{Event: "error", Data: tt.data},
+			}
+			srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+			body := `{"content": "Hello", "workspace_id": "homelab"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, tt.wantStatus, w.Code,
+				"test %q: expected HTTP %d", tt.name, tt.wantStatus)
+		})
+	}
+}
+
 func TestRoutes_SendMessage_ErrorEvent_CodeFieldParsed(t *testing.T) {
 	// Verify the code field is parsed from the SSE error payload.
 	// security.scanner.input_blocked → 422 Unprocessable Entity (client content rejection).

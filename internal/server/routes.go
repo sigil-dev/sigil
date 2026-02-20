@@ -381,6 +381,7 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 				truncated := truncateForLogging(event.Data, 100)
 				slog.Warn("handleSendMessage: unknown SSE event type, skipping",
 					"event_type", event.Event,
+					"expected_types", []string{"text_delta", "session_id", "error"},
 					"event_data", truncated,
 				)
 			}
@@ -441,7 +442,7 @@ func extractErrorEvent(data string) (code string, message string) {
 	}
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
 		truncated := truncateForLogging(data, 100)
-		slog.Error("failed to parse error event payload",
+		slog.Warn("failed to parse SSE error event payload, returning generic message",
 			"raw_data", truncated,
 			"error", err,
 		)
@@ -460,6 +461,11 @@ func extractErrorEvent(data string) (code string, message string) {
 // appropriate huma HTTP error. Delegates to sigilerr.HTTPStatusFromCode for canonical
 // status mapping so that classification logic is not duplicated here.
 func errorCodeToHTTPError(code, message string) error {
+	if code == "" {
+		slog.Warn("errorCodeToHTTPError: empty error code from SSE event, defaulting to 502",
+			"message", message,
+		)
+	}
 	status := sigilerr.HTTPStatusFromCode(sigilerr.Code(code))
 	return huma.NewError(status, message)
 }

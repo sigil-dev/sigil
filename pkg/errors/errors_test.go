@@ -558,6 +558,17 @@ func TestHTTPStatusFromCode(t *testing.T) {
 		{name: "provider.budget.exceeded → 429", code: sigilerr.CodeProviderBudgetExceeded, want: http.StatusTooManyRequests},
 		// Timeout → 504.
 		{name: "agent.tool.timeout → 504", code: sigilerr.CodeAgentToolTimeout, want: http.StatusGatewayTimeout},
+		// Not-found codes → 404.
+		{name: "server.entity.not_found → 404", code: sigilerr.CodeServerEntityNotFound, want: http.StatusNotFound},
+		// Unauthorized codes → 401.
+		{name: "server.auth.unauthorized → 401", code: sigilerr.CodeServerAuthUnauthorized, want: http.StatusUnauthorized},
+		// Forbidden/denied codes → 403.
+		{name: "server.auth.forbidden → 403", code: sigilerr.CodeServerAuthForbidden, want: http.StatusForbidden},
+		{name: "workspace.membership.denied → 403", code: sigilerr.CodeWorkspaceMembershipDenied, want: http.StatusForbidden},
+		// Conflict codes → 409.
+		{name: "store.session.update.conflict → 409", code: sigilerr.CodeStoreSessionUpdateConflict, want: http.StatusConflict},
+		// Not implemented → 501.
+		{name: "server.not_implemented → 501", code: sigilerr.CodeServerNotImplemented, want: http.StatusNotImplemented},
 		// Unknown/empty → 502 (default fallback).
 		{name: "empty code → 502", code: sigilerr.Code(""), want: http.StatusBadGateway},
 		{name: "unknown code → 502", code: sigilerr.Code("some.unknown.code"), want: http.StatusBadGateway},

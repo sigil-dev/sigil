@@ -305,70 +305,21 @@ func HTTPStatus(err error) int {
 	}
 }
 
-// isScannerCodeString reports whether c is any security.scanner.* code.
-// Mirrors IsScannerCode but operates on a Code value directly.
-func isScannerCodeString(c Code) bool {
-	return strings.HasPrefix(string(c), "security.scanner.")
-}
-
-// isInvalidInputCodeString reports whether c is any invalid-input code.
-// Mirrors IsInvalidInput but operates on a Code value directly.
-// IsInvalidInput uses reason() which returns the last dot-separated segment:
-// "invalid", "invalid_input", "invalid_value", "invalid_format".
-func isInvalidInputCodeString(c Code) bool {
-	r := reason(c)
-	return r == "invalid" || r == "invalid_input" || r == "invalid_value" || r == "invalid_format"
-}
-
-// isUpstreamCodeString reports whether c is an upstream-failure code.
-// Mirrors IsUpstreamFailure: strings.Contains(code, "upstream") && reason == "failure".
-func isUpstreamCodeString(c Code) bool {
-	return strings.Contains(string(c), "upstream") && reason(c) == "failure"
-}
-
-// isBudgetCodeString reports whether c is a budget-exceeded code.
-// Mirrors IsBudgetExceeded: reason == "exceeded" || "budget_exceeded".
-func isBudgetCodeString(c Code) bool {
-	r := reason(c)
-	return r == "exceeded" || r == "budget_exceeded"
-}
-
-// isTimeoutCodeString reports whether c is a timeout code.
-// Mirrors IsTimeout: reason == "timeout".
-func isTimeoutCodeString(c Code) bool {
-	return reason(c) == "timeout"
-}
-
 // HTTPStatusFromCode maps a sigilerr Code string directly to an HTTP status code.
 // This is the code-string counterpart of HTTPStatus(error) — useful when only
 // a code string is available (e.g., parsed from an SSE error event payload).
+//
+// The SSE handler acts as a proxy, so unknown/unclassified codes default to
+// 502 Bad Gateway (rather than HTTPStatus's 500 Internal Server Error).
 func HTTPStatusFromCode(code Code) int {
-	// InputBlocked is client content rejection: 422.
-	if code == CodeSecurityScannerInputBlocked {
-		return http.StatusUnprocessableEntity
-	}
-	// All other scanner codes are service-side transient: 503.
-	if isScannerCodeString(code) {
-		return http.StatusServiceUnavailable
-	}
-	// Invalid input / capability codes: 400.
-	if isInvalidInputCodeString(code) {
-		return http.StatusBadRequest
-	}
-	// Upstream/provider failures: 502.
-	if isUpstreamCodeString(code) {
+	if code == "" {
 		return http.StatusBadGateway
 	}
-	// Budget exceeded: 429.
-	if isBudgetCodeString(code) {
-		return http.StatusTooManyRequests
+	status := HTTPStatus(New(code, ""))
+	if status == http.StatusInternalServerError {
+		return http.StatusBadGateway
 	}
-	// Timeout: 504.
-	if isTimeoutCodeString(code) {
-		return http.StatusGatewayTimeout
-	}
-	// Everything else: 502 (bad gateway — the SSE handler is a proxy).
-	return http.StatusBadGateway
+	return status
 }
 
 func Join(errs ...error) error {
