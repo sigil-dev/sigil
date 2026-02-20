@@ -114,7 +114,7 @@ func TestResolveViperSecrets(t *testing.T) {
 	v.Set("networking.listen", "127.0.0.1:18789") // non-keyring value
 	v.Set("models.default", "anthropic/claude-sonnet-4-5")
 
-	secrets.ResolveViperSecrets(v, ks)
+	require.NoError(t, secrets.ResolveViperSecrets(v, ks))
 
 	assert.Equal(t, "sk-ant-secret", v.GetString("providers.anthropic.api_key"))
 	assert.Equal(t, "sk-oai-secret", v.GetString("providers.openai.api_key"))
@@ -122,14 +122,16 @@ func TestResolveViperSecrets(t *testing.T) {
 	assert.Equal(t, "anthropic/claude-sonnet-4-5", v.GetString("models.default"))
 }
 
-func TestResolveViperSecrets_MissingSecretKeepsOriginal(t *testing.T) {
+func TestResolveViperSecrets_MissingSecretReturnsError(t *testing.T) {
 	ks := secrets.NewKeyringStore()
 
 	v := viper.New()
 	v.Set("providers.anthropic.api_key", "keyring://sigil/nonexistent-key")
 
-	secrets.ResolveViperSecrets(v, ks)
+	err := secrets.ResolveViperSecrets(v, ks)
 
-	// Should keep the original URI value when resolution fails.
-	assert.Equal(t, "keyring://sigil/nonexistent-key", v.GetString("providers.anthropic.api_key"))
+	// Should return an error with a clear message identifying the unresolved key.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "providers.anthropic.api_key")
+	assert.Contains(t, err.Error(), "keyring://sigil/nonexistent-key")
 }

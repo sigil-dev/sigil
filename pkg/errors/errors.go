@@ -26,10 +26,11 @@ const (
 	CodeStoreConflict               Code = "store.conflict"
 	CodeStoreInvalidInput           Code = "store.invalid_input"
 
-	CodeConfigLoadReadFailure      Code = "config.load.read.failure"
-	CodeConfigParseInvalidFormat   Code = "config.parse.invalid_format"
-	CodeConfigValidateInvalidValue Code = "config.validate.invalid_value"
-	CodeConfigAlreadyExists        Code = "config.already_exists"
+	CodeConfigLoadReadFailure           Code = "config.load.read.failure"
+	CodeConfigParseInvalidFormat        Code = "config.parse.invalid_format"
+	CodeConfigValidateInvalidValue      Code = "config.validate.invalid_value"
+	CodeConfigAlreadyExists             Code = "config.already_exists"
+	CodeConfigKeyringResolutionFailure  Code = "config.keyring.resolution.failure"
 
 	CodePluginManifestValidateInvalid    Code = "plugin.manifest.validate.invalid"
 	CodePluginCapabilityDenied           Code = "plugin.capability.denied"
@@ -53,8 +54,8 @@ const (
 	CodeProviderNoDefault       Code = "provider.routing.no_default"
 	CodeProviderInvalidModelRef Code = "provider.routing.invalid_model_ref"
 	CodeProviderInvalidEvent    Code = "provider.event.invalid"
-	CodeProviderKeyInvalid     Code = "provider.key.invalid"
-	CodeProviderKeyCheckFailed Code = "provider.key.check_failed"
+	CodeProviderKeyInvalid      Code = "provider.key.invalid"
+	CodeProviderKeyCheckFailed  Code = "provider.key.check_failed"
 
 	CodeAgentLoopInvalidInput        Code = "agent.loop.invalid_input"
 	CodeAgentLoopFailure             Code = "agent.loop.failure"
@@ -85,10 +86,18 @@ const (
 	CodeCLISetupFailure      Code = "cli.setup.failure"
 	CodeCLIInputInvalid      Code = "cli.input.invalid"
 
-	CodeSecurityCapabilityInvalid Code = "security.capability.invalid"
-	CodeSecurityInvalidInput      Code = "security.input.invalid"
+	CodeSecurityCapabilityInvalid         Code = "security.capability.invalid"
+	CodeSecurityInvalidInput              Code = "security.input.invalid"
+	CodeSecurityScannerInputBlocked       Code = "security.scanner.input_blocked"
+	CodeSecurityScannerToolBlocked        Code = "security.scanner.tool_blocked"
+	CodeSecurityScannerOutputBlocked      Code = "security.scanner.output_blocked"
+	CodeSecurityScannerContentTooLarge    Code = "security.scanner.content_too_large"
+	CodeSecurityScannerFailure            Code = "security.scanner.failure"
+	CodeSecurityScannerCancelled          Code = "security.scanner.cancelled"
+	CodeSecurityScannerCircuitBreakerOpen Code = "security.scanner.circuit_breaker_open"
+	CodeSecurityScannerEmptyRuleStage     Code = "security.scanner.empty_rule_stage"
 
-	CodeChannelTokenInvalid    Code = "channel.token.invalid"
+	CodeChannelTokenInvalid     Code = "channel.token.invalid"
 	CodeChannelTokenCheckFailed Code = "channel.token.check_failed"
 
 	CodeChannelPairingRequired Code = "channel.pairing.required"
@@ -96,11 +105,11 @@ const (
 	CodeChannelPairingPending  Code = "channel.pairing.pending"
 	CodeChannelBackendFailure  Code = "channel.backend.failure"
 
-	CodeSecretStoreFailure  Code = "secret.store.failure"
-	CodeSecretNotFound      Code = "secret.get.not_found"
-	CodeSecretDeleteFailure Code = "secret.delete.failure"
-	CodeSecretListFailure   Code = "secret.list.failure"
-	CodeSecretInvalidInput  Code = "secret.input.invalid"
+	CodeSecretStoreFailure   Code = "secret.store.failure"
+	CodeSecretNotFound       Code = "secret.get.not_found"
+	CodeSecretDeleteFailure  Code = "secret.delete.failure"
+	CodeSecretListFailure    Code = "secret.list.failure"
+	CodeSecretInvalidInput   Code = "secret.input.invalid"
 	CodeSecretResolveFailure Code = "secret.resolve.failure"
 )
 
@@ -219,6 +228,18 @@ func HasCode(err error, code Code) bool {
 	return CodeOf(err) == code
 }
 
+// IsScannerCode reports whether the error's code is any security.scanner.* code.
+func IsScannerCode(err error) bool {
+	return HasCode(err, CodeSecurityScannerInputBlocked) ||
+		HasCode(err, CodeSecurityScannerOutputBlocked) ||
+		HasCode(err, CodeSecurityScannerToolBlocked) ||
+		HasCode(err, CodeSecurityScannerContentTooLarge) ||
+		HasCode(err, CodeSecurityScannerFailure) ||
+		HasCode(err, CodeSecurityScannerCancelled) ||
+		HasCode(err, CodeSecurityScannerCircuitBreakerOpen) ||
+		HasCode(err, CodeSecurityScannerEmptyRuleStage)
+}
+
 func IsNotFound(err error) bool {
 	return reason(CodeOf(err)) == "not_found"
 }
@@ -272,6 +293,13 @@ func HTTPStatus(err error) int {
 		return http.StatusGatewayTimeout
 	case IsUpstreamFailure(err):
 		return http.StatusBadGateway
+	case HasCode(err, CodeSecurityScannerInputBlocked):
+		// Client-supplied content was rejected by the scanner: 422 Unprocessable Entity.
+		return http.StatusUnprocessableEntity
+	case IsScannerCode(err):
+		// All other scanner failures (output blocked, tool blocked, circuit breaker, etc.)
+		// represent transient or service-side conditions: 503 Service Unavailable.
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

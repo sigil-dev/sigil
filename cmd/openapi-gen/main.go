@@ -65,6 +65,7 @@ func (s *stubWorkspace) List(context.Context) ([]server.WorkspaceSummary, error)
 func (s *stubWorkspace) ListForUser(context.Context, string) ([]server.WorkspaceSummary, error) {
 	return nil, nil
 }
+
 func (s *stubWorkspace) Get(context.Context, string) (*server.WorkspaceDetail, error) {
 	return nil, nil
 }
@@ -82,6 +83,7 @@ type stubSession struct{}
 func (s *stubSession) List(context.Context, string) ([]server.SessionSummary, error) {
 	return nil, nil
 }
+
 func (s *stubSession) Get(context.Context, string, string) (*server.SessionDetail, error) {
 	return nil, nil
 }

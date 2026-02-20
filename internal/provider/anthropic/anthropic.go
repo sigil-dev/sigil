@@ -138,7 +138,7 @@ func (p *Provider) Close() error { return nil }
 
 // buildParams converts a provider.ChatRequest into Anthropic SDK MessageNewParams.
 func buildParams(req provider.ChatRequest) (anthropicsdk.MessageNewParams, error) {
-	msgs, err := convertMessages(req.Messages)
+	msgs, err := convertMessages(req.Messages, req.Options.OriginTagging)
 	if err != nil {
 		return anthropicsdk.MessageNewParams{}, err
 	}
@@ -176,22 +176,29 @@ func buildParams(req provider.ChatRequest) (anthropicsdk.MessageNewParams, error
 }
 
 // convertMessages transforms provider.Message slices into Anthropic SDK MessageParam slices.
-func convertMessages(msgs []provider.Message) ([]anthropicsdk.MessageParam, error) {
+// Origin tags are only prepended to user and tool messages (not system or assistant).
+// System messages are excluded (handled via the top-level system param).
+// The originTagging flag controls whether tags are prepended at all.
+func convertMessages(msgs []provider.Message, originTagging bool) ([]anthropicsdk.MessageParam, error) {
 	var result []anthropicsdk.MessageParam
 
 	for _, msg := range msgs {
 		switch msg.Role {
 		case store.MessageRoleUser:
+			tag := provider.OriginTagIfEnabled(msg.Origin, originTagging)
 			result = append(result, anthropicsdk.NewUserMessage(
-				anthropicsdk.NewTextBlock(msg.Content),
+				anthropicsdk.NewTextBlock(tag+msg.Content),
 			))
 		case store.MessageRoleAssistant:
+			// Assistant messages are Sigil-generated LLM outputs and MUST NOT have
+			// origin tags prepended. Tags are only for untrusted user/tool content.
 			result = append(result, anthropicsdk.NewAssistantMessage(
 				anthropicsdk.NewTextBlock(msg.Content),
 			))
 		case store.MessageRoleTool:
+			tag := provider.OriginTagIfEnabled(msg.Origin, originTagging)
 			result = append(result, anthropicsdk.NewUserMessage(
-				anthropicsdk.NewToolResultBlock(msg.ToolCallID, msg.Content, false),
+				anthropicsdk.NewToolResultBlock(msg.ToolCallID, tag+msg.Content, false),
 			))
 		case store.MessageRoleSystem:
 			// System messages are handled via the top-level system param,

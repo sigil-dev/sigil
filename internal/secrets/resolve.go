@@ -4,7 +4,6 @@
 package secrets
 
 import (
-	"log/slog"
 	"strings"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
@@ -60,10 +59,13 @@ func ResolveKeyringURI(store Store, value string) (string, error) {
 // string values that use the keyring:// URI scheme. This is a post-load
 // resolution step, not a Viper decoder hook.
 //
-// Resolution failures are logged as warnings and the original URI value is
-// kept in place, allowing the application to surface the error later when
-// the config value is actually used.
-func ResolveViperSecrets(v *viper.Viper, store Store) {
+// All resolution failures are collected and returned as a single error so the
+// caller can treat them as fatal startup errors. An unresolved keyring URI left
+// in config would cause an opaque failure (e.g. 401) at runtime, so failing
+// fast here produces a clearer operator experience.
+func ResolveViperSecrets(v *viper.Viper, store Store) error {
+	var errs []string
+
 	for _, key := range v.AllKeys() {
 		val := v.GetString(key)
 		if !IsKeyringURI(val) {
@@ -72,13 +74,18 @@ func ResolveViperSecrets(v *viper.Viper, store Store) {
 
 		resolved, err := ResolveKeyringURI(store, val)
 		if err != nil {
-			slog.Warn("failed to resolve keyring URI, keeping original value",
-				"config_key", key,
-				"error", err,
-			)
+			errs = append(errs, "config key "+key+": "+err.Error())
 			continue
 		}
 
 		v.Set(key, resolved)
 	}
+
+	if len(errs) > 0 {
+		return sigilerr.Errorf(sigilerr.CodeConfigKeyringResolutionFailure,
+			"keyring resolution failed for %d config key(s):\n  %s",
+			len(errs), strings.Join(errs, "\n  "))
+	}
+
+	return nil
 }

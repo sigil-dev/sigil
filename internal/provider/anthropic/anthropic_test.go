@@ -9,7 +9,9 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/provider/anthropic"
+	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,4 +109,156 @@ func mustNewProvider(t *testing.T) *anthropic.Provider {
 	})
 	require.NoError(t, err)
 	return p
+}
+
+// TestBuildParams_OriginTagging verifies that OriginTagging in ChatOptions is
+// threaded through buildParams — the function Chat() delegates to — so that
+// the Anthropic SDK MessageNewParams carries tagged or untagged content.
+func TestBuildParams_OriginTagging(t *testing.T) {
+	tests := []struct {
+		name          string
+		originTagging bool
+		wantContent   string
+	}{
+		{
+			name:          "tagging enabled: user message content is prefixed with origin tag",
+			originTagging: true,
+			wantContent:   "[user_input] hello",
+		},
+		{
+			name:          "tagging disabled: user message content has no origin tag prefix",
+			originTagging: false,
+			wantContent:   "hello",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := provider.ChatRequest{
+				Model: "claude-opus-4-6",
+				Messages: []provider.Message{
+					{Role: store.MessageRoleUser, Content: "hello", Origin: types.OriginUserInput},
+				},
+				Options: provider.ChatOptions{
+					OriginTagging: tt.originTagging,
+				},
+			}
+
+			params, err := anthropic.BuildParams(req)
+			require.NoError(t, err)
+			require.Len(t, params.Messages, 1, "expected one message in params")
+
+			msg := params.Messages[0]
+			require.NotEmpty(t, msg.Content, "message content should not be empty")
+			block := msg.Content[0]
+			require.NotNil(t, block.OfText, "expected text block")
+			assert.Equal(t, tt.wantContent, block.OfText.Text,
+				"buildParams message content mismatch with OriginTagging=%v", tt.originTagging)
+		})
+	}
+}
+
+// TestConvertMessages_OriginTagging verifies that origin tags are prepended to
+// message content at the provider conversion layer when OriginTagging is enabled.
+func TestConvertMessages_OriginTagging(t *testing.T) {
+	tests := []struct {
+		name          string
+		msgs          []provider.Message
+		originTagging bool
+		// wantPrefixes maps result index → expected content prefix.
+		wantPrefixes map[int]string
+	}{
+		{
+			name: "user message with origin tagging enabled gets [user_input] prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "hello world", Origin: types.OriginUserInput},
+			},
+			originTagging: true,
+			wantPrefixes:  map[int]string{0: "[user_input] hello world"},
+		},
+		{
+			name: "user message with origin tagging disabled has no prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "hello world", Origin: types.OriginUserInput},
+			},
+			originTagging: false,
+			wantPrefixes:  map[int]string{0: "hello world"},
+		},
+		{
+			name: "tool message with origin tagging enabled gets [tool_output] prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleTool, Content: "result data", Origin: types.OriginToolOutput, ToolCallID: "call-1"},
+			},
+			originTagging: true,
+			wantPrefixes:  map[int]string{0: "[tool_output] result data"},
+		},
+		{
+			name: "tool message with origin tagging disabled has no prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleTool, Content: "result data", Origin: types.OriginToolOutput, ToolCallID: "call-1"},
+			},
+			originTagging: false,
+			wantPrefixes:  map[int]string{0: "result data"},
+		},
+		{
+			name: "assistant message never gets origin tag even when tagging enabled",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleAssistant, Content: "I can help"},
+			},
+			originTagging: true,
+			wantPrefixes:  map[int]string{0: "I can help"},
+		},
+		{
+			name: "system messages are skipped (not emitted as MessageParam)",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleSystem, Content: "You are a helpful assistant"},
+				{Role: store.MessageRoleUser, Content: "hello", Origin: types.OriginUserInput},
+			},
+			originTagging: true,
+			// Only one result (the user message); system is excluded.
+			wantPrefixes: map[int]string{0: "[user_input] hello"},
+		},
+		{
+			name: "mixed conversation with origin tagging applies tags only to user and tool",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "question", Origin: types.OriginUserInput},
+				{Role: store.MessageRoleAssistant, Content: "answer"},
+				{Role: store.MessageRoleTool, Content: "tool result", Origin: types.OriginToolOutput, ToolCallID: "call-2"},
+			},
+			originTagging: true,
+			wantPrefixes: map[int]string{
+				0: "[user_input] question",
+				1: "answer",
+				2: "[tool_output] tool result",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params, err := anthropic.ConvertMessages(tt.msgs, tt.originTagging)
+			require.NoError(t, err)
+			require.Len(t, params, len(tt.wantPrefixes), "result count mismatch")
+
+			for idx, wantContent := range tt.wantPrefixes {
+				msg := params[idx]
+				require.NotEmpty(t, msg.Content, "message at index %d has no content blocks", idx)
+
+				block := msg.Content[0]
+				switch {
+				case block.OfText != nil:
+					assert.Equal(t, wantContent, block.OfText.Text,
+						"message[%d] text content mismatch", idx)
+				case block.OfToolResult != nil:
+					require.NotEmpty(t, block.OfToolResult.Content, "tool result at index %d has no content", idx)
+					textContent := block.OfToolResult.Content[0]
+					require.NotNil(t, textContent.OfText, "tool result content at index %d is not a text block", idx)
+					assert.Equal(t, wantContent, textContent.OfText.Text,
+						"tool result[%d] text content mismatch", idx)
+				default:
+					t.Errorf("message[%d] has unexpected content block type (neither text nor tool result)", idx)
+				}
+			}
+		})
+	}
 }

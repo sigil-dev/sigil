@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/plugin"
 	"github.com/sigil-dev/sigil/internal/provider"
@@ -20,6 +21,7 @@ import (
 	openaiprov "github.com/sigil-dev/sigil/internal/provider/openai"
 	openrouterprov "github.com/sigil-dev/sigil/internal/provider/openrouter"
 	"github.com/sigil-dev/sigil/internal/security"
+	"github.com/sigil-dev/sigil/internal/security/scanner"
 	"github.com/sigil-dev/sigil/internal/server"
 	"github.com/sigil-dev/sigil/internal/store"
 	_ "github.com/sigil-dev/sigil/internal/store/sqlite" // register sqlite backend
@@ -29,18 +31,45 @@ import (
 )
 
 // Gateway holds all wired subsystems and manages their lifecycle.
+// Construct via WireGateway; direct struct literals will fail Validate().
 type Gateway struct {
-	Server           *server.Server
-	GatewayStore     store.GatewayStore
-	PluginManager    *plugin.Manager
-	ProviderRegistry *provider.Registry
-	WorkspaceManager *workspace.Manager
-	Enforcer         *security.Enforcer
+	server           *server.Server
+	gatewayStore     store.GatewayStore
+	pluginManager    *plugin.Manager
+	providerRegistry *provider.Registry
+	workspaceManager *workspace.Manager
+	enforcer         *security.Enforcer
+	scanner          scanner.Scanner
+	scannerModes     agent.ScannerModes
 }
+
+// Server returns the HTTP server.
+func (gw *Gateway) Server() *server.Server { return gw.server }
+
+// GatewayStore returns the gateway store (users, pairings, audit log).
+func (gw *Gateway) GatewayStore() store.GatewayStore { return gw.gatewayStore }
+
+// PluginManager returns the plugin manager.
+func (gw *Gateway) PluginManager() *plugin.Manager { return gw.pluginManager }
+
+// ProviderRegistry returns the provider registry.
+func (gw *Gateway) ProviderRegistry() *provider.Registry { return gw.providerRegistry }
+
+// WorkspaceManager returns the workspace manager.
+func (gw *Gateway) WorkspaceManager() *workspace.Manager { return gw.workspaceManager }
+
+// Enforcer returns the security enforcer.
+func (gw *Gateway) Enforcer() *security.Enforcer { return gw.enforcer }
+
+// Scanner returns the security scanner.
+func (gw *Gateway) Scanner() scanner.Scanner { return gw.scanner }
+
+// ScannerModes returns the scanner mode configuration.
+func (gw *Gateway) ScannerModes() agent.ScannerModes { return gw.scannerModes }
 
 // WireGateway creates all subsystems and wires them together.
 // The dataDir is the root directory for all persistent state.
-func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gateway, error) {
+func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Gateway, retErr error) {
 	storeCfg := &store.StorageConfig{Backend: cfg.Storage.Backend}
 
 	// Ensure the data directory exists.
@@ -48,14 +77,49 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating data directory: %w", err)
 	}
 
+	// cleanups holds Close functions for resources that have been successfully
+	// initialized. On error, they are called in reverse order (LIFO) to ensure
+	// proper teardown ordering. On success, the Gateway.Close method is
+	// responsible for cleanup and this defer is a no-op.
+	var cleanups []func() error
+	defer func() {
+		if retErr != nil {
+			for i := len(cleanups) - 1; i >= 0; i-- {
+				if err := cleanups[i](); err != nil {
+					slog.Warn("cleanup error during WireGateway failure", "error", err)
+				}
+			}
+		}
+	}()
+
 	// 1. Gateway store (users, pairings, audit log).
 	gs, err := store.NewGatewayStore(storeCfg, dataDir)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating gateway store: %w", err)
 	}
+	cleanups = append(cleanups, gs.Close)
 
 	// 2. Security enforcer.
 	enforcer := security.NewEnforcer(gs.AuditLog())
+
+	// 2b. Security scanner — create regex scanner with default rules
+	// and convert config scanner modes for use by the agent loop.
+	defaultRules, err := scanner.DefaultRules()
+	if err != nil {
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "loading scanner rules: %w", err)
+	}
+	sc, err := scanner.NewRegexScanner(defaultRules,
+		scanner.WithMaxContentLength(cfg.Security.Scanner.Limits.MaxContentLength),
+		scanner.WithMaxPreNormContentLength(cfg.Security.Scanner.Limits.MaxPreNormContentLength),
+	)
+	if err != nil {
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating security scanner: %w", err)
+	}
+	slog.Info("security scanner initialized", "rule_count", len(defaultRules))
+	scannerModes, err := agent.NewScannerModesFromConfig(cfg.Security.Scanner)
+	if err != nil {
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "configuring scanner modes: %w", err)
+	}
 
 	// 3. Plugin manager — discover plugins in the plugins directory.
 	pluginMgr := plugin.NewManager(filepath.Join(dataDir, "plugins"), enforcer)
@@ -69,30 +133,34 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 
 	// 4. Provider registry — register built-in providers and wire routing.
 	provReg := provider.NewRegistry()
+	cleanups = append(cleanups, provReg.Close)
 
 	registerBuiltinProviders(cfg, provReg)
+
+	// Fail fast if providers were configured but none initialized successfully.
+	// Continuing without any LLM provider would let the agent loop start and
+	// then fail on the first inference request with a confusing error.
+	if provReg.Count() == 0 && len(cfg.Providers) > 0 {
+		return nil, sigilerr.New(sigilerr.CodeCLISetupFailure,
+			"all configured providers failed to initialize — no LLM providers available")
+	}
 
 	// Wire default model and failover chain from config so the agent loop
 	// can route requests without "no default provider configured" errors.
 	if cfg.Models.Default != "" {
 		if err := provReg.SetDefault(cfg.Models.Default); err != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
 			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting default provider: %s", cfg.Models.Default)
 		}
 	}
 	if len(cfg.Models.Failover) > 0 {
 		if err := provReg.SetFailover(cfg.Models.Failover); err != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
 			return nil, sigilerr.Wrapf(err, sigilerr.CodeCLISetupFailure, "setting failover chain")
 		}
 	}
 
 	// 5. Workspace manager.
 	wsMgr := workspace.NewManager(filepath.Join(dataDir, "workspaces"), storeCfg)
+	cleanups = append(cleanups, wsMgr.Close)
 
 	// Configure workspaces from config.
 	if cfg.Workspaces != nil {
@@ -104,9 +172,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 			}
 		}
 		if err := wsMgr.SetConfig(wsCfg); err != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
 			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "setting workspace config: %w", err)
 		}
 	}
@@ -117,9 +182,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		var tvErr error
 		tokenValidator, tvErr = newConfigTokenValidator(cfg.Auth.Tokens)
 		if tvErr != nil {
-			if closeErr := gs.Close(); closeErr != nil {
-				slog.Warn("gateway store close error during initialization", "error", closeErr)
-			}
 			return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "configuring auth tokens: %w", tvErr)
 		}
 	} else {
@@ -134,9 +196,6 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 		&userServiceAdapter{store: gs.Users()},
 	)
 	if err != nil {
-		if closeErr := gs.Close(); closeErr != nil {
-			slog.Warn("gateway store close error during initialization", "error", closeErr)
-		}
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
 	}
 
@@ -151,54 +210,55 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (*Gate
 			RequestsPerSecond: cfg.Networking.RateLimitRPS,
 			Burst:             cfg.Networking.RateLimitBurst,
 		},
-		// Provide stub stream handler so chat endpoints work during initial startup
-		// (before real agent loop integration). Prevents 503 errors that would occur
-		// with nil StreamHandler.
-		StreamHandler: &stubStreamHandler{},
-		Services:      services,
+		Services: services,
 	})
 	if err != nil {
-		if closeErr := gs.Close(); closeErr != nil {
-			slog.Warn("gateway store close error during initialization", "error", closeErr)
-		}
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
 
 	return &Gateway{
-		Server:           srv,
-		GatewayStore:     gs,
-		PluginManager:    pluginMgr,
-		ProviderRegistry: provReg,
-		WorkspaceManager: wsMgr,
-		Enforcer:         enforcer,
+		server:           srv,
+		gatewayStore:     gs,
+		pluginManager:    pluginMgr,
+		providerRegistry: provReg,
+		workspaceManager: wsMgr,
+		enforcer:         enforcer,
+		scanner:          sc,
+		scannerModes:     scannerModes,
 	}, nil
 }
 
 // Start runs the HTTP server and blocks until the context is cancelled.
 func (gw *Gateway) Start(ctx context.Context) error {
-	return gw.Server.Start(ctx)
+	return gw.server.Start(ctx)
 }
 
 // Validate checks that all required Gateway fields are non-nil.
 // This method ensures the Gateway was properly initialized by WireGateway.
 func (gw *Gateway) Validate() error {
-	if gw.Server == nil {
+	if gw.server == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "gateway server is nil")
 	}
-	if gw.GatewayStore == nil {
+	if gw.gatewayStore == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "gateway store is nil")
 	}
-	if gw.PluginManager == nil {
+	if gw.pluginManager == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "plugin manager is nil")
 	}
-	if gw.ProviderRegistry == nil {
+	if gw.providerRegistry == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "provider registry is nil")
 	}
-	if gw.WorkspaceManager == nil {
+	if gw.workspaceManager == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "workspace manager is nil")
 	}
-	if gw.Enforcer == nil {
+	if gw.enforcer == nil {
 		return sigilerr.New(sigilerr.CodeCLISetupFailure, "enforcer is nil")
+	}
+	if gw.scanner == nil {
+		return sigilerr.New(sigilerr.CodeCLISetupFailure, "scanner is nil")
+	}
+	if err := gw.scannerModes.Validate(); err != nil {
+		return sigilerr.Wrap(err, sigilerr.CodeCLISetupFailure, "invalid scanner modes")
 	}
 	return nil
 }
@@ -207,23 +267,28 @@ func (gw *Gateway) Validate() error {
 // Close tolerates nil fields to avoid leaking resources from partial initialization.
 func (gw *Gateway) Close() error {
 	var errs []error
-	if gw.Server != nil {
-		if err := gw.Server.Close(); err != nil {
+	if gw.server != nil {
+		if err := gw.server.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if gw.ProviderRegistry != nil {
-		if err := gw.ProviderRegistry.Close(); err != nil {
+	if gw.pluginManager != nil {
+		if err := gw.pluginManager.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if gw.WorkspaceManager != nil {
-		if err := gw.WorkspaceManager.Close(); err != nil {
+	if gw.providerRegistry != nil {
+		if err := gw.providerRegistry.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if gw.GatewayStore != nil {
-		if err := gw.GatewayStore.Close(); err != nil {
+	if gw.workspaceManager != nil {
+		if err := gw.workspaceManager.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if gw.gatewayStore != nil {
+		if err := gw.gatewayStore.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -405,22 +470,6 @@ func (a *sessionServiceAdapter) Get(_ context.Context, _, sessionID string) (*se
 // userServiceAdapter bridges GatewayStore users to the server's UserService.
 type userServiceAdapter struct {
 	store store.UserStore
-}
-
-// stubStreamHandler implements StreamHandler by returning a placeholder message.
-// Used during initial startup until the real agent loop is integrated.
-type stubStreamHandler struct{}
-
-func (h *stubStreamHandler) HandleStream(_ context.Context, _ server.ChatStreamRequest, events chan<- server.SSEEvent) {
-	events <- server.SSEEvent{
-		Event: "text_delta",
-		Data:  `{"text":"Agent not yet configured. Please set up a provider and workspace."}`,
-	}
-	events <- server.SSEEvent{
-		Event: "done",
-		Data:  `{}`,
-	}
-	close(events)
 }
 
 func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, error) {

@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS memory_messages (
 	content      TEXT NOT NULL DEFAULT '',
 	tool_call_id TEXT NOT NULL DEFAULT '',
 	tool_name    TEXT NOT NULL DEFAULT '',
+	threat_info  TEXT NOT NULL DEFAULT '{}',
+	origin       TEXT NOT NULL DEFAULT '',
 	created_at   TEXT NOT NULL,
 	metadata     TEXT NOT NULL DEFAULT '{}'
 );
@@ -94,8 +96,15 @@ CREATE TRIGGER IF NOT EXISTS memory_messages_au AFTER UPDATE ON memory_messages 
 	INSERT INTO memory_messages_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
 `
-	_, err := db.Exec(ddl)
-	return err
+	if _, err := db.Exec(ddl); err != nil {
+		return err
+	}
+
+	// Add columns for existing databases that pre-date these fields.
+	if err := addColumnIfMissing(db, "memory_messages", "origin", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissing(db, "memory_messages", "threat_info", "TEXT NOT NULL DEFAULT '{}'")
 }
 
 // Close closes the underlying database connection if this store owns it.
@@ -130,8 +139,16 @@ func (m *MessageStore) Append(ctx context.Context, workspaceID string, msg *stor
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling message metadata: %w", err)
 	}
 
-	const q = `INSERT INTO memory_messages (id, workspace_id, session_id, role, content, tool_call_id, tool_name, created_at, metadata)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	threatInfo := []byte("{}")
+	if msg.Threat != nil {
+		threatInfo, err = json.Marshal(msg.Threat)
+		if err != nil {
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling threat info: %w", err)
+		}
+	}
+
+	const q = `INSERT INTO memory_messages (id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err = m.db.ExecContext(ctx, q,
 		msg.ID,
@@ -141,6 +158,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		msg.Content,
 		msg.ToolCallID,
 		msg.ToolName,
+		string(threatInfo),
+		msg.Origin,
 		formatTime(msg.CreatedAt),
 		string(metadata),
 	)
@@ -162,7 +181,7 @@ func (m *MessageStore) Search(ctx context.Context, workspaceID, query string, op
 	safeQuery := sanitizeFTS5(query)
 
 	const q = `SELECT mm.id, mm.workspace_id, mm.session_id, mm.role, mm.content,
-		mm.tool_call_id, mm.tool_name, mm.created_at, mm.metadata
+		mm.tool_call_id, mm.tool_name, mm.threat_info, mm.origin, mm.created_at, mm.metadata
 FROM memory_messages mm
 JOIN memory_messages_fts fts ON mm.rowid = fts.rowid
 WHERE fts.content MATCH ? AND mm.workspace_id = ?
@@ -180,7 +199,7 @@ LIMIT ? OFFSET ?`
 
 // GetRange returns messages created between from (inclusive) and to (exclusive).
 func (m *MessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*store.Message, error) {
-	const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, created_at, metadata
+	const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
 FROM memory_messages
 WHERE workspace_id = ? AND created_at >= ? AND created_at < ?
 ORDER BY created_at ASC`
@@ -231,7 +250,7 @@ func scanMessages(rows *sql.Rows) ([]*store.Message, error) {
 	var msgs []*store.Message
 	for rows.Next() {
 		var msg store.Message
-		var wsID, createdAt, metaJSON string
+		var wsID, createdAt, threatJSON, metaJSON string
 
 		if err := rows.Scan(
 			&msg.ID,
@@ -241,6 +260,8 @@ func scanMessages(rows *sql.Rows) ([]*store.Message, error) {
 			&msg.Content,
 			&msg.ToolCallID,
 			&msg.ToolName,
+			&threatJSON,
+			&msg.Origin,
 			&createdAt,
 			&metaJSON,
 		); err != nil {
@@ -256,6 +277,13 @@ func scanMessages(rows *sql.Rows) ([]*store.Message, error) {
 			if err := json.Unmarshal([]byte(metaJSON), &msg.Metadata); err != nil {
 				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling message metadata: %w", err)
 			}
+		}
+		if threatJSON != "" && threatJSON != "{}" {
+			var threat store.ThreatInfo
+			if err := json.Unmarshal([]byte(threatJSON), &threat); err != nil {
+				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling threat info: %w", err)
+			}
+			msg.Threat = &threat
 		}
 		msgs = append(msgs, &msg)
 	}

@@ -60,31 +60,33 @@ const (
 
 // initResult holds the collected wizard configuration.
 type initResult struct {
-	Provider    ProviderType
-	APIKey      string
-	Channel     ChannelType
+	Provider     ProviderType
+	APIKey       string
+	Channel      ChannelType
 	ChannelToken string
 }
 
 // --- bubbletea messages ---
 
-type validationSuccessMsg struct{ step initWizardStep }
-type validationErrorMsg struct {
-	step initWizardStep
-	err  error
-}
+type (
+	validationSuccessMsg struct{ step initWizardStep }
+	validationErrorMsg   struct {
+		step initWizardStep
+		err  error
+	}
+)
 type configWrittenMsg struct{ path string }
 
 // --- lipgloss styles ---
 
 var (
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99"))
-	promptStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99"))
+	promptStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	boxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")).Padding(0, 1)
+	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	successStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")).Padding(0, 1)
 )
 
 var supportedProviders = []ProviderType{
@@ -335,7 +337,7 @@ func (m initModel) View() string {
 		b.WriteString(promptStyle.Render("Step 1/2: Add your first LLM provider") + "\n\n")
 		for i, p := range supportedProviders {
 			if i == m.providerIdx {
-				b.WriteString(selectedStyle.Render("  > " + string(p)) + "\n")
+				b.WriteString(selectedStyle.Render("  > "+string(p)) + "\n")
 			} else {
 				b.WriteString(dimStyle.Render("    "+string(p)) + "\n")
 			}
@@ -443,13 +445,13 @@ func GenerateConfigYAML(result initResult) string {
 	sb.WriteString("  backend: sqlite\n\n")
 
 	sb.WriteString("providers:\n")
-	sb.WriteString(fmt.Sprintf("  %s:\n", result.Provider))
-	sb.WriteString(fmt.Sprintf("    api_key: \"%s\"\n\n", providerKey))
+	fmt.Fprintf(&sb, "  %s:\n", result.Provider)
+	fmt.Fprintf(&sb, "    api_key: \"%s\"\n\n", providerKey)
 
 	sb.WriteString("models:\n")
-	sb.WriteString(fmt.Sprintf("  default: \"%s\"\n", defaultModel))
+	fmt.Fprintf(&sb, "  default: \"%s\"\n", defaultModel)
 	sb.WriteString("  failover:\n")
-	sb.WriteString(fmt.Sprintf("    - \"%s\"\n", defaultModel))
+	fmt.Fprintf(&sb, "    - \"%s\"\n", defaultModel)
 	sb.WriteString("  budgets:\n")
 	sb.WriteString("    per_session_tokens: 100000\n")
 	sb.WriteString("    per_hour_usd: 5.00\n")
@@ -460,7 +462,7 @@ func GenerateConfigYAML(result initResult) string {
 	sb.WriteString("    active_window: 20\n")
 	sb.WriteString("    compaction:\n")
 	sb.WriteString("      strategy: summarize\n")
-	sb.WriteString(fmt.Sprintf("      summary_model: \"%s\"\n", defaultModel))
+	fmt.Fprintf(&sb, "      summary_model: \"%s\"\n", defaultModel)
 	sb.WriteString("      batch_size: 50\n\n")
 
 	sb.WriteString("workspaces:\n")
@@ -472,14 +474,14 @@ func GenerateConfigYAML(result initResult) string {
 	if result.Channel != "" {
 		channelKey := fmt.Sprintf("keyring://sigil/%s-bot-token", result.Channel)
 		sb.WriteString("    bindings:\n")
-		sb.WriteString(fmt.Sprintf("      - channel: \"%s\"\n", result.Channel))
+		fmt.Fprintf(&sb, "      - channel: \"%s\"\n", result.Channel)
 		sb.WriteString("        channel_id: \"default\"\n")
 		sb.WriteString("    tools:\n")
 		sb.WriteString("      allow: [\"*\"]\n")
 		sb.WriteString("    skills: []\n\n")
 		// Channel plugin configuration hint (comment block).
 		sb.WriteString("# Channel plugin configuration\n")
-		sb.WriteString(fmt.Sprintf("# %s_bot_token: \"%s\"\n", result.Channel, channelKey))
+		fmt.Fprintf(&sb, "# %s_bot_token: \"%s\"\n", result.Channel, channelKey)
 	} else {
 		sb.WriteString("    bindings: []\n")
 		sb.WriteString("    tools:\n")

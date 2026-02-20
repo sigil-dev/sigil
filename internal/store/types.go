@@ -3,7 +3,11 @@
 
 package store
 
-import "time"
+import (
+	"time"
+
+	"github.com/sigil-dev/sigil/pkg/types"
+)
 
 // --- Session types ---
 
@@ -60,6 +64,70 @@ const (
 	MessageRoleTool      MessageRole = "tool"
 )
 
+// ScanStage identifies the pipeline stage where a security scan occurred.
+// Aliased from pkg/types for backward compatibility.
+type ScanStage = types.ScanStage
+
+// ThreatInfo records security scanner findings for audit persistence.
+//
+// Three semantic states are encoded using the Scanned and Detected fields:
+//   - nil *ThreatInfo: scanner did not run (legacy message or pre-scanner code path)
+//   - &ThreatInfo{Scanned: true, Detected: false}: scanner ran and found no threats
+//   - &ThreatInfo{Scanned: true, Detected: true, Rules: [...]}: scanner detected threats
+//
+// The Scanned field solves the JSON round-trip problem: both nil and &ThreatInfo{}
+// previously serialized to `{}`, making "not scanned" indistinguishable from
+// "scanned clean" after persistence. With Scanned=true, a clean scan result
+// serializes to `{"scanned":true,"detected":false,...}`, which is distinct from
+// the default `{}` produced when a nil ThreatInfo is stored as "{}".
+//
+// Backward compatibility: pre-Scanned records stored as `{}` unmarshal with
+// Scanned=false and Detected=false. Treating Scanned=false as "did not run" is
+// correct for historical records — they either predate the scanner or were stored
+// before this field was added.
+type ThreatInfo struct {
+	// Scanned is true when the security scanner actually ran on the content.
+	// A false value means the scanner did not run (legacy record, or nil ThreatInfo
+	// serialized as "{}"). MUST be true whenever Detected is true.
+	Scanned  bool      `json:"scanned"`
+	Detected bool      `json:"detected"`
+	Rules    []string  `json:"rules"`
+	Stage    ScanStage `json:"stage"`
+	// Bypassed is true when the scanner was unavailable and content passed
+	// through unscanned (best-effort path below circuit breaker threshold).
+	// Detected will be false because no scan occurred, not because the
+	// content is clean. Scanned will also be false because no scan ran.
+	// Audit queries MUST treat Bypassed=true as distinct
+	// from a confirmed clean scan result.
+	Bypassed bool `json:"bypassed,omitempty"`
+	// MatchCount is the total number of pattern matches from the scan.
+	// Populated only when Detected=true (zero otherwise). Used to enrich
+	// audit entries so operators can assess threat volume without re-scanning.
+	MatchCount int `json:"match_count,omitempty"`
+	// HighestSeverity is the severity of the most severe match from the scan.
+	// Populated only when Detected=true (empty string otherwise). Stored as a
+	// string to avoid a cross-package import cycle between store and scanner.
+	HighestSeverity string `json:"highest_severity,omitempty"`
+}
+
+// NewCleanScan returns a ThreatInfo for content that was scanned and found clean.
+func NewCleanScan(stage ScanStage) *ThreatInfo {
+	return &ThreatInfo{Scanned: true, Stage: stage}
+}
+
+// NewThreatDetected returns a ThreatInfo for content where a threat was detected.
+// rules must be non-empty.
+func NewThreatDetected(stage ScanStage, rules []string) *ThreatInfo {
+	return &ThreatInfo{Scanned: true, Detected: true, Rules: rules, Stage: stage}
+}
+
+// NewBypassedScan returns a ThreatInfo for content that bypassed scanning
+// (e.g., scanner failure on best-effort path). Scanned is false because
+// no scan ran; Detected is false because no threat was found.
+func NewBypassedScan(stage ScanStage) *ThreatInfo {
+	return &ThreatInfo{Bypassed: true, Stage: stage}
+}
+
 // Message represents a single message in a session conversation.
 type Message struct {
 	ID         string
@@ -68,8 +136,24 @@ type Message struct {
 	Content    string
 	ToolCallID string
 	ToolName   string
-	CreatedAt  time.Time
-	Metadata   map[string]string
+	// Origin records the source of the message for audit purposes.
+	// Stored as a plain string; valid values are pkg/types.OriginUserInput,
+	// pkg/types.OriginSystem, and pkg/types.OriginToolOutput.
+	//
+	// Added in PR #17. Custom MessageStore implementations MUST populate this
+	// field to preserve security audit trail integrity. An empty string is
+	// accepted for backward compatibility with pre-PR-17 records.
+	Origin string
+	// Threat holds the security scanner result for this message.
+	// A nil value means the scanner did not run (legacy record or pre-scanner code path).
+	// See ThreatInfo for the three semantic states (not scanned, clean, detected).
+	//
+	// Added in PR #17. Custom MessageStore implementations MUST persist and
+	// restore this field so that security audit queries can distinguish
+	// "scanned clean" from "scanner did not run".
+	Threat    *ThreatInfo
+	CreatedAt time.Time
+	Metadata  map[string]string
 }
 
 // --- Memory types ---

@@ -6,6 +6,7 @@ exclude:
   - ui/node_modules
   - vendor
   - .direnv
+  - internal/security/scanner/db
 formatter:
   include_document_start: false
   pad_line_comments: 2

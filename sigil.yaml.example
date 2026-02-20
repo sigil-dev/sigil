@@ -90,6 +90,90 @@ sessions:
       batch_size: 50
 
 # ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+# Content scanning and detection modes for user input, tool output, and
+# assistant output. Each hook can operate in one of three modes:
+#   - block   : Reject content flagged by scanner (most restrictive)
+#   - flag    : Allow content but mark it for review/logging (default for tool output)
+#   - redact  : Allow content but strip detected sensitive data (default for output)
+#
+# Default mode set in code: input=block, tool=flag, output=redact
+#
+security:
+  scanner:
+    # User input scanning mode. Default: block
+    # Prevents users from submitting input containing detected sensitive content.
+    # Note: Only 'block' is allowed in production. To use 'flag' or 'redact',
+    # you MUST explicitly set allow_permissive_input_mode=true AND you accept the
+    # security implications. This setting cannot be changed via environment variable.
+    input: block
+
+    # Tool output scanning mode. Default: flag
+    # Controls how tool results containing injection patterns are handled before
+    # being passed to the LLM.
+    #
+    # Mode behavior:
+    # - flag  : Detected injection patterns are logged as warnings but the tool
+    #           result is still passed to the LLM unchanged. This is the default
+    #           because it prioritizes availability — tools continue to function
+    #           even when scanner heuristics fire on benign content. Use this
+    #           when tool sources are trusted or false-positive rate is high.
+    # - block : Tool results that contain detected injection patterns are rejected
+    #           outright; the agent receives an error instead of the tainted
+    #           content. Recommended for production deployments where tool sources
+    #           are untrusted (e.g., web-fetch, external APIs, user-supplied URLs).
+    #           This is the hardened setting that prevents prompt-injection via
+    #           malicious tool output from reaching the LLM context.
+    # - redact: Detected sensitive patterns are stripped from tool output before
+    #           it is passed to the LLM. Preserves partial tool results at the
+    #           cost of potentially incomplete context.
+    #
+    # Production guidance:
+    #   If your deployment processes tool results from untrusted sources, set
+    #   this to 'block'. The 'flag' default is intentionally availability-first
+    #   to avoid breaking workflows during initial rollout; it is NOT suitable
+    #   as a long-term security posture when tool sources are not fully trusted.
+    tool: flag
+
+    # Assistant output scanning mode. Default: redact
+    # Controls how LLM output containing detected sensitive content is handled.
+    # - block:  Reject LLM response if it contains detected secrets
+    # - flag:   Allow LLM response but mark it for review
+    # - redact: Strip detected sensitive patterns from LLM output before returning
+    output: redact
+
+    # Allow non-block input scanning modes. Default: false
+    # Setting this to true allows input scanning in 'flag' or 'redact' modes,
+    # which means user input containing sensitive data would be allowed through
+    # with logging or automatic redaction. This is a security policy decision.
+    # CRITICAL: This setting is NOT overridable via SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE
+    # environment variable to prevent env injection from bypassing input controls.
+    # allow_permissive_input_mode: false
+
+    # Content size limits — tune for your deployment's model context and security posture.
+    # See D064/D074 in docs/decisions/decision-log.md for rationale.
+    # All values are in bytes. Min: 65536 (64KB), Max: 10485760 (10MB).
+    # These settings cannot be changed via environment variables.
+    # limits:
+    #   # Maximum content size the scanner accepts (post-normalization).
+    #   # Content exceeding this is rejected. Default: 1MB.
+    #   # Increase for large-context models (e.g., Gemini 1.5 Pro).
+    #   max_content_length: 1048576
+    #
+    #   # Hard cap applied BEFORE normalization to prevent CPU DoS.
+    #   # Must be >= max_content_length. Default: 5MB.
+    #   max_pre_norm_content_length: 5242880
+    #
+    #   # Pre-scanner truncation for tool results. Default: 1MB.
+    #   # Should match max_content_length. Truncated before primary scan.
+    #   max_tool_result_scan_size: 1048576
+    #
+    #   # Truncation target for oversized tool results before re-scan. Default: 512KB.
+    #   # Must be < max_content_length.
+    #   max_tool_content_scan_size: 524288
+
+# ---------------------------------------------------------------------------
 # Workspaces
 # ---------------------------------------------------------------------------
 workspaces:

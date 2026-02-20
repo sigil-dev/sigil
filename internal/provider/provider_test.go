@@ -9,6 +9,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -446,6 +447,51 @@ func TestChatEvent_Validate(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestOriginTag(t *testing.T) {
+	tests := []struct {
+		name   string
+		origin types.Origin
+		want   string
+	}{
+		{"user origin", types.OriginUserInput, "[user_input] "},
+		{"system origin", types.OriginSystem, "[system] "},
+		{"tool origin", types.OriginToolOutput, "[tool_output] "},
+		{"unknown origin", types.Origin("unknown"), ""},
+		{"empty origin", types.Origin(""), ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := provider.OriginTag(tt.origin)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestOriginTagIfEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  types.Origin
+		enabled bool
+		want    string
+	}{
+		{"enabled user origin", types.OriginUserInput, true, "[user_input] "},
+		{"enabled system origin", types.OriginSystem, true, "[system] "},
+		{"enabled tool origin", types.OriginToolOutput, true, "[tool_output] "},
+		{"enabled unknown origin", types.Origin("unknown"), true, ""},
+		{"disabled user origin", types.OriginUserInput, false, ""},
+		{"disabled system origin", types.OriginSystem, false, ""},
+		{"disabled tool origin", types.OriginToolOutput, false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := provider.OriginTagIfEnabled(tt.origin, tt.enabled)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

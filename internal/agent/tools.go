@@ -5,12 +5,11 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/sigil-dev/sigil/internal/provider"
@@ -112,17 +111,11 @@ type ToolCallRequest struct {
 }
 
 // ToolResult holds the output from a tool execution.
+// The Origin of all tool results is unconditionally types.OriginToolOutput;
+// callers (e.g. the agent loop) apply that constant directly when constructing
+// store.Message and provider.Message values.
 type ToolResult struct {
-	Content    string
-	Origin     string      // "tool_output" — always tagged for injection defense
-	ScanResult *ScanResult // Optional scan metadata for suspicious content
-}
-
-// ScanResult contains injection scanning metadata for tool outputs.
-type ScanResult struct {
-	Suspicious bool     // True if suspicious patterns were detected
-	Patterns   []string // Names of matched patterns
-	Score      float64  // Confidence score (0.0-1.0, higher = more suspicious)
+	Content string
 }
 
 // ToolDispatcherConfig holds dependencies for ToolDispatcher.
@@ -148,8 +141,14 @@ type ToolDispatcher struct {
 	// turnBudgets tracks per-turn call counts keyed by TurnID.
 	turnBudgets sync.Map // map[string]*turnBudget
 
-	// auditFailCount tracks consecutive audit append failures for monitoring.
+	// auditFailCount tracks consecutive audit append failures for escalating log levels.
+	// Resets to 0 on each successful append so that intermittent failures do not
+	// permanently elevate the log level. See auditFailTotal for a counter that never resets.
 	auditFailCount atomic.Int64
+	// auditFailTotal is a cumulative (never-reset) count of all audit append failures
+	// across the lifetime of this ToolDispatcher. Unlike auditFailCount, it is not reset
+	// on success, so intermittent FAIL-SUCCESS-FAIL-SUCCESS patterns remain visible to operators.
+	auditFailTotal atomic.Int64
 }
 
 // NewToolDispatcher creates a ToolDispatcher with the given configuration.
@@ -189,6 +188,9 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*Too
 		UserPermissions: req.UserPermissions,
 	}
 	if err := d.enforcer.Check(ctx, checkReq); err != nil {
+		// Audit the denial before returning so security teams can detect
+		// capability probing even when the enforcer blocks the call.
+		d.auditToolExecution(ctx, req, "denied")
 		return nil, err
 	}
 
@@ -205,49 +207,25 @@ func (d *ToolDispatcher) Execute(ctx context.Context, req ToolCallRequest) (*Too
 	if err != nil {
 		// Wrap context deadline exceeded as a tool timeout error.
 		if execCtx.Err() == context.DeadlineExceeded {
-			return nil, sigilerr.Wrap(
-				err,
-				sigilerr.CodeAgentToolTimeout,
-				fmt.Sprintf("tool %q execution timeout", req.ToolName),
+			return nil, sigilerr.With(
+				sigilerr.Wrapf(err, sigilerr.CodeAgentToolTimeout, "tool %q execution timeout", req.ToolName),
 				sigilerr.FieldPlugin(req.PluginName),
 				sigilerr.FieldSessionID(req.SessionID),
 			)
 		}
-		return nil, sigilerr.Wrap(
-			err,
-			sigilerr.CodePluginRuntimeCallFailure,
-			fmt.Sprintf("executing tool %q via plugin %q", req.ToolName, req.PluginName),
+		return nil, sigilerr.With(
+			sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "executing tool %q via plugin %q", req.ToolName, req.PluginName),
 			sigilerr.FieldPlugin(req.PluginName),
 			sigilerr.FieldSessionID(req.SessionID),
 		)
 	}
 
-	// Step 4: Tag result with origin for injection defense.
 	result := &ToolResult{
 		Content: content,
-		Origin:  "tool_output",
 	}
 
-	// Step 5: Scan for prompt injection patterns.
-	scanResult := scanToolOutput(content)
-	result.ScanResult = scanResult
-
-	if scanResult.Suspicious {
-		slog.Warn("suspicious content detected in tool output",
-			"plugin", req.PluginName,
-			"tool", req.ToolName,
-			"session_id", req.SessionID,
-			"patterns", scanResult.Patterns,
-			"score", scanResult.Score,
-		)
-	}
-
-	// Step 6: Audit log the execution.
-	auditResult := "ok"
-	if scanResult.Suspicious {
-		auditResult = "ok_suspicious_content"
-	}
-	d.auditToolExecution(ctx, req, auditResult, scanResult)
+	// Step 5: Audit log the execution.
+	d.auditToolExecution(ctx, req, "ok")
 
 	return result, nil
 }
@@ -269,9 +247,8 @@ func (d *ToolDispatcher) ExecuteForTurn(ctx context.Context, req ToolCallRequest
 
 	count := tb.count.Add(1)
 	if int(count) > maxCalls {
-		return nil, sigilerr.New(
-			sigilerr.CodeAgentToolBudgetExceeded,
-			fmt.Sprintf("tool call budget exceeded: %d/%d calls used", count, maxCalls),
+		return nil, sigilerr.With(
+			sigilerr.Errorf(sigilerr.CodeAgentToolBudgetExceeded, "tool call budget exceeded: %d/%d calls used", count, maxCalls),
 			sigilerr.FieldSessionID(req.SessionID),
 			sigilerr.FieldWorkspaceID(req.WorkspaceID),
 		)
@@ -280,20 +257,30 @@ func (d *ToolDispatcher) ExecuteForTurn(ctx context.Context, req ToolCallRequest
 	return d.Execute(ctx, req)
 }
 
-func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallRequest, result string, scanResult *ScanResult) {
+// auditToolExecution writes a best-effort audit entry for tool dispatch events.
+// Uses the shared logAuditFailure helper (audit.go) for escalating log levels
+// on consecutive failures, matching the same threshold and convention used by
+// the agent loop's audit paths.
+func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallRequest, result string) {
 	if d.auditStore == nil {
 		return
 	}
 
-	details := map[string]any{
-		"tool_name": req.ToolName,
+	// Truncate arguments to 1024 bytes to bound audit entry size while
+	// retaining enough context for security investigations. Walk back to a
+	// valid UTF-8 rune boundary to avoid storing invalid byte sequences.
+	const maxArgLen = 1024
+	args := req.Arguments
+	if len(args) > maxArgLen {
+		i := maxArgLen
+		for i > 0 && !utf8.RuneStart(args[i]) {
+			i--
+		}
+		args = args[:i]
 	}
-
-	// Include scan metadata if present.
-	if scanResult != nil && scanResult.Suspicious {
-		details["scan_suspicious"] = scanResult.Suspicious
-		details["scan_patterns"] = scanResult.Patterns
-		details["scan_score"] = scanResult.Score
+	details := map[string]any{
+		"tool_name":      req.ToolName,
+		"tool_arguments": args,
 	}
 
 	entry := &store.AuditEntry{
@@ -310,112 +297,23 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 
 	// Best-effort audit; do not fail the tool execution on audit errors.
 	if err := d.auditStore.Append(ctx, entry); err != nil {
-		d.auditFailCount.Add(1)
-		slog.Warn("audit store append failed",
-			"error", err,
-			"plugin", req.PluginName,
-			"tool", req.ToolName,
-			"session_id", req.SessionID,
-			"consecutive_failures", d.auditFailCount.Load(),
-		)
+		consecutive := d.auditFailCount.Add(1)
+		cumulative := d.auditFailTotal.Add(1)
+		attrs := []slog.Attr{
+			slog.Any("error", err),
+			slog.String("plugin", req.PluginName),
+			slog.String("tool", req.ToolName),
+			slog.String("session_id", req.SessionID),
+			slog.Int64("consecutive_failures", consecutive),
+		}
+		if consecutive >= auditLogEscalationThreshold {
+			// Include cumulative total at error level so operators can see how many
+			// failures have occurred overall, even across success-interspersed sequences.
+			attrs = append(attrs, slog.Int64("total_failures", cumulative))
+		}
+		logAuditFailure(ctx, consecutive, "audit store append failed", attrs...)
 	} else {
+		// Reset consecutive counter; auditFailTotal tracks cumulative failures for operator visibility.
 		d.auditFailCount.Store(0)
-	}
-}
-
-// scanToolOutput scans tool output for prompt injection patterns.
-// Returns metadata flagging suspicious content.
-func scanToolOutput(output string) *ScanResult {
-	if output == "" {
-		return &ScanResult{
-			Suspicious: false,
-			Patterns:   nil,
-			Score:      0.0,
-		}
-	}
-
-	// Convert to lowercase for case-insensitive matching.
-	lower := strings.ToLower(output)
-
-	// Pattern definitions: each pattern has a name and detection strings.
-	type pattern struct {
-		name    string
-		phrases []string
-	}
-
-	patterns := []pattern{
-		{
-			name: "system_prompt_override",
-			phrases: []string{
-				"ignore previous instructions",
-				"ignore all previous instructions",
-				"disregard previous instructions",
-				"forget previous instructions",
-				"you are now",
-				"system:",
-				"system prompt",
-				"new instructions",
-				"override instructions",
-			},
-		},
-		{
-			name: "role_confusion",
-			phrases: []string{
-				"### human:",
-				"### assistant:",
-				"user:",
-				"assistant:",
-				"<|im_start|>",
-				"<|im_end|>",
-				"[system]",
-				"[user]",
-				"[assistant]",
-			},
-		},
-		{
-			name: "instruction_injection",
-			phrases: []string{
-				"do not follow",
-				"disregard",
-				"override",
-				"ignore the",
-				"forget the",
-				"don't follow",
-				"you must",
-				"you should now",
-				"instead, you will",
-			},
-		},
-	}
-
-	var matchedPatterns []string
-	matchCount := 0
-
-	for _, p := range patterns {
-		for _, phrase := range p.phrases {
-			if strings.Contains(lower, phrase) {
-				matchedPatterns = append(matchedPatterns, p.name)
-				matchCount++
-				break // Only count each pattern once per tool output.
-			}
-		}
-	}
-
-	suspicious := len(matchedPatterns) > 0
-
-	// Calculate score based on number of distinct patterns matched.
-	// Score = (patterns matched / total patterns) capped at 1.0.
-	var score float64
-	if suspicious {
-		score = float64(len(matchedPatterns)) / float64(len(patterns))
-		if score > 1.0 {
-			score = 1.0
-		}
-	}
-
-	return &ScanResult{
-		Suspicious: suspicious,
-		Patterns:   matchedPatterns,
-		Score:      score,
 	}
 }

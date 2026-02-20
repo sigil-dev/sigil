@@ -5,9 +5,12 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	"github.com/sigil-dev/sigil/internal/store/sqlite"
@@ -289,4 +292,101 @@ func TestMessageStore_Search_WorkspaceIsolation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "msg-ws2", results[0].ID)
+}
+
+// TestMigrate_MemoryMessagesOriginColumn verifies that migrateMessages() adds the
+// origin column to an existing memory_messages table that was created without it.
+// This simulates upgrading a database created before the origin column was introduced.
+func TestMigrate_MemoryMessagesOriginColumn(t *testing.T) {
+	ctx := context.Background()
+	dbPath := testDBPath(t, "messages-migrate-origin")
+
+	// Bootstrap a database with the old memory_messages schema — without origin.
+	{
+		db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+		require.NoError(t, err)
+
+		_, err = db.Exec(`
+CREATE TABLE IF NOT EXISTS memory_messages (
+	rowid        INTEGER PRIMARY KEY AUTOINCREMENT,
+	id           TEXT UNIQUE NOT NULL,
+	workspace_id TEXT NOT NULL,
+	session_id   TEXT NOT NULL,
+	role         TEXT NOT NULL,
+	content      TEXT NOT NULL DEFAULT '',
+	tool_call_id TEXT NOT NULL DEFAULT '',
+	tool_name    TEXT NOT NULL DEFAULT '',
+	created_at   TEXT NOT NULL,
+	metadata     TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_messages_workspace ON memory_messages(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_memory_messages_workspace_created ON memory_messages(workspace_id, created_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_messages_fts USING fts5(
+	content,
+	content='memory_messages',
+	content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS memory_messages_ai AFTER INSERT ON memory_messages BEGIN
+	INSERT INTO memory_messages_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_messages_ad AFTER DELETE ON memory_messages BEGIN
+	INSERT INTO memory_messages_fts(memory_messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_messages_au AFTER UPDATE ON memory_messages BEGIN
+	INSERT INTO memory_messages_fts(memory_messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+	INSERT INTO memory_messages_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+`)
+		require.NoError(t, err, "setting up old schema")
+
+		// Verify origin column is absent in the baseline schema.
+		rows, err := db.Query("PRAGMA table_info(memory_messages)")
+		require.NoError(t, err)
+		found := false
+		for rows.Next() {
+			var cid int
+			var name, colType string
+			var notNull int
+			var dfltValue sql.NullString
+			var pk int
+			require.NoError(t, rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk))
+			if name == "origin" {
+				found = true
+			}
+		}
+		require.NoError(t, rows.Err())
+		_ = rows.Close()
+		require.False(t, found, "origin should not exist in the old schema")
+
+		_ = db.Close()
+	}
+
+	// Open via NewMessageStore — this runs migrateMessages() which must add the column.
+	ms, err := sqlite.NewMessageStore(dbPath)
+	require.NoError(t, err, "NewMessageStore should succeed and run migration")
+	defer func() { _ = ms.Close() }()
+
+	// Append a message with an origin value to confirm the column is usable.
+	now := time.Now().UTC().Truncate(time.Second)
+	msg := &store.Message{
+		ID:        "msg-migrate-origin-1",
+		SessionID: "sess-migrate",
+		Role:      store.MessageRoleUser,
+		Content:   "probe message for origin migration",
+		Origin:    "user_input",
+		CreatedAt: now,
+	}
+	err = ms.Append(ctx, "ws-migrate", msg)
+	require.NoError(t, err, "Append should work after migration adds origin column")
+
+	// Read back via Search and verify the origin round-trips correctly.
+	results, err := ms.Search(ctx, "ws-migrate", "probe", store.SearchOpts{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "user_input", results[0].Origin, "Origin should round-trip through storage")
 }

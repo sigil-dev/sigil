@@ -5,13 +5,16 @@ package config
 
 import (
 	"errors"
+	"log/slog"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/sigil-dev/sigil/internal/secrets"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/spf13/viper"
 )
 
@@ -24,6 +27,7 @@ type Config struct {
 	Sessions   SessionsConfig             `mapstructure:"sessions"`
 	Storage    StorageConfig              `mapstructure:"storage"`
 	Workspaces map[string]WorkspaceConfig `mapstructure:"workspaces"`
+	Security   SecurityConfig             `mapstructure:"security"`
 }
 
 // AuthConfig controls REST API authentication.
@@ -114,6 +118,45 @@ type ToolsConfig struct {
 	Deny  []string `mapstructure:"deny"`
 }
 
+// SecurityConfig holds security subsystem settings.
+type SecurityConfig struct {
+	Scanner ScannerConfig `mapstructure:"scanner"`
+}
+
+// ScannerConfig controls per-hook scanner detection modes.
+type ScannerConfig struct {
+	Input                    types.ScannerMode  `mapstructure:"input"`
+	Tool                     types.ScannerMode  `mapstructure:"tool"`
+	Output                   types.ScannerMode  `mapstructure:"output"`
+	AllowPermissiveInputMode bool               `mapstructure:"allow_permissive_input_mode"`
+	Limits                   ScannerLimitsConfig `mapstructure:"limits"`
+	// DisableOriginTagging controls whether origin tag prepending is disabled.
+	// When false (the default), origin tags ([user_input], [tool_output], etc.)
+	// are prepended to message content when sending to LLM providers.
+	// Set to true to disable tagging (reduces upstream token count and avoids
+	// altering message content sent to providers).
+	//
+	// The zero value (false) is the safe default: tagging enabled.
+	DisableOriginTagging bool `mapstructure:"disable_origin_tagging"`
+}
+
+// ScannerLimitsConfig controls content size limits for the security scanner pipeline.
+// All values are in bytes. See D064 and D074 in docs/decisions/decision-log.md for rationale.
+type ScannerLimitsConfig struct {
+	// MaxContentLength is the maximum content size the scanner accepts post-normalization.
+	// Content exceeding this is rejected. Default: 1MB (1048576).
+	MaxContentLength int `mapstructure:"max_content_length"`
+	// MaxPreNormContentLength is the hard cap applied BEFORE normalization to prevent
+	// CPU DoS via large inputs to Normalize(). Default: 5MB (5242880).
+	MaxPreNormContentLength int `mapstructure:"max_pre_norm_content_length"`
+	// MaxToolResultScanSize is the pre-scanner truncation limit for tool results.
+	// Tool results exceeding this are truncated before the primary scan. Default: 1MB (1048576).
+	MaxToolResultScanSize int `mapstructure:"max_tool_result_scan_size"`
+	// MaxToolContentScanSize is the truncation target for oversized tool results
+	// before re-scanning. Must be < MaxContentLength. Default: 512KB (524288).
+	MaxToolContentScanSize int `mapstructure:"max_tool_content_scan_size"`
+}
+
 // SetDefaults applies Sigil's default configuration values to v.
 func SetDefaults(v *viper.Viper) {
 	v.SetDefault("networking.mode", "local")
@@ -127,6 +170,15 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("models.budgets.per_session_tokens", 100000)
 	v.SetDefault("models.budgets.per_hour_usd", 5.00)
 	v.SetDefault("models.budgets.per_day_usd", 50.00)
+	v.SetDefault("security.scanner.input", "block")
+	v.SetDefault("security.scanner.tool", "flag")
+	v.SetDefault("security.scanner.output", "redact")
+	v.SetDefault("security.scanner.allow_permissive_input_mode", false)
+	v.SetDefault("security.scanner.disable_origin_tagging", false)
+	v.SetDefault("security.scanner.limits.max_content_length", 1048576)          // 1MB
+	v.SetDefault("security.scanner.limits.max_pre_norm_content_length", 5242880) // 5MB
+	v.SetDefault("security.scanner.limits.max_tool_result_scan_size", 1048576)   // 1MB
+	v.SetDefault("security.scanner.limits.max_tool_content_scan_size", 524288)   // 512KB
 }
 
 // SetupEnv configures environment variable binding on v with prefix SIGIL_.
@@ -179,7 +231,9 @@ func LoadWithSecrets(path string, store secrets.Store) (*Config, error) {
 	if store == nil {
 		store = secrets.NewKeyringStore()
 	}
-	secrets.ResolveViperSecrets(v, store)
+	if err := secrets.ResolveViperSecrets(v, store); err != nil {
+		return nil, err
+	}
 
 	return FromViper(v)
 }
@@ -194,6 +248,7 @@ func (c *Config) Validate() []error {
 	errs = append(errs, c.validateStorage()...)
 	errs = append(errs, c.validateModels()...)
 	errs = append(errs, c.validateSessions()...)
+	errs = append(errs, c.ValidateSecurity()...)
 
 	return errs
 }
@@ -356,6 +411,142 @@ func (c *Config) validateSessions() []error {
 			"config: sessions.memory.compaction.batch_size must be greater than 0, got %d",
 			c.Sessions.Memory.Compaction.BatchSize,
 		))
+	}
+
+	return errs
+}
+
+// ValidateSecurity checks scanner mode validity, permissive-mode policy, and
+// rejects scanner-related environment variables. Exported so cmd/sigil/start.go
+// can call it in the Cobra pre-run hook before WireGateway().
+func (c *Config) ValidateSecurity() []error {
+	var errs []error
+
+	// Validate scanner modes using types.ScannerMode.Valid(), which is the
+	// authoritative check in pkg/types. This avoids duplicating the valid-mode set here.
+	for _, pair := range []struct {
+		field string
+		value types.ScannerMode
+	}{
+		{"security.scanner.input", c.Security.Scanner.Input},
+		{"security.scanner.tool", c.Security.Scanner.Tool},
+		{"security.scanner.output", c.Security.Scanner.Output},
+	} {
+		if pair.value == "" {
+			continue // empty means "use default" — matches NewScannerModesFromConfig behavior
+		}
+		if !pair.value.Valid() {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: %s: invalid scanner mode %q", pair.field, pair.value))
+		}
+	}
+
+	// Warn when allow_permissive_input_mode is set but input mode is block (or
+	// empty, which defaults to block), because the flag has no effect in that
+	// case and the operator may have intended a different input mode.
+	if c.Security.Scanner.AllowPermissiveInputMode &&
+		(c.Security.Scanner.Input == "" || c.Security.Scanner.Input == types.ScannerModeBlock) {
+		slog.Warn("security.scanner.allow_permissive_input_mode is set but input mode is 'block' (default); the flag has no effect")
+	}
+
+	// Require explicit opt-in to use non-block modes for input scanning.
+	// Only check permissive-mode policy when the input mode is valid; invalid
+	// modes already produce an error above and would otherwise generate a
+	// second, misleading error here.
+	if c.Security.Scanner.Input.Valid() && c.Security.Scanner.Input != types.ScannerModeBlock && !c.Security.Scanner.AllowPermissiveInputMode {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: security.scanner.input is %q but only 'block' is allowed without security.scanner.allow_permissive_input_mode=true",
+			c.Security.Scanner.Input,
+		))
+	}
+
+	// Validate scanner limits: range checks ensure limits are within safe bounds.
+	// Min 64KB (below this scanning is effectively useless), max 10MB (above this risks CPU DoS).
+	const (
+		scannerLimitMin = 65536      // 64KB
+		scannerLimitMax = 10485760   // 10MB
+	)
+	limits := c.Security.Scanner.Limits
+	for _, lv := range []struct {
+		field string
+		value int
+	}{
+		{"security.scanner.limits.max_content_length", limits.MaxContentLength},
+		{"security.scanner.limits.max_pre_norm_content_length", limits.MaxPreNormContentLength},
+		{"security.scanner.limits.max_tool_result_scan_size", limits.MaxToolResultScanSize},
+		{"security.scanner.limits.max_tool_content_scan_size", limits.MaxToolContentScanSize},
+	} {
+		if lv.value < scannerLimitMin {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: %s must be >= %d (64KB), got %d", lv.field, scannerLimitMin, lv.value))
+		} else if lv.value > scannerLimitMax {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: %s must be <= %d (10MB), got %d", lv.field, scannerLimitMax, lv.value))
+		}
+	}
+	// Cross-field constraints: truncation target must be below scan limit,
+	// and pre-scanner truncation must be >= post-scanner truncation target.
+	if limits.MaxToolContentScanSize >= limits.MaxContentLength {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: security.scanner.limits.max_tool_content_scan_size (%d) must be < max_content_length (%d)",
+			limits.MaxToolContentScanSize, limits.MaxContentLength))
+	}
+	if limits.MaxToolResultScanSize < limits.MaxToolContentScanSize {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: security.scanner.limits.max_tool_result_scan_size (%d) must be >= max_tool_content_scan_size (%d)",
+			limits.MaxToolResultScanSize, limits.MaxToolContentScanSize))
+	}
+
+	// Scanner mode env vars are rejected at validate-time to prevent environment
+	// variable injection from weakening security scanning in production. Environment
+	// variables are less auditable than config files (they can be injected by
+	// container orchestrators, CI systems, or shell profiles without appearing in
+	// version-controlled config). All scanner mode fields must be set in the config
+	// file or mounted secrets. Container deployments should use mounted config files
+	// or secret volumes rather than env vars for scanner settings.
+	//
+	// Note on Viper binding timing: os.Getenv runs at validate-time (after Viper
+	// has already called AutomaticEnv() and may have merged env values into the
+	// unmarshalled struct). This check detects env var presence and rejects the
+	// startup, but it does NOT retroactively prevent Viper from reading the env
+	// var into cfg — it surfaces the violation as a fatal startup error so the
+	// operator is forced to remove the env var rather than silently proceeding
+	// with a potentially weakened scanner configuration.
+	//
+	// Security note: This check also runs early in the start command's RunE
+	// (cmd/sigil/start.go) via cfg.ValidateSecurity() before WireGateway(), so
+	// env-var rejection fires before any subsystem is initialized. The duplicate
+	// call here in Validate() ensures coverage for non-start boot paths.
+	blockedScannerEnvVars := []struct {
+		envVar string
+		field  string
+		// boolBlockOnTrue means this is a boolean "allow/disable" flag: only
+		// block when the value is "true" (case-insensitive). Setting the var to
+		// "false" is the secure default and must not trigger a startup error.
+		// When false (the default), any non-empty value is blocked.
+		boolBlockOnTrue bool
+	}{
+		{"SIGIL_SECURITY_SCANNER_ALLOW_PERMISSIVE_INPUT_MODE", "security.scanner.allow_permissive_input_mode", true},
+		{"SIGIL_SECURITY_SCANNER_INPUT", "security.scanner.input", false},
+		{"SIGIL_SECURITY_SCANNER_TOOL", "security.scanner.tool", false},
+		{"SIGIL_SECURITY_SCANNER_OUTPUT", "security.scanner.output", false},
+		{"SIGIL_SECURITY_SCANNER_DISABLE_ORIGIN_TAGGING", "security.scanner.disable_origin_tagging", true},
+		{"SIGIL_SECURITY_SCANNER_LIMITS_MAX_CONTENT_LENGTH", "security.scanner.limits.max_content_length", false},
+		{"SIGIL_SECURITY_SCANNER_LIMITS_MAX_PRE_NORM_CONTENT_LENGTH", "security.scanner.limits.max_pre_norm_content_length", false},
+		{"SIGIL_SECURITY_SCANNER_LIMITS_MAX_TOOL_RESULT_SCAN_SIZE", "security.scanner.limits.max_tool_result_scan_size", false},
+		{"SIGIL_SECURITY_SCANNER_LIMITS_MAX_TOOL_CONTENT_SCAN_SIZE", "security.scanner.limits.max_tool_content_scan_size", false},
+	}
+	for _, blocked := range blockedScannerEnvVars {
+		val := os.Getenv(blocked.envVar)
+		if val == "" {
+			continue
+		}
+		if blocked.boolBlockOnTrue && !strings.EqualFold(val, "true") {
+			continue
+		}
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: %s cannot be set via environment variable (env var %s=%q is set; unset it and use the config file instead)",
+			blocked.field, blocked.envVar, val))
 	}
 
 	return errs

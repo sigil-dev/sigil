@@ -154,9 +154,9 @@ This repo includes in-repo Claude Code hooks and commands in `.claude/`:
 
 ### Design Documents vs Decisions
 
-| Action | Where |
-| ------ | ----- |
-| **MUST NOT** modify | `docs/design/` files (treated as immutable specs) |
+| Action                       | Where                                              |
+| ---------------------------- | -------------------------------------------------- |
+| **MUST NOT** modify          | `docs/design/` files (treated as immutable specs)  |
 | **MUST** document deviations | `docs/decisions/decision-log.md` (next D0XX entry) |
 
 ### RFC2119 Keywords
@@ -337,10 +337,10 @@ ui/                      # SvelteKit web UI
 
 There are TWO separate SQLite message stores with independent schemas:
 
-| Store | Table | Purpose | Location |
-| ----- | ----- | ------- | -------- |
-| `SessionStore` | `messages` | Active session history (`AppendMessage`/`GetActiveWindow`) | `internal/store/sqlite/session.go` |
-| `MessageStore` | `memory_messages` | FTS5 search + memory retrieval | `internal/store/sqlite/message.go` |
+| Store          | Table             | Purpose                                                    | Location                           |
+| -------------- | ----------------- | ---------------------------------------------------------- | ---------------------------------- |
+| `SessionStore` | `messages`        | Active session history (`AppendMessage`/`GetActiveWindow`) | `internal/store/sqlite/session.go` |
+| `MessageStore` | `memory_messages` | FTS5 search + memory retrieval                             | `internal/store/sqlite/message.go` |
 
 **MUST** update BOTH when adding/removing columns from message schema.
 

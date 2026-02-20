@@ -112,7 +112,7 @@ func (p *Provider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 }
 
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
-	contents, err := convertMessages(req.Messages)
+	contents, err := convertMessages(req.Messages, req.Options.OriginTagging)
 	if err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderRequestInvalid, "google: converting messages")
 	}
@@ -172,19 +172,25 @@ func buildConfig(req provider.ChatRequest) *genai.GenerateContentConfig {
 
 // convertMessages transforms provider.Message slices into genai.Content slices.
 // The Google GenAI SDK uses Content with Role and Parts.
-func convertMessages(msgs []provider.Message) ([]*genai.Content, error) {
+// Origin tags are only prepended to user and tool messages (not system or assistant).
+// System messages are excluded (handled via SystemInstruction in buildConfig).
+// The originTagging flag controls whether tags are prepended at all.
+func convertMessages(msgs []provider.Message, originTagging bool) ([]*genai.Content, error) {
 	var result []*genai.Content
 
 	for _, msg := range msgs {
 		switch msg.Role {
 		case store.MessageRoleUser:
+			tag := provider.OriginTagIfEnabled(msg.Origin, originTagging)
 			result = append(result, &genai.Content{
 				Role: "user",
 				Parts: []*genai.Part{
-					{Text: msg.Content},
+					{Text: tag + msg.Content},
 				},
 			})
 		case store.MessageRoleAssistant:
+			// Assistant messages are Sigil-generated LLM outputs and MUST NOT have
+			// origin tags prepended. Tags are only for untrusted user/tool content.
 			result = append(result, &genai.Content{
 				Role: "model",
 				Parts: []*genai.Part{
@@ -192,13 +198,14 @@ func convertMessages(msgs []provider.Message) ([]*genai.Content, error) {
 				},
 			})
 		case store.MessageRoleTool:
+			tag := provider.OriginTagIfEnabled(msg.Origin, originTagging)
 			result = append(result, &genai.Content{
 				Role: "user",
 				Parts: []*genai.Part{
 					{
 						FunctionResponse: &genai.FunctionResponse{
 							Name:     msg.ToolName,
-							Response: map[string]any{"result": msg.Content},
+							Response: map[string]any{"result": tag + msg.Content},
 						},
 					},
 				},

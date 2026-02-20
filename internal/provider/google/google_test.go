@@ -9,7 +9,9 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/provider/google"
+	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,4 +119,154 @@ func mustNewProvider(t *testing.T) *google.Provider {
 	})
 	require.NoError(t, err)
 	return p
+}
+
+// TestChatRequest_OriginTagging verifies that OriginTagging in ChatOptions is
+// threaded through the Chat() preparation path (convertMessages + buildConfig)
+// so that the genai.Content slice carries tagged or untagged content.
+func TestChatRequest_OriginTagging(t *testing.T) {
+	tests := []struct {
+		name          string
+		originTagging bool
+		wantContent   string
+	}{
+		{
+			name:          "tagging enabled: user message content is prefixed with origin tag",
+			originTagging: true,
+			wantContent:   "[user_input] hello",
+		},
+		{
+			name:          "tagging disabled: user message content has no origin tag prefix",
+			originTagging: false,
+			wantContent:   "hello",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := provider.ChatRequest{
+				Model: "gemini-2.5-pro",
+				Messages: []provider.Message{
+					{Role: store.MessageRoleUser, Content: "hello", Origin: types.OriginUserInput},
+				},
+				Options: provider.ChatOptions{
+					OriginTagging: tt.originTagging,
+				},
+			}
+
+			// Exercise the same path Chat() uses: convertMessages then buildConfig.
+			contents, err := google.ConvertMessages(req.Messages, req.Options.OriginTagging)
+			require.NoError(t, err)
+			require.Len(t, contents, 1, "expected one content item")
+
+			c := contents[0]
+			require.NotEmpty(t, c.Parts, "content should have parts")
+			assert.Equal(t, tt.wantContent, c.Parts[0].Text,
+				"Chat() message content mismatch with OriginTagging=%v", tt.originTagging)
+
+			// Verify buildConfig does not interfere with origin tagging (it handles
+			// temperature, max tokens, system prompt — not message content).
+			cfg := google.BuildConfig(req)
+			assert.Nil(t, cfg.SystemInstruction, "no system instruction expected for empty system prompt")
+		})
+	}
+}
+
+// TestConvertMessages_OriginTagging verifies that origin tags are prepended to
+// message content at the provider conversion layer when OriginTagging is enabled.
+func TestConvertMessages_OriginTagging(t *testing.T) {
+	tests := []struct {
+		name          string
+		msgs          []provider.Message
+		originTagging bool
+		// wantPrefixes maps result index → expected content check.
+		wantLen      int
+		wantContents map[int]string
+		// wantFuncResponse maps result index → expected function response "result" value.
+		wantFuncResponse map[int]string
+	}{
+		{
+			name: "user message with origin tagging enabled gets [user_input] prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "hello world", Origin: types.OriginUserInput},
+			},
+			originTagging: true,
+			wantLen:       1,
+			wantContents:  map[int]string{0: "[user_input] hello world"},
+		},
+		{
+			name: "user message with origin tagging disabled has no prefix",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "hello world", Origin: types.OriginUserInput},
+			},
+			originTagging: false,
+			wantLen:       1,
+			wantContents:  map[int]string{0: "hello world"},
+		},
+		{
+			name: "tool message with origin tagging enabled gets [tool_output] prefix in function response",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleTool, Content: "result data", Origin: types.OriginToolOutput, ToolName: "my_tool"},
+			},
+			originTagging:    true,
+			wantLen:          1,
+			wantFuncResponse: map[int]string{0: "[tool_output] result data"},
+		},
+		{
+			name: "tool message with origin tagging disabled has no prefix in function response",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleTool, Content: "result data", Origin: types.OriginToolOutput, ToolName: "my_tool"},
+			},
+			originTagging:    false,
+			wantLen:          1,
+			wantFuncResponse: map[int]string{0: "result data"},
+		},
+		{
+			name: "assistant message never gets origin tag even when tagging enabled",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleAssistant, Content: "I can help"},
+			},
+			originTagging: true,
+			wantLen:       1,
+			wantContents:  map[int]string{0: "I can help"},
+		},
+		{
+			name: "mixed conversation with origin tagging applies tags only to user and tool",
+			msgs: []provider.Message{
+				{Role: store.MessageRoleUser, Content: "question", Origin: types.OriginUserInput},
+				{Role: store.MessageRoleAssistant, Content: "answer"},
+				{Role: store.MessageRoleTool, Content: "tool result", Origin: types.OriginToolOutput, ToolName: "my_tool"},
+			},
+			originTagging:    true,
+			wantLen:          3,
+			wantContents:     map[int]string{0: "[user_input] question", 1: "answer"},
+			wantFuncResponse: map[int]string{2: "[tool_output] tool result"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contents, err := google.ConvertMessages(tt.msgs, tt.originTagging)
+			require.NoError(t, err)
+			require.Len(t, contents, tt.wantLen, "result count mismatch")
+
+			for idx, wantText := range tt.wantContents {
+				c := contents[idx]
+				require.NotEmpty(t, c.Parts, "content at index %d has no parts", idx)
+				assert.Equal(t, wantText, c.Parts[0].Text,
+					"content[%d] text mismatch", idx)
+			}
+
+			for idx, wantResult := range tt.wantFuncResponse {
+				c := contents[idx]
+				require.NotEmpty(t, c.Parts, "content at index %d has no parts", idx)
+				fr := c.Parts[0].FunctionResponse
+				require.NotNil(t, fr, "content[%d] expected FunctionResponse part", idx)
+				gotResult, ok := fr.Response["result"]
+				require.True(t, ok, "content[%d] FunctionResponse missing 'result' key", idx)
+				assert.Equal(t, wantResult, gotResult,
+					"content[%d] FunctionResponse result mismatch", idx)
+			}
+		})
+	}
 }

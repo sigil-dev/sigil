@@ -162,7 +162,7 @@ func (p *Provider) Close() error { return nil }
 
 // buildParams converts a provider.ChatRequest into OpenAI SDK ChatCompletionNewParams.
 func buildParams(req provider.ChatRequest) (openaisdk.ChatCompletionNewParams, error) {
-	msgs, err := convertMessages(req.Messages, req.SystemPrompt)
+	msgs, err := convertMessages(req.Messages, req.SystemPrompt, req.Options.OriginTagging)
 	if err != nil {
 		return openaisdk.ChatCompletionNewParams{}, err
 	}
@@ -198,7 +198,9 @@ func buildParams(req provider.ChatRequest) (openaisdk.ChatCompletionNewParams, e
 
 // convertMessages transforms provider.Message slices into OpenAI SDK message param slices.
 // The system prompt is prepended as a system message if present.
-func convertMessages(msgs []provider.Message, systemPrompt string) ([]openaisdk.ChatCompletionMessageParamUnion, error) {
+// Origin tags are only prepended to user and tool messages (not system or assistant).
+// The originTagging flag controls whether tags are prepended at all.
+func convertMessages(msgs []provider.Message, systemPrompt string, originTagging bool) ([]openaisdk.ChatCompletionMessageParamUnion, error) {
 	var result []openaisdk.ChatCompletionMessageParamUnion
 
 	if systemPrompt != "" {
@@ -208,11 +210,15 @@ func convertMessages(msgs []provider.Message, systemPrompt string) ([]openaisdk.
 	for _, msg := range msgs {
 		switch msg.Role {
 		case store.MessageRoleUser:
-			result = append(result, openaisdk.UserMessage(msg.Content))
+			tag := provider.OriginTagIfEnabled(msg.Origin, originTagging)
+			result = append(result, openaisdk.UserMessage(tag+msg.Content))
 		case store.MessageRoleAssistant:
+			// Assistant messages are Sigil-generated LLM outputs and MUST NOT have
+			// origin tags prepended. Tags are only for untrusted user/tool content.
 			result = append(result, openaisdk.AssistantMessage(msg.Content))
 		case store.MessageRoleTool:
-			result = append(result, openaisdk.ToolMessage(msg.Content, msg.ToolCallID))
+			tag := provider.OriginTagIfEnabled(msg.Origin, originTagging)
+			result = append(result, openaisdk.ToolMessage(tag+msg.Content, msg.ToolCallID))
 		case store.MessageRoleSystem:
 			result = append(result, openaisdk.SystemMessage(msg.Content))
 		default:

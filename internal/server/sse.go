@@ -240,7 +240,11 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 		return nil, err
 	}
 	if s.streamHandler == nil {
-		return nil, huma.Error503ServiceUnavailable("stream handler not configured")
+		// Return 503 with Retry-After to signal transient unavailability.
+		// The stream handler is wired after startup (when the agent loop
+		// is initialized); clients should retry after a few seconds.
+		err503 := huma.Error503ServiceUnavailable("stream handler not configured")
+		return nil, huma.ErrorWithHeaders(err503, http.Header{"Retry-After": []string{"5"}})
 	}
 
 	return &huma.StreamResponse{
