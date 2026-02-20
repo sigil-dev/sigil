@@ -1279,7 +1279,7 @@ func TestRoutes_SendMessage_ErrorEvent_Truncated(t *testing.T) {
 }
 
 func TestRoutes_SendMessage_UnparsableErrorEvent_Truncated(t *testing.T) {
-	// This test verifies that when JSON parsing fails in extractErrorMessage,
+	// This test verifies that when JSON parsing fails in extractErrorEvent,
 	// the raw data is truncated to 200 chars before returning.
 	longInvalidData := strings.Repeat("y", 500) // 500 chars of invalid JSON
 	events := []server.SSEEvent{
@@ -1342,10 +1342,10 @@ func TestRoutes_SendMessage_UnknownEventType_DoesNotPanic(t *testing.T) {
 func TestRoutes_SendMessage_ErrorEvent_SecurityScannerCodes_Returns400(t *testing.T) {
 	// Security scanner error codes must map to 400 Bad Request (client policy violation).
 	securityCodes := []string{
-		"security.scanner.input_blocked",
-		"security.scanner.tool_blocked",
-		"security.scanner.output_blocked",
-		"security.scanner.content_too_large",
+		string(sigilerr.CodeSecurityScannerInputBlocked),
+		string(sigilerr.CodeSecurityScannerToolBlocked),
+		string(sigilerr.CodeSecurityScannerOutputBlocked),
+		string(sigilerr.CodeSecurityScannerContentTooLarge),
 	}
 
 	for _, code := range securityCodes {
@@ -1371,8 +1371,8 @@ func TestRoutes_SendMessage_ErrorEvent_SecurityScannerCodes_Returns400(t *testin
 func TestRoutes_SendMessage_ErrorEvent_SecurityCapabilityAndInputCodes_Returns400(t *testing.T) {
 	// security.capability.invalid and security.input.invalid must also map to 400.
 	codes := []string{
-		"security.capability.invalid",
-		"security.input.invalid",
+		string(sigilerr.CodeSecurityCapabilityInvalid),
+		string(sigilerr.CodeSecurityInvalidInput),
 	}
 
 	for _, code := range codes {

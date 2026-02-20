@@ -11,6 +11,8 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 func (s *Server) registerRoutes() {
@@ -458,14 +460,14 @@ func extractErrorEvent(data string) (code string, message string) {
 // client policy violation and map to 400 Bad Request. All other codes, including
 // unknown or empty codes, map to 502 Bad Gateway (infrastructure/provider failure).
 func errorCodeToHTTPError(code, message string) error {
-	switch code {
+	switch sigilerr.Code(code) {
 	case
-		"security.scanner.input_blocked",
-		"security.scanner.tool_blocked",
-		"security.scanner.output_blocked",
-		"security.scanner.content_too_large",
-		"security.capability.invalid",
-		"security.input.invalid":
+		sigilerr.CodeSecurityScannerInputBlocked,
+		sigilerr.CodeSecurityScannerToolBlocked,
+		sigilerr.CodeSecurityScannerOutputBlocked,
+		sigilerr.CodeSecurityScannerContentTooLarge,
+		sigilerr.CodeSecurityCapabilityInvalid,
+		sigilerr.CodeSecurityInvalidInput:
 		return huma.Error400BadRequest(message)
 	default:
 		return huma.Error502BadGateway(message)
