@@ -369,12 +369,16 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 			case "session_id":
 				sessionID = extractSessionID(event.Data, sessionID)
 			case "error":
-				msg := extractErrorMessage(event.Data)
+				code, msg := extractErrorEvent(event.Data)
 				// Cancel context and drain remaining events to unblock the
 				// stream handler goroutine before returning.
 				cancel()
 				drainSSEChannel(ch)
-				return nil, huma.Error502BadGateway(msg)
+				return nil, errorCodeToHTTPError(code, msg)
+			default:
+				slog.Warn("handleSendMessage: unknown SSE event type, skipping",
+					"event_type", event.Event,
+				)
 			}
 		case <-ctx.Done():
 			return nil, huma.Error504GatewayTimeout("request timed out")
@@ -422,11 +426,12 @@ func extractSessionID(data string, fallback string) string {
 	return payload.SessionID
 }
 
-// extractErrorMessage parses an error event payload and returns a human-readable message.
-// The returned message is bounded to 200 characters to prevent unbounded data leaks
-// from malicious/buggy stream handlers.
-func extractErrorMessage(data string) string {
+// extractErrorEvent parses an error event payload and returns the error code and a
+// human-readable message. The returned message is bounded to 200 characters to
+// prevent unbounded data leaks from malicious/buggy stream handlers.
+func extractErrorEvent(data string) (code string, message string) {
 	var payload struct {
+		Code    string `json:"code"`
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	}
@@ -436,16 +441,35 @@ func extractErrorMessage(data string) string {
 			"raw_data", truncated,
 			"error", err,
 		)
-		// Return raw data truncated to 200 characters
-		return truncateForLogging(data, 200)
+		// Return raw data truncated to 200 characters; no code available.
+		return "", truncateForLogging(data, 200)
 	}
 	if payload.Message != "" {
-		return truncateForLogging(payload.Message, 200)
+		return payload.Code, truncateForLogging(payload.Message, 200)
 	}
 	if payload.Error != "" {
-		return truncateForLogging(payload.Error, 200)
+		return payload.Code, truncateForLogging(payload.Error, 200)
 	}
-	return "unknown stream error"
+	return payload.Code, "unknown stream error"
+}
+
+// errorCodeToHTTPError maps a sigilerr error code string (received via SSE) to the
+// appropriate huma HTTP error. Security scanner and input-validation codes indicate a
+// client policy violation and map to 400 Bad Request. All other codes, including
+// unknown or empty codes, map to 502 Bad Gateway (infrastructure/provider failure).
+func errorCodeToHTTPError(code, message string) error {
+	switch code {
+	case
+		"security.scanner.input_blocked",
+		"security.scanner.tool_blocked",
+		"security.scanner.output_blocked",
+		"security.scanner.content_too_large",
+		"security.capability.invalid",
+		"security.input.invalid":
+		return huma.Error400BadRequest(message)
+	default:
+		return huma.Error502BadGateway(message)
+	}
 }
 
 // extractText parses a JSON text_delta payload and returns the text field.
