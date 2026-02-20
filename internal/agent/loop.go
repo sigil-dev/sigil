@@ -436,16 +436,17 @@ func (l *Loop) prepare(ctx context.Context, msg InboundMessage) (*store.Session,
 		// from actual threat detections.
 		auditReason := scanBlockedReason(inputThreat, scanErr)
 		switch auditReason {
-		case "scanner_failure", "content_too_large":
-			slog.ErrorContext(ctx, "input rejected by scanner",
+		case "blocked_threat":
+			slog.ErrorContext(ctx, "input rejected: prompt injection detected",
 				slog.String("reason", auditReason),
 				slog.Any("error", scanErr),
 				slog.String("session_id", msg.SessionID),
 				slog.String("workspace_id", msg.WorkspaceID),
 			)
-		case "blocked_threat":
-			slog.WarnContext(ctx, "input scan blocked threat",
+		case "scanner_failure", "content_too_large":
+			slog.WarnContext(ctx, "input rejected by scanner",
 				slog.String("reason", auditReason),
+				slog.Any("error", scanErr),
 				slog.String("session_id", msg.SessionID),
 				slog.String("workspace_id", msg.WorkspaceID),
 			)
