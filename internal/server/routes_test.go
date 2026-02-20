@@ -1280,7 +1280,7 @@ func TestRoutes_SendMessage_ErrorEvent_Truncated(t *testing.T) {
 
 func TestRoutes_SendMessage_UnparsableErrorEvent_Truncated(t *testing.T) {
 	// This test verifies that when JSON parsing fails in extractErrorEvent,
-	// the raw data is truncated to 200 chars before returning.
+	// a safe generic message is returned instead of raw data.
 	longInvalidData := strings.Repeat("y", 500) // 500 chars of invalid JSON
 	events := []server.SSEEvent{
 		{Event: "error", Data: longInvalidData},
@@ -1297,23 +1297,20 @@ func TestRoutes_SendMessage_UnparsableErrorEvent_Truncated(t *testing.T) {
 	// Should produce a 502 error due to the error event.
 	assert.GreaterOrEqual(t, w.Code, 500, "error event must produce a server error status")
 
-	// Response body should be bounded (not contain the full 500-char payload)
-	responseBody := w.Body.String()
-	assert.True(t, len(responseBody) < 500, "response should not contain unbounded data from invalid JSON (len=%d)", len(responseBody))
-
-	// Verify the message is truncated with "..." suffix
-	assert.Contains(t, responseBody, "...")
+	// Response body should contain the safe generic message, not raw data.
+	assert.Contains(t, w.Body.String(), "agent reported an error; details unavailable")
 }
 // --- Part 1: Unknown event type warning ---
 
 func TestRoutes_SendMessage_UnknownEventType_DoesNotPanic(t *testing.T) {
-	// Unknown event types (tool_call, usage, done) must not panic and must be
+	// Unknown event types (tool_call, usage) must not panic and must be
 	// silently skipped (with a slog.Warn) rather than causing incorrect behavior.
 	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
 		{Event: "tool_call", Data: `{"tool":"bash","args":{}}`},
 		{Event: "usage", Data: `{"tokens":100}`},
-		{Event: "done", Data: `{}`},
-		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		// Note: "done" is not a special sentinel — it would just be another
+		// unknown event. Channel close ends the loop, not a "done" event.
 	}
 	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
 
@@ -1338,17 +1335,43 @@ func TestRoutes_SendMessage_UnknownEventType_DoesNotPanic(t *testing.T) {
 
 // --- Part 2: Error code in SSE error event + HTTP status mapping ---
 
-func TestRoutes_SendMessage_ErrorEvent_SecurityScannerCodes_Returns400(t *testing.T) {
-	// Security scanner error codes must map to 400 Bad Request (client policy violation).
-	securityCodes := []string{
-		string(sigilerr.CodeSecurityScannerInputBlocked),
-		string(sigilerr.CodeSecurityScannerToolBlocked),
-		string(sigilerr.CodeSecurityScannerOutputBlocked),
-		string(sigilerr.CodeSecurityScannerContentTooLarge),
+func TestRoutes_SendMessage_ErrorEvent_SecurityScannerInputBlocked_Returns422(t *testing.T) {
+	// security.scanner.input_blocked is a client content rejection: 422 Unprocessable Entity.
+	code := string(sigilerr.CodeSecurityScannerInputBlocked)
+	events := []server.SSEEvent{
+		{Event: "error", Data: `{"code":"` + code + `","message":"blocked by security policy","error":"` + code + `"}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
+		"security.scanner.input_blocked must produce 422 Unprocessable Entity")
+	assert.Contains(t, w.Body.String(), "blocked by security policy")
+}
+
+func TestRoutes_SendMessage_ErrorEvent_SecurityScannerOtherCodes_Returns503(t *testing.T) {
+	// All security.scanner.* codes other than input_blocked are service-side transient: 503.
+	tests := []struct {
+		name string
+		code sigilerr.Code
+	}{
+		{"tool_blocked", sigilerr.CodeSecurityScannerToolBlocked},
+		{"output_blocked", sigilerr.CodeSecurityScannerOutputBlocked},
+		{"content_too_large", sigilerr.CodeSecurityScannerContentTooLarge},
+		{"failure", sigilerr.CodeSecurityScannerFailure},
+		{"cancelled", sigilerr.CodeSecurityScannerCancelled},
+		{"circuit_breaker_open", sigilerr.CodeSecurityScannerCircuitBreakerOpen},
+		{"empty_rule_stage", sigilerr.CodeSecurityScannerEmptyRuleStage},
 	}
 
-	for _, code := range securityCodes {
-		t.Run(code, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code := string(tt.code)
 			events := []server.SSEEvent{
 				{Event: "error", Data: `{"code":"` + code + `","message":"blocked by security policy","error":"` + code + `"}`},
 			}
@@ -1360,8 +1383,8 @@ func TestRoutes_SendMessage_ErrorEvent_SecurityScannerCodes_Returns400(t *testin
 			w := httptest.NewRecorder()
 			srv.Handler().ServeHTTP(w, req)
 
-			assert.Equal(t, http.StatusBadRequest, w.Code,
-				"security scanner code %q must produce 400 Bad Request", code)
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+				"security scanner code %q must produce 503 Service Unavailable", code)
 			assert.Contains(t, w.Body.String(), "blocked by security policy")
 		})
 	}
@@ -1438,7 +1461,7 @@ func TestRoutes_SendMessage_ErrorEvent_OtherErrorCodes_Returns502(t *testing.T) 
 
 func TestRoutes_SendMessage_ErrorEvent_CodeFieldParsed(t *testing.T) {
 	// Verify the code field is parsed from the SSE error payload.
-	// A security code -> 400; this test exercises the code parsing path.
+	// security.scanner.input_blocked → 422 Unprocessable Entity (client content rejection).
 	events := []server.SSEEvent{
 		{Event: "error", Data: `{"code":"security.scanner.input_blocked","message":"your input was blocked","error":"security.scanner.input_blocked"}`},
 	}
@@ -1450,8 +1473,41 @@ func TestRoutes_SendMessage_ErrorEvent_CodeFieldParsed(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 	assert.Contains(t, w.Body.String(), "your input was blocked")
+}
+
+func TestRoutes_SendMessage_ErrorEvent_MessageTakesPriorityOverError(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "error", Data: `{"code":"provider.upstream.failure","error":"err_short","message":"human readable message"}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadGateway, w.Code)
+	assert.Contains(t, w.Body.String(), "human readable message")
+	assert.NotContains(t, w.Body.String(), "err_short")
+}
+
+func TestRoutes_SendMessage_ErrorEvent_CodeOnlyPayload_FallbackMessage(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "error", Data: `{"code":"security.scanner.input_blocked"}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Contains(t, w.Body.String(), "unknown stream error")
 }
 
 func TestRoutes_SendMessage_NoStreamHandler_Returns503(t *testing.T) {

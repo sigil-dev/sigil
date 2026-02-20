@@ -378,8 +378,10 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 				drainSSEChannel(ch)
 				return nil, errorCodeToHTTPError(code, msg)
 			default:
+				truncated := truncateForLogging(event.Data, 100)
 				slog.Warn("handleSendMessage: unknown SSE event type, skipping",
 					"event_type", event.Event,
+					"event_data", truncated,
 				)
 			}
 		case <-ctx.Done():
@@ -439,12 +441,11 @@ func extractErrorEvent(data string) (code string, message string) {
 	}
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
 		truncated := truncateForLogging(data, 100)
-		slog.Warn("failed to parse error event, using raw string as fallback",
+		slog.Error("failed to parse error event payload",
 			"raw_data", truncated,
 			"error", err,
 		)
-		// Return raw data truncated to 200 characters; no code available.
-		return "", truncateForLogging(data, 200)
+		return "", "agent reported an error; details unavailable"
 	}
 	if payload.Message != "" {
 		return payload.Code, truncateForLogging(payload.Message, 200)
@@ -456,22 +457,11 @@ func extractErrorEvent(data string) (code string, message string) {
 }
 
 // errorCodeToHTTPError maps a sigilerr error code string (received via SSE) to the
-// appropriate huma HTTP error. Security scanner and input-validation codes indicate a
-// client policy violation and map to 400 Bad Request. All other codes, including
-// unknown or empty codes, map to 502 Bad Gateway (infrastructure/provider failure).
+// appropriate huma HTTP error. Delegates to sigilerr.HTTPStatusFromCode for canonical
+// status mapping so that classification logic is not duplicated here.
 func errorCodeToHTTPError(code, message string) error {
-	switch sigilerr.Code(code) {
-	case
-		sigilerr.CodeSecurityScannerInputBlocked,
-		sigilerr.CodeSecurityScannerToolBlocked,
-		sigilerr.CodeSecurityScannerOutputBlocked,
-		sigilerr.CodeSecurityScannerContentTooLarge,
-		sigilerr.CodeSecurityCapabilityInvalid,
-		sigilerr.CodeSecurityInvalidInput:
-		return huma.Error400BadRequest(message)
-	default:
-		return huma.Error502BadGateway(message)
-	}
+	status := sigilerr.HTTPStatusFromCode(sigilerr.Code(code))
+	return huma.NewError(status, message)
 }
 
 // extractText parses a JSON text_delta payload and returns the text field.

@@ -523,3 +523,50 @@ func TestHTTPStatusScannerCodes(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// HTTPStatusFromCode
+// ---------------------------------------------------------------------------
+
+func TestHTTPStatusFromCode(t *testing.T) {
+	tests := []struct {
+		name string
+		code sigilerr.Code
+		want int
+	}{
+		// Security scanner: input_blocked → 422 (client content rejection).
+		{name: "input_blocked → 422", code: sigilerr.CodeSecurityScannerInputBlocked, want: http.StatusUnprocessableEntity},
+		// Security scanner: all other → 503 (service-side transient).
+		{name: "tool_blocked → 503", code: sigilerr.CodeSecurityScannerToolBlocked, want: http.StatusServiceUnavailable},
+		{name: "output_blocked → 503", code: sigilerr.CodeSecurityScannerOutputBlocked, want: http.StatusServiceUnavailable},
+		{name: "content_too_large → 503", code: sigilerr.CodeSecurityScannerContentTooLarge, want: http.StatusServiceUnavailable},
+		{name: "scanner_failure → 503", code: sigilerr.CodeSecurityScannerFailure, want: http.StatusServiceUnavailable},
+		{name: "scanner_cancelled → 503", code: sigilerr.CodeSecurityScannerCancelled, want: http.StatusServiceUnavailable},
+		{name: "circuit_breaker_open → 503", code: sigilerr.CodeSecurityScannerCircuitBreakerOpen, want: http.StatusServiceUnavailable},
+		{name: "empty_rule_stage → 503", code: sigilerr.CodeSecurityScannerEmptyRuleStage, want: http.StatusServiceUnavailable},
+		// Invalid input codes → 400.
+		{name: "security.capability.invalid → 400", code: sigilerr.CodeSecurityCapabilityInvalid, want: http.StatusBadRequest},
+		{name: "security.input.invalid → 400", code: sigilerr.CodeSecurityInvalidInput, want: http.StatusBadRequest},
+		{name: "agent.loop.invalid_input → 400", code: sigilerr.CodeAgentLoopInvalidInput, want: http.StatusBadRequest},
+		{name: "agent.skill.parse.invalid → 400", code: sigilerr.CodeAgentSkillParseInvalid, want: http.StatusBadRequest},
+		{name: "config.validate.invalid_value → 400", code: sigilerr.CodeConfigValidateInvalidValue, want: http.StatusBadRequest},
+		{name: "plugin.manifest.validate.invalid → 400", code: sigilerr.CodePluginManifestValidateInvalid, want: http.StatusBadRequest},
+		// Upstream/provider failures → 502.
+		{name: "provider.upstream.failure → 502", code: sigilerr.CodeProviderUpstreamFailure, want: http.StatusBadGateway},
+		// Budget exceeded → 429.
+		{name: "agent.tool.budget_exceeded → 429", code: sigilerr.CodeAgentToolBudgetExceeded, want: http.StatusTooManyRequests},
+		{name: "provider.budget.exceeded → 429", code: sigilerr.CodeProviderBudgetExceeded, want: http.StatusTooManyRequests},
+		// Timeout → 504.
+		{name: "agent.tool.timeout → 504", code: sigilerr.CodeAgentToolTimeout, want: http.StatusGatewayTimeout},
+		// Unknown/empty → 502 (default fallback).
+		{name: "empty code → 502", code: sigilerr.Code(""), want: http.StatusBadGateway},
+		{name: "unknown code → 502", code: sigilerr.Code("some.unknown.code"), want: http.StatusBadGateway},
+		{name: "store.database.failure → 502", code: sigilerr.CodeStoreDatabaseFailure, want: http.StatusBadGateway},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sigilerr.HTTPStatusFromCode(tt.code))
+		})
+	}
+}
