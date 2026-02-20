@@ -772,9 +772,13 @@ func (l *Loop) runToolLoop(
 					slog.Any("error", scanErr),
 					slog.Any("error_code", sigilerr.CodeOf(scanErr)),
 				)
-				l.auditScanBlocked(ctx, msg, intermediateThreat, scanBlockedReason(intermediateThreat, scanErr),
-				"agent_loop.output_blocked",
-				map[string]any{"stage": string(types.ScanStageOutput)})
+				// Skip audit for context cancellation: cancellation is infrastructure,
+				// not a security threat, and should not pollute audit logs.
+				if !sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerCancelled) {
+					l.auditScanBlocked(ctx, msg, intermediateThreat, scanBlockedReason(intermediateThreat, scanErr),
+						"agent_loop.output_blocked",
+						map[string]any{"stage": string(types.ScanStageOutput)})
+				}
 				return "", nil, scanErr
 			}
 			text = scannedText
@@ -1085,6 +1089,11 @@ func (l *Loop) auditScanBlocked(ctx context.Context, msg InboundMessage, threatI
 // no result), or when threatInfo indicates neither a detection nor a bypass (clean scan).
 func (l *Loop) auditToolScan(ctx context.Context, msg InboundMessage, toolCallID, toolName string, threatInfo *store.ThreatInfo, scanErr error) {
 	if l.auditStore == nil {
+		return
+	}
+	// Skip audit for context cancellation: cancellation is infrastructure,
+	// not a security threat, and should not pollute audit logs.
+	if sigilerr.HasCode(scanErr, sigilerr.CodeSecurityScannerCancelled) {
 		return
 	}
 	// Skip when scan succeeded and no threat was detected or bypassed.

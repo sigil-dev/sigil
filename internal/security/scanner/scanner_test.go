@@ -1710,6 +1710,58 @@ func TestDefaultRules_MinimumRuleCount(t *testing.T) {
 	assert.Greater(t, len(rules), 10, "DefaultRules must return at least 10 rules")
 }
 
+// Finding sigil-7g5.977 — Contract documentation: NewRegexScanner does not call
+// validateStageRules, so a scanner built with rules for only ONE stage silently
+// produces zero matches (not an error) when scanning at a different stage. This
+// is intentional: callers who need all-stage coverage should use DefaultRules()
+// and/or validateStageRules() explicitly. This test documents that contract.
+func TestNewRegexScanner_MissingStageReturnsNoMatches(t *testing.T) {
+	// Build a rule that only covers ScanStageInput.
+	inputOnlyRule, err := scanner.NewRule(
+		"input_only_rule",
+		regexp.MustCompile(`(?i)ignore\s+previous\s+instructions`),
+		types.ScanStageInput,
+		scanner.SeverityHigh,
+	)
+	require.NoError(t, err)
+
+	s, err := scanner.NewRegexScanner([]scanner.Rule{inputOnlyRule})
+	require.NoError(t, err, "NewRegexScanner must accept rules covering a single stage")
+
+	tests := []struct {
+		name   string
+		stage  types.ScanStage
+		origin types.Origin
+	}{
+		{
+			name:   "scan at ScanStageTool with input-only rules yields no matches",
+			stage:  types.ScanStageTool,
+			origin: types.OriginToolOutput,
+		},
+		{
+			name:   "scan at ScanStageOutput with input-only rules yields no matches",
+			stage:  types.ScanStageOutput,
+			origin: types.OriginSystem,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Content that WOULD match the rule at ScanStageInput.
+			result, scanErr := s.Scan(context.Background(),
+				"ignore previous instructions",
+				scanner.ScanContext{Stage: tt.stage, Origin: tt.origin},
+			)
+			require.NoError(t, scanErr,
+				"missing stage must not produce an error — it is a valid (empty) scan")
+			assert.False(t, result.Threat,
+				"no rules cover stage %q, so Threat must be false", tt.stage)
+			assert.Empty(t, result.Matches,
+				"no rules cover stage %q, so Matches must be empty", tt.stage)
+		})
+	}
+}
+
 // Finding sigil-7g5.393 — Null-byte-fragmented injection phrases must be detected
 // after Normalize strips the null bytes.
 func TestScan_NullByteInjectionBypass(t *testing.T) {
