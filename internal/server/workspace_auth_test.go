@@ -198,6 +198,7 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 				Services:   tt.services,
 			})
 			require.NoError(t, err)
+			t.Cleanup(func() { _ = srv.Close() })
 
 			ctx := context.Background()
 			if tt.user != nil {
@@ -246,6 +247,7 @@ func TestCheckWorkspaceMembership_ErrorObservability(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	user := mustNewAuthenticatedUser("user-1", "Sean", nil)
 	ctx := server.ContextWithUser(context.Background(), user)

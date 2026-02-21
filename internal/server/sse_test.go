@@ -39,6 +39,7 @@ func newTestSSEServer(t *testing.T, events []server.SSEEvent) *server.Server {
 		StreamHandler: &mockStreamHandler{events: events},
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 	return srv
 }
 
@@ -241,6 +242,7 @@ func TestSSE_DrainOnWriteError(t *testing.T) {
 	}
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content":"hello","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -373,6 +375,7 @@ func TestSSE_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(t *testing.T) {
 		StreamHandler: &mockStreamHandler{events: events},
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content": "Hello", "workspace_id": "any-workspace-id"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -408,6 +411,7 @@ func TestSSE_WorkspaceMembership_ValidMember_Succeeds(t *testing.T) {
 		StreamHandler: &mockStreamHandler{events: events},
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	// workspace "homelab" has member "user-1" (see mockWorkspaceService.Get)
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
@@ -441,6 +445,7 @@ func TestSSE_WorkspaceMembership_NonMember_Returns403(t *testing.T) {
 		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	// workspace "homelab" has member "user-1", not "user-2"
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
@@ -474,6 +479,7 @@ func TestSSE_WorkspaceMembership_WorkspaceNotFound_Returns403(t *testing.T) {
 		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content": "Hello", "workspace_id": "nonexistent"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -506,6 +512,7 @@ func TestSSE_WorkspaceMembership_EmptyWorkspaceID_Returns422(t *testing.T) {
 		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content": "Hello", "workspace_id": ""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -532,6 +539,7 @@ func TestSSE_DrainRaceCondition(t *testing.T) {
 			}
 			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 			require.NoError(t, err)
+			t.Cleanup(func() { _ = srv.Close() })
 
 			body := `{"content":"race","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -584,6 +592,7 @@ func TestSSE_DrainRaceCondition_CancelDuringRapidWrites(t *testing.T) {
 
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content":"test rapid cancellation","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -703,6 +712,7 @@ func TestSSE_ConcurrentWriteAndDrain(t *testing.T) {
 
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content":"concurrent race test","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -780,6 +790,7 @@ func TestSSE_DrainRaceCondition_ComprehensiveStressTest(t *testing.T) {
 
 			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 			require.NoError(t, err)
+			t.Cleanup(func() { _ = srv.Close() })
 
 			body := `{"content":"race stress test","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -814,6 +825,7 @@ func TestSSE_DrainRaceCondition_MultipleConsumers(t *testing.T) {
 
 			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 			require.NoError(t, err)
+			t.Cleanup(func() { _ = srv.Close() })
 
 			body := `{"content":"multi-consumer race","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -870,6 +882,7 @@ func TestSSE_DrainRaceCondition_BurstyPattern(t *testing.T) {
 
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content":"bursty pattern race test","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -893,6 +906,7 @@ func TestSSE_DrainOnContextCancellation(t *testing.T) {
 
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content":"test context cancellation","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -1134,6 +1148,7 @@ func TestSSE_HangingProviderTimeout(t *testing.T) {
 
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content":"test","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -1184,6 +1199,7 @@ func TestSSE_ContextCancellationDuringEventRouting(t *testing.T) {
 
 	srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
 
 	body := `{"content":"test cancellation","workspace_id":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
