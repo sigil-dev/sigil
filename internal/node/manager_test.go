@@ -15,140 +15,269 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestManagerRegisterStoresNodeAndMarksOnline(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
+func TestManagerRegister(t *testing.T) {
+	tests := []struct {
+		name     string
+		reg      Registration
+		wantErr  bool
+		wantCode sigilerr.Code
+		check    func(t *testing.T, nodes []Node)
+	}{
+		{
+			name: "stores node and marks online",
+			reg:  Registration{NodeID: "macbook-pro", Tools: []string{"camera", "screen"}},
+			check: func(t *testing.T, nodes []Node) {
+				require.Len(t, nodes, 1)
+				assert.Equal(t, "macbook-pro", nodes[0].ID)
+				assert.True(t, nodes[0].Online)
+				assert.Equal(t, []string{"camera", "screen"}, nodes[0].Tools)
+			},
+		},
+		{
+			name: "stores workspace ID",
+			reg:  Registration{NodeID: "macbook-pro", WorkspaceID: "ws-123", Tools: []string{"camera"}},
+			check: func(t *testing.T, nodes []Node) {
+				require.Len(t, nodes, 1)
+				assert.Equal(t, "ws-123", nodes[0].WorkspaceID)
+			},
+		},
+		{
+			name:     "whitespace-only nodeID rejected",
+			reg:      Registration{NodeID: "   ", Tools: []string{"camera"}},
+			wantErr:  true,
+			wantCode: sigilerr.CodeServerRequestInvalid,
+		},
+		{
+			name: "nil tools stored as empty",
+			reg:  Registration{NodeID: "phone", Tools: nil},
+			check: func(t *testing.T, nodes []Node) {
+				require.Len(t, nodes, 1)
+				assert.Equal(t, "phone", nodes[0].ID)
+				assert.True(t, nodes[0].Online)
+				// nil and empty slices are equivalent for ranging; only emptiness matters.
+				assert.Empty(t, nodes[0].Tools)
+			},
+		},
+	}
 
-	err := mgr.Register(Registration{
-		NodeID: "macbook-pro",
-		Tools:  []string{"camera", "screen"},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := NewManager(ManagerConfig{})
+			err := mgr.Register(tt.reg)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.wantCode))
+				assert.Empty(t, mgr.List())
+				return
+			}
+			require.NoError(t, err)
+			if tt.check != nil {
+				tt.check(t, mgr.List())
+			}
+		})
+	}
+
+	// Extra check for "nil tools" case: PrefixedTools must return non-nil empty slice.
+	t.Run("nil tools stored as empty/prefixed tools non-nil", func(t *testing.T) {
+		mgr := NewManager(ManagerConfig{})
+		require.NoError(t, mgr.Register(Registration{NodeID: "phone", Tools: nil}))
+		tools, err := mgr.PrefixedTools("phone")
+		require.NoError(t, err)
+		assert.NotNil(t, tools)
+		assert.Empty(t, tools)
 	})
-	require.NoError(t, err)
-
-	nodes := mgr.List()
-	require.Len(t, nodes, 1)
-	assert.Equal(t, "macbook-pro", nodes[0].ID)
-	assert.True(t, nodes[0].Online)
-	assert.Equal(t, []string{"camera", "screen"}, nodes[0].Tools)
-}
-
-func TestManagerRegisterWithWorkspaceID(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
-
-	err := mgr.Register(Registration{
-		NodeID:      "macbook-pro",
-		WorkspaceID: "ws-123",
-		Tools:       []string{"camera"},
-	})
-	require.NoError(t, err)
-
-	nodes := mgr.List()
-	require.Len(t, nodes, 1)
-	assert.Equal(t, "ws-123", nodes[0].WorkspaceID)
 }
 
 func TestManagerPrefixedTools(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
-
-	err := mgr.Register(Registration{
-		NodeID: "phone",
-		Tools:  []string{"camera", "location"},
-	})
-	require.NoError(t, err)
-
-	tools, err := mgr.PrefixedTools("phone")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"node:phone:camera", "node:phone:location"}, tools)
-}
-
-func TestManagerPrefixedToolsUnknownNode(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
-
-	_, err := mgr.PrefixedTools("nonexistent")
-	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound))
-}
-
-func TestManagerDisconnectMarksNodeOffline(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
-
-	err := mgr.Register(Registration{
-		NodeID: "tablet",
-		Tools:  []string{"camera"},
-	})
-	require.NoError(t, err)
-
-	require.NoError(t, mgr.Disconnect("tablet"))
-
-	nodes := mgr.List()
-	require.Len(t, nodes, 1)
-	assert.False(t, nodes[0].Online)
-}
-
-func TestManagerListReturnsRegisteredNodes(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
-
-	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
-	require.NoError(t, err)
-	err = mgr.Register(Registration{NodeID: "phone", Tools: []string{"camera"}})
-	require.NoError(t, err)
-
-	nodes := mgr.List()
-	require.Len(t, nodes, 2)
-	assert.Equal(t, "mac", nodes[0].ID)
-	assert.Equal(t, "phone", nodes[1].ID)
-}
-
-func TestManagerQueueToolCallQueuesForOfflineNodeWithTTL(t *testing.T) {
-	now := time.Date(2026, time.February, 21, 12, 0, 0, 0, time.UTC)
-	mgr := NewManager(ManagerConfig{
-		QueueTTL: 60 * time.Second,
-		Now: func() time.Time {
-			return now
+	tests := []struct {
+		name     string
+		setup    func(*Manager)
+		nodeID   string
+		wantErr  bool
+		wantCode sigilerr.Code
+		want     []string
+	}{
+		{
+			name: "returns prefixed names",
+			setup: func(mgr *Manager) {
+				require.NoError(t, mgr.Register(Registration{
+					NodeID: "phone",
+					Tools:  []string{"camera", "location"},
+				}))
+			},
+			nodeID: "phone",
+			want:   []string{"node:phone:camera", "node:phone:location"},
 		},
-	})
+		{
+			name:     "unknown node returns error",
+			setup:    func(_ *Manager) {},
+			nodeID:   "nonexistent",
+			wantErr:  true,
+			wantCode: sigilerr.CodeServerEntityNotFound,
+		},
+	}
 
-	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
-	require.NoError(t, err)
-	require.NoError(t, mgr.Disconnect("mac"))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := NewManager(ManagerConfig{})
+			tt.setup(mgr)
 
-	reqID, err := mgr.QueueToolCall("mac", "screen", `{"format":"png"}`)
-	require.NoError(t, err)
-	assert.NotEmpty(t, reqID)
-
-	pending, err := mgr.PendingRequests("mac")
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, reqID, pending[0].ID)
-	assert.Equal(t, "mac", pending[0].NodeID)
-	assert.Equal(t, "screen", pending[0].Tool)
-	assert.Equal(t, `{"format":"png"}`, pending[0].Args)
-	assert.Equal(t, now.Add(60*time.Second), pending[0].ExpiresAt)
+			tools, err := mgr.PrefixedTools(tt.nodeID)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.wantCode))
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, tools)
+		})
+	}
 }
 
-func TestManagerQueueToolCallExpiresAfterTTL(t *testing.T) {
-	now := time.Date(2026, time.February, 21, 13, 0, 0, 0, time.UTC)
-	mgr := NewManager(ManagerConfig{
-		QueueTTL: 2 * time.Second,
-		Now: func() time.Time {
-			return now
+func TestManagerDisconnect(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(*Manager)
+		nodeID   string
+		wantErr  bool
+		wantCode sigilerr.Code
+		check    func(t *testing.T, nodes []Node)
+	}{
+		{
+			name: "marks node offline",
+			setup: func(mgr *Manager) {
+				require.NoError(t, mgr.Register(Registration{
+					NodeID: "tablet",
+					Tools:  []string{"camera"},
+				}))
+			},
+			nodeID: "tablet",
+			check: func(t *testing.T, nodes []Node) {
+				require.Len(t, nodes, 1)
+				assert.False(t, nodes[0].Online)
+			},
 		},
-	})
+		{
+			name:     "unknown node returns error",
+			setup:    func(_ *Manager) {},
+			nodeID:   "nonexistent",
+			wantErr:  true,
+			wantCode: sigilerr.CodeServerEntityNotFound,
+		},
+	}
 
-	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
-	require.NoError(t, err)
-	require.NoError(t, mgr.Disconnect("mac"))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := NewManager(ManagerConfig{})
+			tt.setup(mgr)
 
-	_, err = mgr.QueueToolCall("mac", "screen", `{"format":"png"}`)
-	require.NoError(t, err)
+			err := mgr.Disconnect(tt.nodeID)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.wantCode))
+				assert.Empty(t, mgr.List())
+				return
+			}
+			require.NoError(t, err)
+			if tt.check != nil {
+				tt.check(t, mgr.List())
+			}
+		})
+	}
+}
 
-	pending, err := mgr.PendingRequests("mac")
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
+func TestManagerList(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Manager)
+		check func(t *testing.T, nodes []Node)
+	}{
+		{
+			name:  "empty manager returns empty list",
+			setup: func(_ *Manager) {},
+			check: func(t *testing.T, nodes []Node) {
+				assert.Empty(t, nodes)
+			},
+		},
+		{
+			name: "two registered nodes returned in sorted order",
+			setup: func(mgr *Manager) {
+				require.NoError(t, mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}}))
+				require.NoError(t, mgr.Register(Registration{NodeID: "phone", Tools: []string{"camera"}}))
+			},
+			check: func(t *testing.T, nodes []Node) {
+				require.Len(t, nodes, 2)
+				assert.Equal(t, "mac", nodes[0].ID)
+				assert.Equal(t, "phone", nodes[1].ID)
+			},
+		},
+	}
 
-	now = now.Add(3 * time.Second)
-	pending, err = mgr.PendingRequests("mac")
-	require.NoError(t, err)
-	assert.Empty(t, pending)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := NewManager(ManagerConfig{})
+			tt.setup(mgr)
+			tt.check(t, mgr.List())
+		})
+	}
+}
+
+func TestManagerQueueToolCallTTL(t *testing.T) {
+	tests := []struct {
+		name        string
+		ttl         time.Duration
+		tickAfter   time.Duration
+		wantPending int
+	}{
+		{
+			name:        "queues request for offline node and sets ExpiresAt",
+			ttl:         60 * time.Second,
+			tickAfter:   0,
+			wantPending: 1,
+		},
+		{
+			name:        "request expires after TTL elapses",
+			ttl:         2 * time.Second,
+			tickAfter:   3 * time.Second,
+			wantPending: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := time.Date(2026, time.February, 21, 12, 0, 0, 0, time.UTC)
+			now := base
+			mgr := NewManager(ManagerConfig{
+				QueueTTL: tt.ttl,
+				Now:      func() time.Time { return now },
+			})
+
+			require.NoError(t, mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}}))
+			require.NoError(t, mgr.Disconnect("mac"))
+
+			reqID, err := mgr.QueueToolCall("mac", "screen", `{"format":"png"}`)
+			require.NoError(t, err)
+			assert.NotEmpty(t, reqID)
+
+			// Verify fields on the queued request before any tick.
+			pending, err := mgr.PendingRequests("mac")
+			require.NoError(t, err)
+			require.Len(t, pending, 1)
+			assert.Equal(t, reqID, pending[0].ID)
+			assert.Equal(t, "mac", pending[0].NodeID)
+			assert.Equal(t, "screen", pending[0].Tool)
+			assert.Equal(t, `{"format":"png"}`, pending[0].Args)
+			assert.Equal(t, base.Add(tt.ttl), pending[0].ExpiresAt)
+
+			if tt.tickAfter > 0 {
+				now = base.Add(tt.tickAfter)
+			}
+
+			pending, err = mgr.PendingRequests("mac")
+			require.NoError(t, err)
+			assert.Len(t, pending, tt.wantPending)
+		})
+	}
 }
 
 func TestManagerPendingRequestsUnknownNode(t *testing.T) {
@@ -289,15 +418,6 @@ func TestManagerRegisterWithAuthValidates(t *testing.T) {
 	}
 }
 
-func TestManagerRegisterEmptyNodeIDReturnsError(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
-
-	err := mgr.Register(Registration{NodeID: "   ", Tools: []string{"camera"}})
-	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerRequestInvalid))
-	assert.Empty(t, mgr.List())
-}
-
 func TestManagerRegisterWorkspaceValidator(t *testing.T) {
 	validatorErr := sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "workspace not allowed")
 
@@ -358,16 +478,6 @@ func TestManagerRegisterAuthOrderBeforeWorkspaceValidator(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerAuthUnauthorized))
 	assert.False(t, wsValidator.called, "WorkspaceValidator must not be called when Auth fails first")
-}
-
-func TestManagerDisconnectUnknownNode(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
-
-	err := mgr.Disconnect("nonexistent")
-	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound))
-
-	assert.Empty(t, mgr.List())
 }
 
 func TestManagerListCapsDefensiveCopy(t *testing.T) {
@@ -528,11 +638,11 @@ func TestManagerPendingRequestsExactBoundaryExpiry(t *testing.T) {
 
 func TestManagerRegisterReregistration(t *testing.T) {
 	tests := []struct {
-		name        string
-		nodeOnline  bool
-		wantErr     bool
-		wantCode    sigilerr.Code
-		wantOnline  bool
+		name       string
+		nodeOnline bool
+		wantErr    bool
+		wantCode   sigilerr.Code
+		wantOnline bool
 	}{
 		{
 			name:       "offline node can re-register",
@@ -590,28 +700,6 @@ func TestManagerRegisterReregistration(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestManagerRegisterNilToolsSlice(t *testing.T) {
-	mgr := NewManager(ManagerConfig{})
-
-	err := mgr.Register(Registration{
-		NodeID: "phone",
-		Tools:  nil,
-	})
-	require.NoError(t, err)
-
-	nodes := mgr.List()
-	require.Len(t, nodes, 1)
-	assert.Equal(t, "phone", nodes[0].ID)
-	assert.True(t, nodes[0].Online)
-	// nil and empty slices are equivalent for ranging; only emptiness matters.
-	assert.Empty(t, nodes[0].Tools)
-
-	tools, err := mgr.PrefixedTools("phone")
-	require.NoError(t, err)
-	assert.NotNil(t, tools)
-	assert.Empty(t, tools)
 }
 
 func TestManagerPruneDeletesKeyWhenAllExpired(t *testing.T) {
