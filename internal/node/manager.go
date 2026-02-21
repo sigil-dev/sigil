@@ -116,6 +116,7 @@ func (m *Manager) Register(reg Registration) error {
 
 	if m.workspaceValidator != nil {
 		if err := m.workspaceValidator.ValidateWorkspace(nodeID, reg.WorkspaceID); err != nil {
+			slog.Warn("node workspace validation failed", "node_id", nodeID, "workspace_id", reg.WorkspaceID, "error", err)
 			return sigilerr.Wrapf(err, sigilerr.CodeServerAuthUnauthorized, "validating workspace for node %s", nodeID)
 		}
 	}
@@ -154,7 +155,7 @@ func (m *Manager) PrefixedTools(nodeID string) ([]string, error) {
 	node, ok := m.nodes[nodeID]
 	m.mu.RUnlock()
 	if !ok {
-		slog.Debug("prefixed tools: node not found", "node_id", nodeID)
+		slog.Warn("prefixed tools: node not found", "node_id", nodeID)
 		return nil, sigilerr.New(sigilerr.CodeServerEntityNotFound, "node not found",
 			sigilerr.Field("node_id", nodeID))
 	}

@@ -6,7 +6,6 @@ package node
 import (
 	"crypto/sha256"
 	"crypto/subtle"
-	"log/slog"
 	"net"
 	"strings"
 
@@ -104,7 +103,6 @@ func (a *TokenAuth) CheckToken(candidate string) error {
 		return nil
 	}
 
-	slog.Warn("node token authentication rejected")
 	return sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid node token")
 }
 

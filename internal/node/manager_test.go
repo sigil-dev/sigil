@@ -4,6 +4,7 @@
 package node
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -234,10 +235,12 @@ func (s *stubAuth) Authenticate(_ Registration) error {
 
 // stubWorkspaceValidator is a test WorkspaceValidator that can be configured to pass or fail.
 type stubWorkspaceValidator struct {
-	err error
+	err    error
+	called bool
 }
 
 func (s *stubWorkspaceValidator) ValidateWorkspace(_, _ string) error {
+	s.called = true
 	return s.err
 }
 
@@ -337,6 +340,24 @@ func TestManagerRegisterWorkspaceValidator(t *testing.T) {
 	}
 }
 
+func TestManagerRegisterAuthOrderBeforeWorkspaceValidator(t *testing.T) {
+	wsValidator := &stubWorkspaceValidator{}
+	mgr := NewManager(ManagerConfig{
+		Auth:               &stubAuth{err: sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "unauthorized")},
+		WorkspaceValidator: wsValidator,
+	})
+
+	err := mgr.Register(Registration{
+		NodeID:      "phone",
+		WorkspaceID: "ws-123",
+		Tools:       []string{"camera"},
+	})
+
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerAuthUnauthorized))
+	assert.False(t, wsValidator.called, "WorkspaceValidator must not be called when Auth fails first")
+}
+
 func TestManagerDisconnectUnknownNode(t *testing.T) {
 	mgr := NewManager(ManagerConfig{})
 
@@ -367,6 +388,45 @@ func TestManagerListCapsDefensiveCopy(t *testing.T) {
 	assert.Equal(t, "cap:read", nodes2[0].Capabilities[0])
 }
 
+func TestManagerQueueToolCallArgsSizeLimit(t *testing.T) {
+	tests := []struct {
+		name    string
+		argsLen int
+		wantErr bool
+	}{
+		{
+			name:    "args exactly at 64 KB succeeds",
+			argsLen: maxArgsSizeBytes,
+			wantErr: false,
+		},
+		{
+			name:    "args at 64 KB plus 1 byte returns error",
+			argsLen: maxArgsSizeBytes + 1,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := NewManager(ManagerConfig{})
+
+			err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
+			require.NoError(t, err)
+			mgr.Disconnect("mac")
+
+			args := strings.Repeat("x", tt.argsLen)
+
+			_, err = mgr.QueueToolCall("mac", "screen", args)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerRequestInvalid))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestManagerQueueToolCallMixedExpiry(t *testing.T) {
 	const ttl = 50 * time.Millisecond
 
@@ -395,6 +455,74 @@ func TestManagerQueueToolCallMixedExpiry(t *testing.T) {
 	assert.Equal(t, secondID, pending[0].ID)
 }
 
+func TestManagerQueueToolCallPendingCap(t *testing.T) {
+	now := time.Date(2026, time.February, 21, 14, 0, 0, 0, time.UTC)
+	mgr := NewManager(ManagerConfig{
+		QueueTTL: 10 * time.Minute,
+		Now: func() time.Time {
+			return now
+		},
+	})
+
+	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
+	require.NoError(t, err)
+	mgr.Disconnect("mac")
+
+	// Fill the queue to exactly maxPendingPerNode.
+	for i := range maxPendingPerNode {
+		_, err := mgr.QueueToolCall("mac", "screen", "small")
+		require.NoError(t, err, "request %d should succeed", i)
+	}
+
+	pending, err := mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	require.Len(t, pending, maxPendingPerNode)
+
+	// The 101st request must be rejected.
+	_, err = mgr.QueueToolCall("mac", "screen", "small")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerRequestInvalid))
+	assert.Contains(t, err.Error(), "pending queue is full")
+}
+
+func TestManagerPendingRequestsExactBoundaryExpiry(t *testing.T) {
+	const ttl = 30 * time.Second
+	start := time.Date(2026, time.February, 21, 15, 0, 0, 0, time.UTC)
+	now := start
+
+	mgr := NewManager(ManagerConfig{
+		QueueTTL: ttl,
+		Now: func() time.Time {
+			return now
+		},
+	})
+
+	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
+	require.NoError(t, err)
+	mgr.Disconnect("mac")
+
+	reqID, err := mgr.QueueToolCall("mac", "screen", `{"action":"capture"}`)
+	require.NoError(t, err)
+	assert.NotEmpty(t, reqID)
+
+	// Advance clock to exactly ExpiresAt (start + TTL).
+	// The condition is !req.ExpiresAt.Before(now), i.e. ExpiresAt >= now,
+	// so a request whose ExpiresAt equals now must still be kept.
+	now = start.Add(ttl)
+
+	pending, err := mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "request at exact ExpiresAt boundary must be kept")
+	assert.Equal(t, reqID, pending[0].ID)
+
+	// Advance clock 1 nanosecond past ExpiresAt — request must now be pruned.
+	now = start.Add(ttl + time.Nanosecond)
+
+	pending, err = mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	assert.Empty(t, pending, "request 1ns past ExpiresAt must be pruned")
+}
+
 func TestManagerRegisterReregistration(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -421,8 +549,14 @@ func TestManagerRegisterReregistration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := NewManager(ManagerConfig{})
 
-			// First registration
-			err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
+			// First registration with initial field values
+			err := mgr.Register(Registration{
+				NodeID:       "mac",
+				WorkspaceID:  "ws-old",
+				Platform:     "darwin",
+				Capabilities: []string{"screen:capture"},
+				Tools:        []string{"screen"},
+			})
 			require.NoError(t, err)
 
 			// Optionally disconnect to make node offline
@@ -430,8 +564,14 @@ func TestManagerRegisterReregistration(t *testing.T) {
 				mgr.Disconnect("mac")
 			}
 
-			// Second registration attempt
-			err = mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen", "camera"}})
+			// Second registration attempt with different field values
+			err = mgr.Register(Registration{
+				NodeID:       "mac",
+				WorkspaceID:  "ws-new",
+				Platform:     "linux",
+				Capabilities: []string{"screen:capture", "camera:record"},
+				Tools:        []string{"screen", "camera"},
+			})
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.True(t, sigilerr.HasCode(err, tt.wantCode))
@@ -441,6 +581,9 @@ func TestManagerRegisterReregistration(t *testing.T) {
 				require.Len(t, nodes, 1)
 				assert.Equal(t, tt.wantOnline, nodes[0].Online)
 				assert.Equal(t, []string{"screen", "camera"}, nodes[0].Tools)
+				assert.Equal(t, "ws-new", nodes[0].WorkspaceID)
+				assert.Equal(t, "linux", nodes[0].Platform)
+				assert.Equal(t, []string{"screen:capture", "camera:record"}, nodes[0].Capabilities)
 			}
 		})
 	}
