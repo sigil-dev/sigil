@@ -6,6 +6,7 @@ package node
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"log/slog"
 	"net"
 	"strings"
 
@@ -47,8 +48,11 @@ type TailscaleAuth struct {
 	requiredTag string
 }
 
-func NewTailscaleAuth(cfg TailscaleConfig) *TailscaleAuth {
-	return &TailscaleAuth{requiredTag: strings.TrimSpace(cfg.RequiredTag)}
+func NewTailscaleAuth(cfg TailscaleConfig) (*TailscaleAuth, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return &TailscaleAuth{requiredTag: strings.TrimSpace(cfg.RequiredTag)}, nil
 }
 
 func (a *TailscaleAuth) CheckTag(tags []string) bool {
@@ -100,6 +104,7 @@ func (a *TokenAuth) CheckToken(candidate string) error {
 		return nil
 	}
 
+	slog.Warn("node token authentication failed")
 	return sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "invalid node token")
 }
 

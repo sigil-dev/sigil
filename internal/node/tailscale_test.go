@@ -78,7 +78,12 @@ func TestTailscaleConfigValidate(t *testing.T) {
 }
 
 func TestTailscaleAuthCheckTag(t *testing.T) {
-	auth := node.NewTailscaleAuth(node.TailscaleConfig{RequiredTag: "tag:agent-node"})
+	auth, err := node.NewTailscaleAuth(node.TailscaleConfig{
+		Hostname:    "my-agent",
+		AuthKey:     "tskey-auth-kzzzz",
+		RequiredTag: "tag:agent-node",
+	})
+	require.NoError(t, err)
 
 	assert.True(t, auth.CheckTag([]string{"tag:agent-node", "tag:other"}))
 	assert.False(t, auth.CheckTag([]string{"tag:other"}))
@@ -202,7 +207,12 @@ func TestTailscaleAuthAuthenticate(t *testing.T) {
 		},
 	}
 
-	auth := node.NewTailscaleAuth(node.TailscaleConfig{RequiredTag: "tag:agent-node"})
+	auth, err := node.NewTailscaleAuth(node.TailscaleConfig{
+		Hostname:    "my-agent",
+		AuthKey:     "tskey-auth-kzzzz",
+		RequiredTag: "tag:agent-node",
+	})
+	require.NoError(t, err)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -240,4 +250,39 @@ func TestTokenAuthAuthenticate(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerAuthUnauthorized))
 	})
+}
+
+func TestNewTailscaleAuthRejectsInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      node.TailscaleConfig
+		wantCode sigilerr.Code
+	}{
+		{
+			name: "missing tag prefix creates error",
+			cfg: node.TailscaleConfig{
+				Hostname:    "my-agent",
+				AuthKey:     "tskey-auth-kzzzz",
+				RequiredTag: "agent-node", // missing "tag:" prefix
+			},
+			wantCode: sigilerr.CodeServerConfigInvalid,
+		},
+		{
+			name: "empty required tag creates error",
+			cfg: node.TailscaleConfig{
+				Hostname: "my-agent",
+				AuthKey:  "tskey-auth-kzzzz",
+			},
+			wantCode: sigilerr.CodeServerConfigInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth, err := node.NewTailscaleAuth(tt.cfg)
+			require.Error(t, err)
+			assert.Nil(t, auth)
+			assert.True(t, sigilerr.HasCode(err, tt.wantCode))
+		})
+	}
 }

@@ -22,19 +22,28 @@ type Authenticator interface {
 	Authenticate(reg Registration) error
 }
 
+// WorkspaceValidator checks whether a node is permitted to bind to a workspace.
+type WorkspaceValidator interface {
+	ValidateWorkspace(nodeID, workspaceID string) error
+}
+
 type Registration struct {
 	NodeID        string
 	WorkspaceID   string
+	Platform      string
+	Capabilities  []string
 	TailscaleTags []string // for Tailscale tag-based auth
 	AuthToken     string   // for token-based auth
 	Tools         []string
 }
 
 type Node struct {
-	ID          string
-	WorkspaceID string
-	Tools       []string
-	Online      bool
+	ID           string
+	WorkspaceID  string
+	Platform     string
+	Capabilities []string
+	Tools        []string
+	Online       bool
 }
 
 type PendingRequest struct {
@@ -47,9 +56,10 @@ type PendingRequest struct {
 }
 
 type ManagerConfig struct {
-	QueueTTL time.Duration
-	Now      func() time.Time
-	Auth     Authenticator // optional; nil means no auth required
+	QueueTTL           time.Duration
+	Now                func() time.Time
+	Auth               Authenticator      // optional; nil means no auth required
+	WorkspaceValidator WorkspaceValidator // optional; nil means no workspace enforcement
 }
 
 type Manager struct {
@@ -58,10 +68,11 @@ type Manager struct {
 	nodes   map[string]Node
 	pending map[string][]PendingRequest
 
-	queueTTL time.Duration
-	now      func() time.Time
-	nextID   uint64
-	auth     Authenticator
+	queueTTL           time.Duration
+	now                func() time.Time
+	nextID             uint64
+	auth               Authenticator
+	workspaceValidator WorkspaceValidator
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -76,11 +87,12 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 
 	return &Manager{
-		nodes:    make(map[string]Node),
-		pending:  make(map[string][]PendingRequest),
-		queueTTL: queueTTL,
-		now:      now,
-		auth:     cfg.Auth,
+		nodes:              make(map[string]Node),
+		pending:            make(map[string][]PendingRequest),
+		queueTTL:           queueTTL,
+		now:                now,
+		auth:               cfg.Auth,
+		workspaceValidator: cfg.WorkspaceValidator,
 	}
 }
 
@@ -92,21 +104,41 @@ func (m *Manager) Register(reg Registration) error {
 
 	if m.auth != nil {
 		if err := m.auth.Authenticate(reg); err != nil {
-			return err
+			slog.Warn("node authentication failed", "node_id", nodeID)
+			return sigilerr.Wrapf(err, sigilerr.CodeServerAuthUnauthorized, "authenticating node %s", nodeID)
+		}
+	}
+
+	if m.workspaceValidator != nil {
+		if err := m.workspaceValidator.ValidateWorkspace(nodeID, reg.WorkspaceID); err != nil {
+			return sigilerr.Wrapf(err, sigilerr.CodeServerAuthUnauthorized, "validating workspace for node %s", nodeID)
 		}
 	}
 
 	tools := make([]string, len(reg.Tools))
 	copy(tools, reg.Tools)
 
+	caps := make([]string, len(reg.Capabilities))
+	copy(caps, reg.Capabilities)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if existing, ok := m.nodes[nodeID]; ok {
+		if existing.Online {
+			return sigilerr.New(sigilerr.CodeServerRequestInvalid, "node is already online; disconnect before re-registering",
+				sigilerr.Field("node_id", nodeID))
+		}
+		slog.Warn("offline node re-registering", "node_id", nodeID, "previous_workspace", existing.WorkspaceID)
+	}
+
 	m.nodes[nodeID] = Node{
-		ID:          nodeID,
-		WorkspaceID: reg.WorkspaceID,
-		Tools:       tools,
-		Online:      true,
+		ID:           nodeID,
+		WorkspaceID:  reg.WorkspaceID,
+		Platform:     reg.Platform,
+		Capabilities: caps,
+		Tools:        tools,
+		Online:       true,
 	}
 
 	return nil
@@ -135,6 +167,7 @@ func (m *Manager) Disconnect(nodeID string) {
 
 	node, ok := m.nodes[nodeID]
 	if !ok {
+		slog.Warn("Disconnect called for unknown node", "node_id", nodeID)
 		return
 	}
 

@@ -256,3 +256,63 @@ func TestManagerRegisterWithAuthValidates(t *testing.T) {
 		})
 	}
 }
+
+func TestManagerRegisterEmptyNodeIDReturnsError(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+
+	err := mgr.Register(Registration{NodeID: "   ", Tools: []string{"camera"}})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerRequestInvalid))
+	assert.Empty(t, mgr.List())
+}
+
+func TestManagerRegisterReregistration(t *testing.T) {
+	tests := []struct {
+		name        string
+		nodeOnline  bool
+		wantErr     bool
+		wantCode    sigilerr.Code
+		wantOnline  bool
+	}{
+		{
+			name:       "offline node can re-register",
+			nodeOnline: false,
+			wantErr:    false,
+			wantOnline: true,
+		},
+		{
+			name:       "online node cannot re-register",
+			nodeOnline: true,
+			wantErr:    true,
+			wantCode:   sigilerr.CodeServerRequestInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := NewManager(ManagerConfig{})
+
+			// First registration
+			err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
+			require.NoError(t, err)
+
+			// Optionally disconnect to make node offline
+			if !tt.nodeOnline {
+				mgr.Disconnect("mac")
+			}
+
+			// Second registration attempt
+			err = mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen", "camera"}})
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.wantCode))
+			} else {
+				require.NoError(t, err)
+				nodes := mgr.List()
+				require.Len(t, nodes, 1)
+				assert.True(t, nodes[0].Online)
+				assert.Equal(t, []string{"screen", "camera"}, nodes[0].Tools)
+			}
+		})
+	}
+}
