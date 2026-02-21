@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -318,6 +319,19 @@ func (c *Config) validateNetworking() []error {
 				"config: networking.trusted_proxies[%d] is not a valid CIDR range, got %q: %v",
 				i, cidr, err,
 			))
+		}
+	}
+
+	// Validate dev_csp_connect_src: this value is interpolated directly into the
+	// Content-Security-Policy header. CR (\r), LF (\n), and semicolons would allow
+	// HTTP header injection or CSP directive injection respectively.
+	if src := c.Networking.DevCSPConnectSrc; src != "" {
+		if strings.ContainsAny(src, "\r\n;") {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: networking.dev_csp_connect_src must not contain CR, LF, or semicolons, got %q", src))
+		} else if u, err := url.Parse(src); err != nil || u.Scheme == "" || u.Host == "" {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: networking.dev_csp_connect_src must be a valid URL origin (scheme://host), got %q", src))
 		}
 	}
 

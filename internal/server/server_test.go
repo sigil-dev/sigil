@@ -260,6 +260,28 @@ func TestServer_CSPHeader_IsPresent(t *testing.T) {
 	assert.NotContains(t, csp, "localhost:18789")
 }
 
+func TestServer_CSPHeader_DevCSPConnectSrc_AppendedToConnectSrc(t *testing.T) {
+	srv, err := server.New(server.Config{
+		ListenAddr:       "127.0.0.1:0",
+		DevCSPConnectSrc: "http://localhost:18789",
+	})
+	require.NoError(t, err)
+	defer func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	csp := w.Header().Get("Content-Security-Policy")
+	assert.Contains(t, csp, "connect-src 'self' http://localhost:18789",
+		"CSP connect-src should include the configured DevCSPConnectSrc value")
+}
+
 func TestServer_RateLimiterBeforeAuth(t *testing.T) {
 	// Create a server with auth enabled and rate limiting enabled.
 	// The rate limiter should block requests BEFORE auth checks them,
@@ -433,6 +455,32 @@ func TestConfig_Validate(t *testing.T) {
 				// ReadTimeout and WriteTimeout not set
 			},
 			wantErr: false,
+		},
+		{
+			name: "valid DevCSPConnectSrc",
+			cfg: server.Config{
+				ListenAddr:       "127.0.0.1:8080",
+				DevCSPConnectSrc: "http://localhost:18789",
+			},
+			wantErr: false,
+		},
+		{
+			name: "DevCSPConnectSrc with newline rejected",
+			cfg: server.Config{
+				ListenAddr:       "127.0.0.1:8080",
+				DevCSPConnectSrc: "http://localhost:18789\nevil-header: injected",
+			},
+			wantErr: true,
+			errMsg:  "DevCSPConnectSrc must not contain CR, LF, or semicolons",
+		},
+		{
+			name: "DevCSPConnectSrc with semicolon rejected",
+			cfg: server.Config{
+				ListenAddr:       "127.0.0.1:8080",
+				DevCSPConnectSrc: "http://localhost:18789; script-src 'unsafe-eval'",
+			},
+			wantErr: true,
+			errMsg:  "DevCSPConnectSrc must not contain CR, LF, or semicolons",
 		},
 	}
 

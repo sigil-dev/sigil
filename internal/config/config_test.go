@@ -252,6 +252,48 @@ func TestValidate_TrustedProxies(t *testing.T) {
 	}
 }
 
+func TestValidate_DevCSPConnectSrc(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+		errMsg  string
+	}{
+		{"empty is valid", "", false, ""},
+		{"valid http origin", "http://localhost:18789", false, ""},
+		{"valid https origin", "https://dev.example.com:3000", false, ""},
+		{"contains newline", "http://localhost:18789\nevil-header: injected", true, "must not contain CR, LF, or semicolons"},
+		{"contains carriage return", "http://localhost:18789\revil", true, "must not contain CR, LF, or semicolons"},
+		{"contains semicolon", "http://localhost:18789; script-src 'unsafe-eval'", true, "must not contain CR, LF, or semicolons"},
+		{"missing scheme", "localhost:18789", true, "must be a valid URL origin"},
+		{"missing host", "http://", true, "must be a valid URL origin"},
+		{"bare path", "/some/path", true, "must be a valid URL origin"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Networking.DevCSPConnectSrc = tt.value
+			errs := cfg.Validate()
+			if tt.wantErr {
+				require.NotEmpty(t, errs)
+				found := false
+				for _, err := range errs {
+					if strings.Contains(err.Error(), "dev_csp_connect_src") {
+						found = true
+						assert.Contains(t, err.Error(), tt.errMsg)
+					}
+				}
+				assert.True(t, found, "expected error about dev_csp_connect_src")
+			} else {
+				for _, err := range errs {
+					assert.NotContains(t, err.Error(), "dev_csp_connect_src")
+				}
+			}
+		})
+	}
+}
+
 func TestValidate_StorageBackend(t *testing.T) {
 	tests := []struct {
 		name    string

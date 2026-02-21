@@ -789,6 +789,97 @@ func TestEnforcer_AuditThreshold_ResetsOnSuccess(t *testing.T) {
 	assert.Equal(t, int64(0), enforcer.AuditAllowFailCount(), "counter must reset to 0 after successful audit write")
 }
 
+func TestEnforcer_AuditThreshold_DenyPath_Escalation(t *testing.T) {
+	// NOTE: Not parallel — this test mutates the global slog default logger to
+	// capture log records. Running in parallel would cause other tests' log
+	// output to appear in this handler and vice versa.
+
+	// After N consecutive deny-path audit failures, the counter should reflect
+	// that and log level must escalate from Warn to Error at the threshold.
+	handler := &captureHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	audit := &mockAuditStore{err: errors.New("database offline")}
+	enforcer := security.NewEnforcer(audit)
+	// Register plugin with "read" capability only — requesting "write" will be denied.
+	enforcer.RegisterPlugin("test-plugin",
+		security.NewCapabilitySet("read"),
+		security.NewCapabilitySet())
+
+	ctx := context.Background()
+	req := security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "write",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	}
+
+	assert.Equal(t, int64(0), enforcer.AuditDenyFailCount(), "initial count should be 0")
+
+	// 1st failure: counter = 1, below threshold → Warn
+	assert.Error(t, enforcer.Check(ctx, req), "deny path must return error")
+	assert.Equal(t, int64(1), enforcer.AuditDenyFailCount())
+
+	// 2nd failure: counter = 2, below threshold → Warn
+	assert.Error(t, enforcer.Check(ctx, req))
+	assert.Equal(t, int64(2), enforcer.AuditDenyFailCount())
+
+	// 3rd failure: counter = 3 == AuditLogEscalationThreshold → Error
+	assert.Error(t, enforcer.Check(ctx, req))
+	assert.Equal(t, int64(3), enforcer.AuditDenyFailCount(), "at threshold, count should be 3")
+
+	// Verify log levels: first two must be Warn, third must be Error.
+	records := handler.snapshot()
+	var auditFailRecords []slog.Record
+	for _, r := range records {
+		if r.Message == "audit log failure on denied decision (best-effort, not blocking)" ||
+			r.Message == "audit log failure on denied decision (persistent)" {
+			auditFailRecords = append(auditFailRecords, r)
+		}
+	}
+	require.Len(t, auditFailRecords, 3, "expected 3 audit-failure log records")
+	assert.Equal(t, slog.LevelWarn, auditFailRecords[0].Level, "1st failure must log at Warn")
+	assert.Equal(t, slog.LevelWarn, auditFailRecords[1].Level, "2nd failure must log at Warn")
+	assert.Equal(t, slog.LevelError, auditFailRecords[2].Level, "3rd failure (at threshold) must log at Error")
+}
+
+func TestEnforcer_AuditThreshold_DenyPath_ResetsOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	// After some deny-path audit failures, a successful audit write resets the counter to 0.
+	audit := &mockAuditStore{err: errors.New("database offline")}
+	enforcer := security.NewEnforcer(audit)
+	// Register plugin with "read" capability only — requesting "write" will be denied.
+	enforcer.RegisterPlugin("test-plugin",
+		security.NewCapabilitySet("read"),
+		security.NewCapabilitySet())
+
+	ctx := context.Background()
+	req := security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "write",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	}
+
+	// Accumulate some failures.
+	assert.Error(t, enforcer.Check(ctx, req))
+	assert.Error(t, enforcer.Check(ctx, req))
+	assert.Equal(t, int64(2), enforcer.AuditDenyFailCount())
+
+	// Clear the error — next check will succeed at audit write and reset the counter.
+	audit.mu.Lock()
+	audit.err = nil
+	audit.mu.Unlock()
+
+	assert.Error(t, enforcer.Check(ctx, req), "deny decision must still return error even when audit succeeds")
+	assert.Equal(t, int64(0), enforcer.AuditDenyFailCount(), "counter must reset to 0 after successful audit write")
+}
+
 func TestCheckRequest_Validate(t *testing.T) {
 	tests := []struct {
 		name    string

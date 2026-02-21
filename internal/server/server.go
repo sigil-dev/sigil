@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +80,14 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Defence-in-depth: reject DevCSPConnectSrc values containing characters that
+	// could cause HTTP header injection (CR/LF) or CSP directive injection (;).
+	// Primary validation is in config.validateNetworking(); this is a safety net.
+	if c.DevCSPConnectSrc != "" && strings.ContainsAny(c.DevCSPConnectSrc, "\r\n;") {
+		return sigilerr.New(sigilerr.CodeServerConfigInvalid,
+			"DevCSPConnectSrc must not contain CR, LF, or semicolons")
+	}
+
 	return nil
 }
 
@@ -111,6 +120,11 @@ func New(cfg Config) (*Server, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if cfg.DevCSPConnectSrc != "" {
+		slog.Warn("dev CSP connect-src is set; CSP is widened for Tauri dev mode",
+			slog.String("dev_csp_connect_src", cfg.DevCSPConnectSrc))
 	}
 
 	rateLimitDone := make(chan struct{})
