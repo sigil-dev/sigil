@@ -22,6 +22,7 @@ type MessageStore interface {
 	Search(ctx context.Context, workspaceID string, query string, opts SearchOpts) ([]*Message, error)
 	GetRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*Message, error)
 	Count(ctx context.Context, workspaceID string) (int64, error)
+	DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error)
 	Trim(ctx context.Context, workspaceID string, keepLast int) (int64, error)
 	Close() error
 }

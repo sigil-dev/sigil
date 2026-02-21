@@ -74,7 +74,7 @@ func (c *Compactor) RollMessage(ctx context.Context, workspaceID, sessionID stri
 
 // Compact executes one full memory compaction pass for a workspace:
 // summarize oldest Tier-1 messages, optionally extract facts, store summary
-// embedding, then trim processed messages from Tier 1.
+// embedding, then delete the compacted messages from Tier 1.
 func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*CompactionResult, error) {
 	if c.cfg.MemoryStore == nil {
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "MemoryStore is required")
@@ -124,6 +124,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		batchSize = len(allMessages)
 	}
 	batch := allMessages[:batchSize]
+	batchIDs := messageIDs(batch)
 
 	summaryText, err := c.cfg.SummarizationProvider.Summarize(ctx, batch)
 	if err != nil {
@@ -137,7 +138,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		FromTime:    batch[0].CreatedAt,
 		ToTime:      batch[len(batch)-1].CreatedAt,
 		Content:     summaryText,
-		MessageIDs:  messageIDs(batch),
+		MessageIDs:  batchIDs,
 		CreatedAt:   now,
 	}
 	if err := c.cfg.MemoryStore.Summaries().Store(ctx, workspaceID, summary); err != nil {
@@ -188,19 +189,9 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing summary embedding for workspace %s", workspaceID)
 	}
 
-	currentCount, err := c.cfg.MemoryStore.Messages().Count(ctx, workspaceID)
+	trimmed, err := c.cfg.MemoryStore.Messages().DeleteByIDs(ctx, workspaceID, batchIDs)
 	if err != nil {
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "counting messages before trim for workspace %s", workspaceID)
-	}
-
-	keepLast := int(currentCount) - len(batch)
-	if keepLast < 0 {
-		keepLast = 0
-	}
-
-	trimmed, err := c.cfg.MemoryStore.Messages().Trim(ctx, workspaceID, keepLast)
-	if err != nil {
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "trimming compacted messages for workspace %s", workspaceID)
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "deleting compacted messages for workspace %s", workspaceID)
 	}
 	result.MessagesTrimmed = trimmed
 

@@ -158,6 +158,10 @@ func (m *mockMessageStore) Count(ctx context.Context, workspaceID string) (int64
 	return 0, nil
 }
 
+func (m *mockMessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockMessageStore) Trim(ctx context.Context, workspaceID string, keepLast int) (int64, error) {
 	return 0, nil
 }

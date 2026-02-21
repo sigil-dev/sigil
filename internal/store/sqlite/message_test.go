@@ -78,6 +78,51 @@ func TestMessageStore_Count(t *testing.T) {
 	assert.Equal(t, int64(3), count)
 }
 
+func TestMessageStore_DeleteByIDs(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "messages-delete-by-ids")
+	ms, err := sqlite.NewMessageStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ms.Close() }()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		err = ms.Append(ctx, "ws-1", &store.Message{
+			ID:        fmt.Sprintf("msg-%d", i),
+			SessionID: "sess-1",
+			Role:      store.MessageRoleUser,
+			Content:   fmt.Sprintf("Message %d", i),
+			CreatedAt: base.Add(time.Duration(i) * time.Second),
+		})
+		require.NoError(t, err)
+	}
+
+	err = ms.Append(ctx, "ws-2", &store.Message{
+		ID:        "other-ws-msg",
+		SessionID: "sess-2",
+		Role:      store.MessageRoleUser,
+		Content:   "Other workspace message",
+		CreatedAt: base.Add(10 * time.Second),
+	})
+	require.NoError(t, err)
+
+	deleted, err := ms.DeleteByIDs(ctx, "ws-1", []string{"msg-0", "msg-2", "missing-id"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), deleted)
+
+	count, err := ms.Count(ctx, "ws-1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), count)
+
+	otherCount, err := ms.Count(ctx, "ws-2")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), otherCount, "deletion must stay within workspace")
+
+	deleted, err = ms.DeleteByIDs(ctx, "ws-1", nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), deleted)
+}
+
 func TestMessageStore_Trim(t *testing.T) {
 	ctx := context.Background()
 	db := testDBPath(t, "messages-trim")
