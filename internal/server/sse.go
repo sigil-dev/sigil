@@ -236,9 +236,6 @@ func sortSchemasByTitle(schemas []*huma.Schema) {
 
 func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (*huma.StreamResponse, error) {
 	// Pre-stream validation: return HTTP errors before streaming begins.
-	if err := s.checkChatRequestLimit(ctx, "/api/v1/chat/stream"); err != nil {
-		return nil, err
-	}
 	if err := s.checkWorkspaceMembership(ctx, input.Body.WorkspaceID); err != nil {
 		return nil, err
 	}
@@ -249,12 +246,15 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 		err503 := huma.Error503ServiceUnavailable("stream handler not configured")
 		return nil, huma.ErrorWithHeaders(err503, http.Header{"Retry-After": []string{"5"}})
 	}
+	if err := s.checkChatRequestLimit(ctx, "/api/v1/chat/stream"); err != nil {
+		return nil, err
+	}
 	streamKey, err := s.acquireChatStreamSlot(ctx, "/api/v1/chat/stream")
 	if err != nil {
 		return nil, err
 	}
 
-	return &huma.StreamResponse{
+	resp := &huma.StreamResponse{
 		Body: func(ctx huma.Context) {
 			defer s.releaseChatStreamSlot(streamKey)
 			ctx.SetHeader("Content-Type", "text/event-stream")
@@ -306,7 +306,8 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 				}
 			}
 		},
-	}, nil
+	}
+	return resp, nil
 }
 
 // ensureValidJSON wraps data as a JSON string if it is not already valid JSON.

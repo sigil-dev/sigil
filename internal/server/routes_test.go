@@ -72,6 +72,33 @@ func (m *mockWorkspaceService) Get(_ context.Context, id string) (*server.Worksp
 	}
 }
 
+// mockWorkspaceServiceOpenAccess grants any authenticated user access to all workspaces.
+// Used in tests focused on rate limiting where workspace membership is not under test.
+type mockWorkspaceServiceOpenAccess struct{}
+
+func (m *mockWorkspaceServiceOpenAccess) List(_ context.Context) ([]server.WorkspaceSummary, error) {
+	return []server.WorkspaceSummary{
+		{ID: "homelab", Description: "Home automation"},
+	}, nil
+}
+
+func (m *mockWorkspaceServiceOpenAccess) ListForUser(ctx context.Context, _ string) ([]server.WorkspaceSummary, error) {
+	return m.List(ctx)
+}
+
+func (m *mockWorkspaceServiceOpenAccess) Get(_ context.Context, id string) (*server.WorkspaceDetail, error) {
+	switch id {
+	case "homelab":
+		return &server.WorkspaceDetail{
+			ID:          "homelab",
+			Description: "Home automation",
+			Members:     []string{"user-a", "user-b"},
+		}, nil
+	default:
+		return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "workspace %q not found", id)
+	}
+}
+
 type mockPluginService struct{}
 
 func (m *mockPluginService) List(_ context.Context) ([]server.PluginSummary, error) {
@@ -397,6 +424,101 @@ func TestRoutes_SendMessage_ChatRateLimitPerIPIsolation(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w2, req2)
 	assert.Equal(t, http.StatusOK, w2.Code)
+}
+
+func TestRoutes_SendMessage_ChatRateLimitPerUserIsolation(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "done", Data: `{}`},
+	}
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"token-user-a": mustNewAuthenticatedUser("user-a", "User A", []string{"*"}),
+			"token-user-b": mustNewAuthenticatedUser("user-b", "User B", []string{"*"}),
+		},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:               "127.0.0.1:0",
+		StreamHandler:            &mockStreamHandler{events: events},
+		ChatRateLimitEnabled:     true,
+		ChatRateLimitRPM:         60,
+		ChatRateLimitBurst:       1,
+		ChatMaxConcurrentStreams: 5,
+		TokenValidator:           validator,
+		Services: server.NewServicesForTest(
+			&mockWorkspaceServiceOpenAccess{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
+	})
+	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	sharedIP := "192.0.2.20:12345"
+
+	// First request as user-A: should succeed (burst=1, token consumed).
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer token-user-a")
+	req1.RemoteAddr = sharedIP
+	w1 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w1, req1)
+	assert.Equal(t, http.StatusOK, w1.Code)
+
+	// Second request as user-A: should be rate-limited (burst exhausted).
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer token-user-a")
+	req2.RemoteAddr = sharedIP
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+
+	// Request as user-B from the same IP: must succeed — separate bucket from user-A.
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer token-user-b")
+	req3.RemoteAddr = sharedIP
+	w3 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w3, req3)
+	assert.Equal(t, http.StatusOK, w3.Code, "user-B must not be rate-limited by user-A's exhausted bucket")
+}
+
+func TestRoutes_SendMessage_RateLimitDisabled(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "done", Data: `{}`},
+	}
+	// burst=1 ensures that if a real limiter were instantiated, only the
+	// first request would succeed and all subsequent ones would be 429.
+	srv, err := server.New(server.Config{
+		ListenAddr:               "127.0.0.1:0",
+		StreamHandler:            &mockStreamHandler{events: events},
+		ChatRateLimitEnabled:     false,
+		ChatRateLimitBurst:       1,
+		ChatMaxConcurrentStreams: 5,
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
+	})
+	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+
+	// Send 5 requests from the same IP — well above burst=1. All must
+	// succeed because the rate limiter is disabled (nil limiter path).
+	for i := range 5 {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "192.0.2.30:12345"
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code, "request %d must not be rate-limited when ChatRateLimitEnabled=false", i+1)
+	}
 }
 
 func TestRoutes_SendMessage_SessionFromStream(t *testing.T) {

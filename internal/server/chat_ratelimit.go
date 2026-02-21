@@ -5,6 +5,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -120,13 +122,19 @@ func (l *chatRateLimiter) cleanupLoop(done <-chan struct{}) {
 				})
 
 				toEvict := len(entries) - l.cfg.MaxKeys
+				actualEvicted := 0
 				for i := 0; i < toEvict; i++ {
 					if v := l.visitors[entries[i].key]; v != nil && v.activeStreams == 0 {
 						delete(l.visitors, entries[i].key)
+						actualEvicted++
 					}
 				}
 				slog.Warn("chat rate limiter key cap enforced",
-					"evicted", toEvict, "max_keys", l.cfg.MaxKeys, "remaining", len(l.visitors))
+					"intended", toEvict, "evicted", actualEvicted, "max_keys", l.cfg.MaxKeys, "remaining", len(l.visitors))
+				if actualEvicted < toEvict {
+					slog.Warn("chat rate limiter: partial eviction — active streams protected some keys from eviction",
+						"intended", toEvict, "evicted", actualEvicted, "protected", toEvict-actualEvicted, "remaining", len(l.visitors))
+				}
 			}
 			l.mu.Unlock()
 		case <-done:
@@ -195,9 +203,13 @@ func (l *chatRateLimiter) releaseStream(key string) {
 	if v == nil {
 		return
 	}
-	if v.activeStreams > 0 {
-		v.activeStreams--
+	if v.activeStreams == 0 {
+		slog.Error("chat rate limiter: stream slot underflow — release called with no active streams",
+			"key", key,
+			"active_streams", v.activeStreams)
+		return
 	}
+	v.activeStreams--
 	v.lastSeen = time.Now()
 }
 
@@ -231,6 +243,13 @@ func clientIPContextMiddleware(next http.Handler) http.Handler {
 func clientIPFromRemoteAddr(remoteAddr string) string {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
+		truncated := remoteAddr
+		if len(truncated) > 64 {
+			truncated = truncated[:64] + "..."
+		}
+		slog.Warn("chat rate limiter: failed to parse RemoteAddr, using raw value as key",
+			"remote_addr", truncated,
+			"error", err)
 		return remoteAddr
 	}
 	return host
@@ -254,6 +273,12 @@ func (s *Server) chatLimiterKey(ctx context.Context) (key string, keyType string
 	return "ip:" + ip, "ip"
 }
 
+// hashKey returns the first 8 hex chars of SHA-256(key) for log privacy.
+func hashKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("%x", h[:4]) // 4 bytes = 8 hex chars
+}
+
 func (s *Server) checkChatRequestLimit(ctx context.Context, endpoint string) error {
 	if s.chatLimiter == nil {
 		return nil
@@ -262,7 +287,7 @@ func (s *Server) checkChatRequestLimit(ctx context.Context, endpoint string) err
 	if s.chatLimiter.allowRequest(key) {
 		return nil
 	}
-	slog.Warn("chat rate limit exceeded", "reason", "request_rate_exceeded", "endpoint", endpoint, "key_type", keyType, "key", key)
+	slog.Warn("chat rate limit exceeded", "reason", "request_rate_exceeded", "endpoint", endpoint, "key_type", keyType, "key_hash", hashKey(key))
 	return chatTooManyRequests("chat rate limit exceeded")
 }
 
@@ -274,7 +299,7 @@ func (s *Server) acquireChatStreamSlot(ctx context.Context, endpoint string) (st
 	if s.chatLimiter.acquireStream(key) {
 		return key, nil
 	}
-	slog.Warn("chat stream concurrency limit exceeded", "reason", "concurrency_exceeded", "endpoint", endpoint, "key_type", keyType, "key", key)
+	slog.Warn("chat stream concurrency limit exceeded", "reason", "concurrency_exceeded", "endpoint", endpoint, "key_type", keyType, "key_hash", hashKey(key))
 	return "", chatTooManyRequests("too many active chat streams")
 }
 

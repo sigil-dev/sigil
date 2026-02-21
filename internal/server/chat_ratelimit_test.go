@@ -7,6 +7,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,17 +141,128 @@ func TestChatRateLimiterAcquireReleaseStream(t *testing.T) {
 func TestServerChatLimiterKey(t *testing.T) {
 	srv := &Server{}
 
-	ctxWithIP := context.WithValue(context.Background(), clientIPContextKey{}, "203.0.113.5")
-	key, keyType := srv.chatLimiterKey(ctxWithIP)
-	assert.Equal(t, "ip:203.0.113.5", key)
-	assert.Equal(t, "ip", keyType)
-
 	user, err := NewAuthenticatedUser("user-1", "User 1", []string{"workspace:*"})
 	require.NoError(t, err)
+
+	ctxWithIP := context.WithValue(context.Background(), clientIPContextKey{}, "203.0.113.5")
 	ctxWithUser := context.WithValue(ctxWithIP, authUserKey, user)
-	key, keyType = srv.chatLimiterKey(ctxWithUser)
-	assert.Equal(t, "user:user-1", key)
-	assert.Equal(t, "user", keyType)
+
+	tests := []struct {
+		name        string
+		ctx         context.Context
+		wantKey     string
+		wantKeyType string
+	}{
+		{
+			name:        "ip present, no user",
+			ctx:         ctxWithIP,
+			wantKey:     "ip:203.0.113.5",
+			wantKeyType: "ip",
+		},
+		{
+			name:        "user present takes precedence over ip",
+			ctx:         ctxWithUser,
+			wantKey:     "user:user-1",
+			wantKeyType: "user",
+		},
+		{
+			name:        "no user, no ip falls back to unknown",
+			ctx:         context.Background(),
+			wantKey:     "ip:unknown",
+			wantKeyType: "ip",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, keyType := srv.chatLimiterKey(tt.ctx)
+			assert.Equal(t, tt.wantKey, key)
+			assert.Equal(t, tt.wantKeyType, keyType)
+		})
+	}
+}
+
+func TestChatRateLimiter_ConcurrentAccess(t *testing.T) {
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+
+	limiter, err := newChatRateLimiter(chatRateLimitConfig{
+		Enabled:              true,
+		RequestsPerMinute:    6000, // 100 rps, lots of headroom
+		Burst:                100,
+		MaxConcurrentStreams: 50,
+		MaxKeys:              100,
+	}, done)
+	require.NoError(t, err)
+	require.NotNil(t, limiter)
+
+	const goroutines = 20
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				key := "user:concurrent-test"
+				if limiter.allowRequest(key) {
+					if limiter.acquireStream(key) {
+						runtime.Gosched()
+						limiter.releaseStream(key)
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	// If we reach here without the race detector firing, the mutex is sufficient
+}
+
+func TestChatRateLimiter_CleanupDoesNotEvictActiveStreams(t *testing.T) {
+	// Build a limiter directly without starting the background goroutine so
+	// we control when cleanup runs.  MaxKeys=1 means any map with 2 or more
+	// entries is over-capacity and the eviction path fires.
+	limiter := &chatRateLimiter{
+		cfg: chatRateLimitConfig{
+			Enabled:              true,
+			RequestsPerMinute:    0,
+			Burst:                0,
+			MaxConcurrentStreams: 5,
+			MaxKeys:              1,
+		},
+		visitors: make(map[string]*chatVisitorEntry),
+	}
+
+	old := time.Now().Add(-30 * time.Minute) // well past the 10-min stale threshold
+
+	// Entry A: has an active stream — must NOT be evicted.
+	keyA := "ip:192.0.2.1"
+	limiter.visitors[keyA] = &chatVisitorEntry{
+		lastSeen:     old,
+		lastRefill:   old,
+		activeStreams: 1,
+	}
+
+	// Entry B: no active stream, old lastSeen — eligible for eviction.
+	keyB := "ip:192.0.2.2"
+	limiter.visitors[keyB] = &chatVisitorEntry{
+		lastSeen:     old,
+		lastRefill:   old,
+		activeStreams: 0,
+	}
+
+	// With MaxKeys=1 and 2 entries, the eviction path should remove the
+	// oldest entry without an active stream (B) and protect A.
+	limiter.RunCleanupNow()
+
+	limiter.mu.Lock()
+	_, aPresent := limiter.visitors[keyA]
+	_, bPresent := limiter.visitors[keyB]
+	limiter.mu.Unlock()
+
+	assert.True(t, aPresent, "entry with activeStreams>0 must not be evicted by cleanup")
+	assert.False(t, bPresent, "entry with activeStreams==0 must be evicted when over MaxKeys")
 }
 
 func TestClientIPContextMiddleware(t *testing.T) {

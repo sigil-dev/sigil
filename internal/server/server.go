@@ -115,6 +115,7 @@ type Server struct {
 	services      *Services
 	configDeps    *ConfigDeps
 	rateLimitDone chan struct{}
+	chatLimitDone chan struct{}
 	closeOnce     sync.Once
 }
 
@@ -143,14 +144,24 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	rateLimitDone := make(chan struct{})
+	chatLimitDone := make(chan struct{})
+	// Note: applyDefaults is called inside newChatRateLimiter, so runtime
+	// defaults (e.g. MaxKeys=10000) may differ from what was validated
+	// by Config.Validate(). This is intentional: Validate checks bounds,
+	// not exact defaults.
 	chatLimiter, err := newChatRateLimiter(chatRateLimitConfig{
 		Enabled:              cfg.ChatRateLimitEnabled,
 		RequestsPerMinute:    cfg.ChatRateLimitRPM,
 		Burst:                cfg.ChatRateLimitBurst,
 		MaxConcurrentStreams: cfg.ChatMaxConcurrentStreams,
-	}, rateLimitDone)
+	}, chatLimitDone)
 	if err != nil {
 		close(rateLimitDone)
+		// Close chatLimitDone even on error: newChatRateLimiter starts a
+		// cleanup goroutine only when Enabled=true and validation passes,
+		// so this close is precautionary (no goroutine is running here),
+		// but ensures consistent lifecycle if the implementation changes.
+		close(chatLimitDone)
 		return nil, err
 	}
 
@@ -193,6 +204,7 @@ func New(cfg Config) (*Server, error) {
 		services:      cfg.Services,
 		configDeps:    cfg.ConfigDeps,
 		rateLimitDone: rateLimitDone,
+		chatLimitDone: chatLimitDone,
 	}
 
 	// Register SSE route (returns 503 if no StreamHandler).
@@ -214,6 +226,29 @@ func (s *Server) authDisabled() bool {
 	return s.cfg.TokenValidator == nil
 }
 
+// ChatRateLimitValues holds the effective chat rate limit configuration values for inspection.
+type ChatRateLimitValues struct {
+	RateLimitRPS            float64
+	RateLimitBurst          int
+	ChatRateLimitEnabled    bool
+	ChatRateLimitRPM        int
+	ChatRateLimitBurst      int
+	ChatMaxConcurrentStreams int
+}
+
+// ChatRateLimitConfig returns the effective chat rate limit configuration values.
+// This is provided for integration testing and introspection; do not use for policy enforcement.
+func (s *Server) ChatRateLimitConfig() ChatRateLimitValues {
+	return ChatRateLimitValues{
+		RateLimitRPS:            s.cfg.RateLimit.RequestsPerSecond,
+		RateLimitBurst:          s.cfg.RateLimit.Burst,
+		ChatRateLimitEnabled:    s.cfg.ChatRateLimitEnabled,
+		ChatRateLimitRPM:        s.cfg.ChatRateLimitRPM,
+		ChatRateLimitBurst:      s.cfg.ChatRateLimitBurst,
+		ChatMaxConcurrentStreams: s.cfg.ChatMaxConcurrentStreams,
+	}
+}
+
 // Handler returns the underlying http.Handler for testing.
 func (s *Server) Handler() http.Handler {
 	return s.router
@@ -230,6 +265,7 @@ func (s *Server) API() huma.API {
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.rateLimitDone)
+		close(s.chatLimitDone)
 		// Note: We cannot stop httpServer here because it's only created in Start()
 		// and stopping it requires the shutdown context. Callers should use ctx
 		// cancellation to stop Start()'s HTTP server gracefully.
