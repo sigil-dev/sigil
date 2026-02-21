@@ -156,6 +156,49 @@ func (m *mockUserService) List(_ context.Context) ([]server.UserSummary, error) 
 	}, nil
 }
 
+type mockPairingService struct {
+	createResp *server.PairingCode
+	createErr  error
+	createReq  *server.CreatePairingCodeRequest
+
+	redeemResp *server.PairingRedemption
+	redeemErr  error
+	redeemReq  *server.RedeemPairingCodeRequest
+}
+
+func (m *mockPairingService) CreateCode(_ context.Context, req server.CreatePairingCodeRequest) (*server.PairingCode, error) {
+	reqCopy := req
+	m.createReq = &reqCopy
+	if m.createErr != nil {
+		return nil, m.createErr
+	}
+	if m.createResp != nil {
+		return m.createResp, nil
+	}
+	return &server.PairingCode{
+		Code:        "ABC12345",
+		WorkspaceID: req.WorkspaceID,
+		ChannelType: req.ChannelType,
+		ChannelID:   req.ChannelID,
+		ExpiresAt:   time.Now().Add(10 * time.Minute).UTC(),
+	}, nil
+}
+
+func (m *mockPairingService) RedeemCode(_ context.Context, req server.RedeemPairingCodeRequest) (*server.PairingRedemption, error) {
+	reqCopy := req
+	m.redeemReq = &reqCopy
+	if m.redeemErr != nil {
+		return nil, m.redeemErr
+	}
+	if m.redeemResp != nil {
+		return m.redeemResp, nil
+	}
+	return &server.PairingRedemption{
+		PairingID: "pair-123",
+		Status:    "active",
+	}, nil
+}
+
 func newTestServerWithData(t *testing.T) *server.Server {
 	t.Helper()
 	srv, err := server.New(server.Config{
@@ -649,6 +692,149 @@ func TestRoutes_ListUsers(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "Sean")
+}
+
+func TestRoutes_CreatePairingCode(t *testing.T) {
+	pairSvc := &mockPairingService{}
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0",
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		).WithPairingService(pairSvc),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	body := `{"workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1","ttl_seconds":300}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairing-codes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.NotNil(t, pairSvc.createReq)
+	assert.Equal(t, "ws-1", pairSvc.createReq.WorkspaceID)
+	assert.Equal(t, "telegram", pairSvc.createReq.ChannelType)
+	assert.Equal(t, "chat-1", pairSvc.createReq.ChannelID)
+	assert.Equal(t, 300, pairSvc.createReq.TTLSeconds)
+	assert.Contains(t, w.Body.String(), "ABC12345")
+}
+
+func TestRoutes_RedeemPairingCode(t *testing.T) {
+	pairSvc := &mockPairingService{}
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0",
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		).WithPairingService(pairSvc),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	body := `{"code":"ABC12345","user_id":"user-1","workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairings/redeem", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.NotNil(t, pairSvc.redeemReq)
+	assert.Equal(t, "ABC12345", pairSvc.redeemReq.Code)
+	assert.Equal(t, "user-1", pairSvc.redeemReq.UserID)
+	assert.Contains(t, w.Body.String(), "pair-123")
+}
+
+func TestRoutes_RedeemPairingCode_InvalidCode(t *testing.T) {
+	pairSvc := &mockPairingService{
+		redeemErr: sigilerr.New(sigilerr.CodeChannelPairingDenied, "invalid pairing code"),
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0",
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		).WithPairingService(pairSvc),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	body := `{"code":"BADCODE","user_id":"user-1","workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairings/redeem", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestRoutes_RedeemPairingCode_AuthEnabled_MatchingUser(t *testing.T) {
+	pairSvc := &mockPairingService{}
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": mustNewAuthenticatedUser("user-1", "User", []string{"workspace:read"}),
+		},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		).WithPairingService(pairSvc),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	body := `{"code":"ABC12345","user_id":"user-1","workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairings/redeem", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.NotNil(t, pairSvc.redeemReq)
+}
+
+func TestRoutes_RedeemPairingCode_AuthEnabled_UserMismatch(t *testing.T) {
+	pairSvc := &mockPairingService{}
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": mustNewAuthenticatedUser("user-1", "User", []string{"workspace:read"}),
+		},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		).WithPairingService(pairSvc),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	body := `{"code":"ABC12345","user_id":"user-2","workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairings/redeem", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Nil(t, pairSvc.redeemReq)
 }
 
 func TestRoutes_Status(t *testing.T) {
