@@ -324,9 +324,9 @@ func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
 	assert.Equal(t, int64(5), count, "messages should not trim when vector storage fails")
 }
 
-func TestCompaction_Compact_TrimFailure(t *testing.T) {
+func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
-	mem.messages.trimErr = fmt.Errorf("trim failed")
+	mem.messages.deleteErr = fmt.Errorf("delete failed")
 	vec := newLifecycleVectorStore()
 	ss := newMockSessionStore()
 	p := &mockCompactionProvider{
@@ -385,7 +385,6 @@ func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.
 	require.NotNil(t, result)
 	assert.Equal(t, 5, result.MessagesProcessed)
 	assert.Equal(t, int64(5), result.MessagesTrimmed)
-	assert.Equal(t, 1, mem.messages.lastTrimKeep)
 
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, countErr)
@@ -400,6 +399,55 @@ func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.
 	require.NoError(t, rangeErr)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "msg-appended", messages[0].ID)
+}
+
+func TestCompaction_Compact_PreservesMessageAppendedAfterCountBeforeDelete(t *testing.T) {
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	ss := newMockSessionStore()
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{1.0},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+	mem.messages.appendBeforeDelete = func() error {
+		return mem.messages.Append(context.Background(), "ws-1", &store.Message{
+			ID:        "msg-appended-after-count",
+			Role:      store.MessageRoleUser,
+			Content:   "appended after count before delete",
+			CreatedAt: time.Now().UTC(),
+		})
+	}
+
+	c := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:           mem,
+		VectorStore:           vec,
+		SessionStore:          ss,
+		SummarizationProvider: p,
+		BatchSize:             5,
+		ExtractFacts:          false,
+	})
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 5, result.MessagesProcessed)
+	assert.Equal(t, int64(5), result.MessagesTrimmed)
+
+	count, countErr := mem.messages.Count(context.Background(), "ws-1")
+	require.NoError(t, countErr)
+	assert.Equal(t, int64(1), count, "message appended after count must be preserved")
+
+	messages, rangeErr := mem.messages.GetRange(
+		context.Background(),
+		"ws-1",
+		time.Time{},
+		time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+	)
+	require.NoError(t, rangeErr)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "msg-appended-after-count", messages[0].ID)
 }
 
 type lifecycleMemoryStore struct {
@@ -425,8 +473,10 @@ type lifecycleMessageStore struct {
 	msgs         []*store.Message
 	countErr     error
 	getRangeErr  error
+	deleteErr    error
 	trimErr      error
 	lastTrimKeep int
+	appendBeforeDelete func() error
 }
 
 func (m *lifecycleMessageStore) Append(_ context.Context, _ string, msg *store.Message) error {
@@ -465,6 +515,12 @@ func (m *lifecycleMessageStore) Trim(_ context.Context, _ string, keepLast int) 
 	if m.trimErr != nil {
 		return 0, m.trimErr
 	}
+	if m.appendBeforeDelete != nil {
+		if err := m.appendBeforeDelete(); err != nil {
+			return 0, err
+		}
+		m.appendBeforeDelete = nil
+	}
 	m.lastTrimKeep = keepLast
 	if keepLast < 0 {
 		keepLast = 0
@@ -481,6 +537,39 @@ func (m *lifecycleMessageStore) Trim(_ context.Context, _ string, keepLast int) 
 	toTrim := len(m.msgs) - keepLast
 	m.msgs = append([]*store.Message(nil), m.msgs[toTrim:]...)
 	return int64(toTrim), nil
+}
+
+func (m *lifecycleMessageStore) DeleteByIDs(_ context.Context, _ string, ids []string) (int64, error) {
+	if m.deleteErr != nil {
+		return 0, m.deleteErr
+	}
+	if m.appendBeforeDelete != nil {
+		if err := m.appendBeforeDelete(); err != nil {
+			return 0, err
+		}
+		m.appendBeforeDelete = nil
+	}
+
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	idSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+
+	var kept []*store.Message
+	var deleted int64
+	for _, msg := range m.msgs {
+		if _, ok := idSet[msg.ID]; ok {
+			deleted++
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	m.msgs = kept
+	return deleted, nil
 }
 
 func (m *lifecycleMessageStore) Close() error { return nil }

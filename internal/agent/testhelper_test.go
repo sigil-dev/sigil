@@ -669,6 +669,30 @@ func (m *mockMessageStore) Count(_ context.Context, _ string) (int64, error) {
 	return int64(len(m.msgs)), nil
 }
 
+func (m *mockMessageStore) DeleteByIDs(_ context.Context, _ string, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	idSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+
+	filtered := m.msgs[:0]
+	var deleted int64
+	for _, msg := range m.msgs {
+		if _, ok := idSet[msg.ID]; ok {
+			deleted++
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	m.msgs = filtered
+
+	return deleted, nil
+}
+
 func (m *mockMessageStore) Trim(_ context.Context, _ string, _ int) (int64, error) {
 	return 0, nil
 }
