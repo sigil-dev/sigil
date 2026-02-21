@@ -712,7 +712,28 @@ func TestConfigTokenValidator_AllTokensInvalidConfig_ReturnsError(t *testing.T) 
 	assert.Contains(t, err.Error(), "all configured auth tokens failed validation")
 }
 
-// Test Gateway.Validate catches nil fields
+// TODO: TestWireGateway_ValidateFailure_TriggersCleanup
+//
+// The deferred cleanup block in WireGateway (lines 85-93 of wire.go) runs when
+// retErr != nil, closing any subsystems registered in the cleanups slice. This
+// path is exercised by early-return failures (e.g. store.NewGatewayStore error,
+// scanner initialization error, etc.), but NOT by the gw.Validate() failure at
+// line 234 — because by the time Validate() is called, WireGateway has already
+// successfully populated every Gateway field that Validate() checks. There is no
+// config input that produces a fully-constructed Gateway with a nil required field
+// or invalid scannerModes (NewScannerModesFromConfig already rejects invalid modes
+// before the Gateway struct is built). Testing this specific path would require
+// either: (a) making Validate() injectable so a stub can force failure, or
+// (b) exposing a production code seam that intentionally leaves a field nil.
+// Neither is warranted without a concrete bug in the cleanup ordering. The
+// cleanup logic itself (reverse-LIFO iteration over cleanups) is simple enough
+// to verify by inspection, and the individual subsystem Close() methods are
+// covered by TestGateway_CloseDoesNotPanic and TestGateway_CloseToleratesNilFields.
+
+// TestGateway_ValidateRequiredFields verifies that Validate() catches nil fields
+// and that Close() is safe to call on a Gateway with any single field cleared.
+// The latter exercises the nil-tolerant cleanup path in Gateway.Close() that
+// mirrors the deferred cleanup inside WireGateway on construction failure.
 func TestGateway_ValidateRequiredFields(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()
@@ -790,7 +811,6 @@ func TestGateway_ValidateRequiredFields(t *testing.T) {
 			// Create a fresh gateway for each test
 			gwTest, err := WireGateway(context.Background(), cfg, dir)
 			require.NoError(t, err)
-			defer func() { _ = gwTest.Close() }()
 
 			// Mutate the field
 			tt.mutate(gwTest)
@@ -799,6 +819,14 @@ func TestGateway_ValidateRequiredFields(t *testing.T) {
 			err = gwTest.Validate()
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectErr)
+
+			// Close() MUST NOT error or panic even with the cleared field.
+			// Gateway.Close() is nil-tolerant by design to handle partial
+			// initialization — this mirrors the cleanup defer in WireGateway
+			// that runs when construction fails partway through.
+			closeErr := gwTest.Close()
+			assert.NoError(t, closeErr,
+				"Close() must not error after field %q is cleared", tt.name)
 		})
 	}
 }

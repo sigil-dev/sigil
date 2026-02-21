@@ -56,6 +56,11 @@ func TestAuthMiddleware_PublicEndpointsSkipAuth(t *testing.T) {
 				TokenValidator: newValidatorWithToken("valid-token", "admin", "Admin", []string{"*"}),
 			})
 			require.NoError(t, err)
+			t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 			// Request WITHOUT auth header to a public endpoint.
 			req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -81,6 +86,11 @@ func TestAuthMiddleware_MissingAuthHeader_Returns401(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	w := httptest.NewRecorder()
@@ -107,6 +117,11 @@ func TestAuthMiddleware_InvalidBearerFormat_Returns401(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	tests := []struct {
 		name  string
@@ -142,6 +157,11 @@ func TestAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
@@ -163,6 +183,11 @@ func TestAuthMiddleware_ValidToken_InjectsUser(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	req.Header.Set("Authorization", "Bearer sk-test-123")
@@ -215,6 +240,11 @@ func TestAuthMiddleware_Disabled_WhenValidatorNil(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	// Request WITHOUT auth header should pass through.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
@@ -238,6 +268,11 @@ func TestAuthMiddleware_ForbiddenToken_Returns403(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	req.Header.Set("Authorization", "Bearer revoked-token")
@@ -280,6 +315,11 @@ func TestAuthMiddleware_WriteErrorLogged(t *testing.T) {
 		TokenValidator: newValidatorWithToken("valid-token", "admin", "Admin", []string{"*"}),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	// No auth header — will trigger writeAuthError.
@@ -401,6 +441,11 @@ func TestAuthMiddleware_MalformedTokenEdgeCases(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	tests := []struct {
 		name  string
@@ -451,6 +496,11 @@ func TestAuthMiddleware_MalformedBearerTokens(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	tests := []struct {
 		name  string
@@ -511,6 +561,11 @@ func TestAuthMiddleware_EmptyAuthorizationHeaderValue(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	tests := []struct {
 		name  string

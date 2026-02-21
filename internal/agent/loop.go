@@ -1215,7 +1215,7 @@ func (l *Loop) appendAuditEntry(ctx context.Context, entry *store.AuditEntry, co
 			slog.Any("error", err),
 			slog.Int64("consecutive_failures", consecutive),
 		)
-		if consecutive >= auditLogEscalationThreshold {
+		if consecutive >= security.AuditLogEscalationThreshold {
 			// Include cumulative total at error level so operators can see how many
 			// failures have occurred overall, even across success-interspersed sequences.
 			extra = append(extra, slog.Int64("total_failures", cumulative))
@@ -1227,8 +1227,8 @@ func (l *Loop) appendAuditEntry(ctx context.Context, entry *store.AuditEntry, co
 	}
 }
 
-// auditLogEscalationThreshold and logAuditFailure are defined in audit.go
-// so they can be shared between Loop and ToolDispatcher.
+// logAuditFailure is defined in audit.go. AuditLogEscalationThreshold is
+// imported from internal/security to avoid constant duplication.
 
 // scanRequest bundles the per-invocation parameters for scanContent and
 // scanOversizedToolContent, reducing parameter count and preventing

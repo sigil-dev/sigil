@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -45,13 +46,14 @@ type TokenConfig struct {
 
 // NetworkingConfig controls how Sigil listens for connections.
 type NetworkingConfig struct {
-	Mode           string   `mapstructure:"mode"`
-	Listen         string   `mapstructure:"listen"`
-	CORSOrigins    []string `mapstructure:"cors_origins"`
-	EnableHSTS     bool     `mapstructure:"enable_hsts"`
-	RateLimitRPS   float64  `mapstructure:"rate_limit_rps"`
-	RateLimitBurst int      `mapstructure:"rate_limit_burst"`
-	TrustedProxies []string `mapstructure:"trusted_proxies"` // CIDR ranges of trusted reverse proxies
+	Mode             string   `mapstructure:"mode"`
+	Listen           string   `mapstructure:"listen"`
+	CORSOrigins      []string `mapstructure:"cors_origins"`
+	EnableHSTS       bool     `mapstructure:"enable_hsts"`
+	RateLimitRPS     float64  `mapstructure:"rate_limit_rps"`
+	RateLimitBurst   int      `mapstructure:"rate_limit_burst"`
+	TrustedProxies   []string `mapstructure:"trusted_proxies"`   // CIDR ranges of trusted reverse proxies
+	DevCSPConnectSrc string   `mapstructure:"dev_csp_connect_src"` // dev-only: extra connect-src origin (e.g. Tauri WebSocket)
 }
 
 // ProviderConfig holds credentials and endpoint for an LLM provider.
@@ -121,6 +123,15 @@ type ToolsConfig struct {
 // SecurityConfig holds security subsystem settings.
 type SecurityConfig struct {
 	Scanner ScannerConfig `mapstructure:"scanner"`
+	Audit   AuditConfig   `mapstructure:"audit"`
+}
+
+// AuditConfig controls audit logging behavior for the security Enforcer.
+type AuditConfig struct {
+	// FailClosed makes audit failures block operations. When true, an audit
+	// write failure on the ALLOW path causes Check() to return an error.
+	// Default false (best-effort).
+	FailClosed bool `mapstructure:"fail_closed"`
 }
 
 // ScannerConfig controls per-hook scanner detection modes.
@@ -308,6 +319,19 @@ func (c *Config) validateNetworking() []error {
 				"config: networking.trusted_proxies[%d] is not a valid CIDR range, got %q: %v",
 				i, cidr, err,
 			))
+		}
+	}
+
+	// Validate dev_csp_connect_src: this value is interpolated directly into the
+	// Content-Security-Policy header. CR (\r), LF (\n), and semicolons would allow
+	// HTTP header injection or CSP directive injection respectively.
+	if src := c.Networking.DevCSPConnectSrc; src != "" {
+		if strings.ContainsAny(src, "\r\n;") {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: networking.dev_csp_connect_src must not contain CR, LF, or semicolons, got %q", src))
+		} else if u, err := url.Parse(src); err != nil || u.Scheme == "" || u.Host == "" {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+				"config: networking.dev_csp_connect_src must be a valid URL origin (scheme://host), got %q", src))
 		}
 	}
 

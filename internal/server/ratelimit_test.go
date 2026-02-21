@@ -545,3 +545,39 @@ func TestRateLimitMiddleware_VisitorMapEviction(t *testing.T) {
 	// - Wait 10+ minutes (impractical for tests)
 	// Given the constraints, this test serves as a smoke test for the feature.
 }
+
+func TestVisitorEntry_Allow_ConsumesToken(t *testing.T) {
+	t.Parallel()
+	v := newVisitorEntry(10, 5)
+	// Burst is 5, so 5 consecutive allows should succeed.
+	for i := 0; i < 5; i++ {
+		assert.True(t, v.allow(), "allow #%d should succeed", i+1)
+	}
+	// 6th should be denied.
+	assert.False(t, v.allow(), "allow after burst exhausted should fail")
+}
+
+func TestVisitorEntry_Allow_RefillsOverTime(t *testing.T) {
+	t.Parallel()
+	v := newVisitorEntry(10, 2)
+	// Exhaust the burst.
+	assert.True(t, v.allow())
+	assert.True(t, v.allow())
+	assert.False(t, v.allow())
+
+	// Simulate time passing: at rate 10/s, 0.2s adds 2 tokens.
+	v.lastRefill = v.lastRefill.Add(-200 * time.Millisecond)
+	assert.True(t, v.allow(), "should succeed after refill time elapses")
+}
+
+func TestVisitorEntry_Allow_CapsAtBurst(t *testing.T) {
+	t.Parallel()
+	v := newVisitorEntry(100, 3)
+	// Simulate a long idle period: tokens should cap at burst.
+	v.lastRefill = v.lastRefill.Add(-10 * time.Second)
+	// After refill, tokens should be capped at burst (3), not 100*10=1000.
+	for i := 0; i < 3; i++ {
+		assert.True(t, v.allow(), "allow #%d should succeed", i+1)
+	}
+	assert.False(t, v.allow(), "should not exceed burst cap")
+}

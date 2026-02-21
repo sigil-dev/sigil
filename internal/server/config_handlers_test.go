@@ -82,6 +82,11 @@ func newTestServerWithConfig(t *testing.T, deps *server.ConfigDeps) *server.Serv
 		ConfigDeps: deps,
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 	return srv
 }
 

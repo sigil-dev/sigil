@@ -100,7 +100,9 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	cleanups = append(cleanups, gs.Close)
 
 	// 2. Security enforcer.
-	enforcer := security.NewEnforcer(gs.AuditLog())
+	enforcer := security.NewEnforcer(gs.AuditLog(),
+		security.WithAuditFailClosed(cfg.Security.Audit.FailClosed),
+	)
 
 	// 2b. Security scanner — create regex scanner with default rules
 	// and convert config scanner modes for use by the agent loop.
@@ -200,12 +202,13 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	}
 
 	srv, err := server.New(server.Config{
-		ListenAddr:     cfg.Networking.Listen,
-		CORSOrigins:    cfg.Networking.CORSOrigins,
-		TokenValidator: tokenValidator,
-		BehindProxy:    cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
-		TrustedProxies: cfg.Networking.TrustedProxies,
-		EnableHSTS:     cfg.Networking.EnableHSTS,
+		ListenAddr:       cfg.Networking.Listen,
+		CORSOrigins:      cfg.Networking.CORSOrigins,
+		TokenValidator:   tokenValidator,
+		BehindProxy:      cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
+		TrustedProxies:   cfg.Networking.TrustedProxies,
+		EnableHSTS:       cfg.Networking.EnableHSTS,
+		DevCSPConnectSrc: cfg.Networking.DevCSPConnectSrc,
 		RateLimit: server.RateLimitConfig{
 			RequestsPerSecond: cfg.Networking.RateLimitRPS,
 			Burst:             cfg.Networking.RateLimitBurst,
@@ -216,7 +219,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
 
-	return &Gateway{
+	gw := &Gateway{
 		server:           srv,
 		gatewayStore:     gs,
 		pluginManager:    pluginMgr,
@@ -225,7 +228,14 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 		enforcer:         enforcer,
 		scanner:          sc,
 		scannerModes:     scannerModes,
-	}, nil
+	}
+
+	// Validate at construction so callers never receive an invalid Gateway.
+	if err := gw.Validate(); err != nil {
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "gateway validation failed: %w", err)
+	}
+
+	return gw, nil
 }
 
 // Start runs the HTTP server and blocks until the context is cancelled.
