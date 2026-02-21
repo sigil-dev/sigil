@@ -46,6 +46,16 @@ type stubUserService struct{}
 
 func (s *stubUserService) List(context.Context) ([]UserSummary, error) { return nil, nil }
 
+type stubPairingService struct{}
+
+func (s *stubPairingService) CreateCode(context.Context, CreatePairingCodeRequest) (*PairingCode, error) {
+	return nil, nil
+}
+
+func (s *stubPairingService) RedeemCode(context.Context, RedeemPairingCodeRequest) (*PairingRedemption, error) {
+	return nil, nil
+}
+
 type stubNodeService struct{}
 
 func (s *stubNodeService) List(context.Context) ([]NodeSummary, error) { return nil, nil }
@@ -165,13 +175,15 @@ func TestServices_WithOptionalNodeAndStatusServices(t *testing.T) {
 	ns := &stubNodeService{}
 	gss := &stubGatewayStatusService{}
 	acs := &stubAgentControlService{}
+	prs := &stubPairingService{}
 
 	svc, err := NewServices(ws, ps, ss, us)
 	require.NoError(t, err)
 
-	got := svc.WithNodeService(ns).WithGatewayStatusService(gss).WithAgentControlService(acs)
+	got := svc.WithNodeService(ns).WithGatewayStatusService(gss).WithAgentControlService(acs).WithPairingService(prs)
 	assert.Same(t, svc, got)
 	assert.Equal(t, ns, svc.Nodes())
 	assert.Equal(t, gss, svc.GatewayStatus())
 	assert.Equal(t, acs, svc.AgentControl())
+	assert.Equal(t, prs, svc.Pairings())
 }

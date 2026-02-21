@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/pkg/plugin"
@@ -40,6 +41,7 @@ type Services struct {
 	plugins    PluginService
 	sessions   SessionService
 	users      UserService
+	pairings   PairingService
 	nodes      NodeService
 	status     GatewayStatusService
 	agent      AgentControlService
@@ -88,6 +90,11 @@ func (s *Services) Users() UserService {
 	return s.users
 }
 
+// Pairings returns the pairing-code service, if configured.
+func (s *Services) Pairings() PairingService {
+	return s.pairings
+}
+
 // Nodes returns the node service, if configured.
 func (s *Services) Nodes() NodeService {
 	return s.nodes
@@ -121,6 +128,12 @@ func (s *Services) WithAgentControlService(agent AgentControlService) *Services 
 	return s
 }
 
+// WithPairingService sets the optional pairing-code service and returns s.
+func (s *Services) WithPairingService(pairings PairingService) *Services {
+	s.pairings = pairings
+	return s
+}
+
 // WorkspaceService provides workspace operations for REST handlers.
 type WorkspaceService interface {
 	List(ctx context.Context) ([]WorkspaceSummary, error)
@@ -146,6 +159,12 @@ type SessionService interface {
 // UserService provides user operations for REST handlers.
 type UserService interface {
 	List(ctx context.Context) ([]UserSummary, error)
+}
+
+// PairingService provides pairing-code generation and redemption operations.
+type PairingService interface {
+	CreateCode(ctx context.Context, req CreatePairingCodeRequest) (*PairingCode, error)
+	RedeemCode(ctx context.Context, req RedeemPairingCodeRequest) (*PairingRedemption, error)
 }
 
 // NodeService provides node CRUD operations for REST handlers.
@@ -219,6 +238,38 @@ type SessionDetail struct {
 type UserSummary struct {
 	ID   string `json:"id" doc:"User identifier"`
 	Name string `json:"name" doc:"Display name"`
+}
+
+// CreatePairingCodeRequest requests creation of a one-time pairing code.
+type CreatePairingCodeRequest struct {
+	WorkspaceID string
+	ChannelType string
+	ChannelID   string
+	TTLSeconds  int
+}
+
+// PairingCode is the generated one-time pairing code payload.
+type PairingCode struct {
+	Code        string    `json:"code" doc:"One-time pairing code"`
+	WorkspaceID string    `json:"workspace_id" doc:"Workspace identifier"`
+	ChannelType string    `json:"channel_type" doc:"Channel type"`
+	ChannelID   string    `json:"channel_id" doc:"Channel identifier"`
+	ExpiresAt   time.Time `json:"expires_at" doc:"Code expiry timestamp"`
+}
+
+// RedeemPairingCodeRequest requests redemption of a one-time pairing code.
+type RedeemPairingCodeRequest struct {
+	Code        string
+	UserID      string
+	WorkspaceID string
+	ChannelType string
+	ChannelID   string
+}
+
+// PairingRedemption is the result of successful code redemption.
+type PairingRedemption struct {
+	PairingID string `json:"pairing_id" doc:"Created or existing pairing ID"`
+	Status    string `json:"status" doc:"Pairing status"`
 }
 
 // NodeSummary is the REST representation of a node in list results.
