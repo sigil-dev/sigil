@@ -980,6 +980,34 @@ func TestRoutes_SendMessage_MalformedSessionID(t *testing.T) {
 	assert.Equal(t, "sess-fallback", resp.SessionID)
 }
 
+func TestRoutes_SendMessage_EmptySessionID(t *testing.T) {
+	// This test verifies that a valid JSON session_id event with an empty string
+	// value is ignored, and the fallback session ID from the request is returned.
+	events := []server.SSEEvent{
+		{Event: "session_id", Data: `{"session_id":""}`},
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab", "session_id": "sess-fallback"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Content   string `json:"content"`
+		SessionID string `json:"session_id"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// Fallback: original session ID returned when session_id event value is empty.
+	assert.Equal(t, "sess-fallback", resp.SessionID)
+}
+
 func TestRoutes_SendMessage_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(t *testing.T) {
 	// When auth is disabled, all workspaces are accessible.
 	events := []server.SSEEvent{
@@ -1279,8 +1307,8 @@ func TestRoutes_SendMessage_ErrorEvent_Truncated(t *testing.T) {
 }
 
 func TestRoutes_SendMessage_UnparsableErrorEvent_Truncated(t *testing.T) {
-	// This test verifies that when JSON parsing fails in extractErrorMessage,
-	// the raw data is truncated to 200 chars before returning.
+	// This test verifies that when JSON parsing fails in extractErrorEvent,
+	// a safe generic message is returned instead of raw data.
 	longInvalidData := strings.Repeat("y", 500) // 500 chars of invalid JSON
 	events := []server.SSEEvent{
 		{Event: "error", Data: longInvalidData},
@@ -1297,12 +1325,259 @@ func TestRoutes_SendMessage_UnparsableErrorEvent_Truncated(t *testing.T) {
 	// Should produce a 502 error due to the error event.
 	assert.GreaterOrEqual(t, w.Code, 500, "error event must produce a server error status")
 
-	// Response body should be bounded (not contain the full 500-char payload)
-	responseBody := w.Body.String()
-	assert.True(t, len(responseBody) < 500, "response should not contain unbounded data from invalid JSON (len=%d)", len(responseBody))
+	// Response body should contain the safe generic message, not raw data.
+	assert.Contains(t, w.Body.String(), "agent reported an error; details unavailable")
+}
+// --- Part 1: Unknown event type warning ---
 
-	// Verify the message is truncated with "..." suffix
-	assert.Contains(t, responseBody, "...")
+func TestRoutes_SendMessage_UnknownEventType_DoesNotPanic(t *testing.T) {
+	// Unknown event types (tool_call, usage) must not panic and must be
+	// silently skipped (with a slog.Warn) rather than causing incorrect behavior.
+	events := []server.SSEEvent{
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "tool_call", Data: `{"tool":"bash","args":{}}`},
+		{Event: "usage", Data: `{"tokens":100}`},
+		// Note: "done" is not a special sentinel — it would just be another
+		// unknown event. Channel close ends the loop, not a "done" event.
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	// Should succeed - unknown events are warnings, not errors.
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Content   string `json:"content"`
+		SessionID string `json:"session_id"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// Only text_delta contributes to content.
+	assert.Equal(t, "Hello", resp.Content)
+}
+
+// --- Part 2: Error code in SSE error event + HTTP status mapping ---
+
+func TestRoutes_SendMessage_ErrorEvent_SecurityScannerInputBlocked_Returns422(t *testing.T) {
+	// security.scanner.input_blocked is a client content rejection: 422 Unprocessable Entity.
+	code := string(sigilerr.CodeSecurityScannerInputBlocked)
+	events := []server.SSEEvent{
+		{Event: "error", Data: `{"code":"` + code + `","message":"blocked by security policy","error":"` + code + `"}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
+		"security.scanner.input_blocked must produce 422 Unprocessable Entity")
+	assert.Contains(t, w.Body.String(), "blocked by security policy")
+}
+
+func TestRoutes_SendMessage_ErrorEvent_SecurityScannerOtherCodes_Returns503(t *testing.T) {
+	// All security.scanner.* codes other than input_blocked are service-side transient: 503.
+	tests := []struct {
+		name string
+		code sigilerr.Code
+	}{
+		{"tool_blocked", sigilerr.CodeSecurityScannerToolBlocked},
+		{"output_blocked", sigilerr.CodeSecurityScannerOutputBlocked},
+		{"content_too_large", sigilerr.CodeSecurityScannerContentTooLarge},
+		{"failure", sigilerr.CodeSecurityScannerFailure},
+		{"cancelled", sigilerr.CodeSecurityScannerCancelled},
+		{"circuit_breaker_open", sigilerr.CodeSecurityScannerCircuitBreakerOpen},
+		{"empty_rule_stage", sigilerr.CodeSecurityScannerEmptyRuleStage},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code := string(tt.code)
+			events := []server.SSEEvent{
+				{Event: "error", Data: `{"code":"` + code + `","message":"blocked by security policy","error":"` + code + `"}`},
+			}
+			srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+			body := `{"content": "Hello", "workspace_id": "homelab"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+				"security scanner code %q must produce 503 Service Unavailable", code)
+			assert.Contains(t, w.Body.String(), "blocked by security policy")
+		})
+	}
+}
+
+func TestRoutes_SendMessage_ErrorEvent_SecurityCapabilityAndInputCodes_Returns400(t *testing.T) {
+	// security.capability.invalid and security.input.invalid must also map to 400.
+	codes := []string{
+		string(sigilerr.CodeSecurityCapabilityInvalid),
+		string(sigilerr.CodeSecurityInvalidInput),
+	}
+
+	for _, code := range codes {
+		t.Run(code, func(t *testing.T) {
+			events := []server.SSEEvent{
+				{Event: "error", Data: `{"code":"` + code + `","message":"invalid request","error":"` + code + `"}`},
+			}
+			srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+			body := `{"content": "Hello", "workspace_id": "homelab"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code,
+				"security code %q must produce 400 Bad Request", code)
+		})
+	}
+}
+
+func TestRoutes_SendMessage_ErrorEvent_OtherErrorCodes_Returns502(t *testing.T) {
+	// Non-security error codes must map to 502 Bad Gateway (infra/provider failure).
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "provider upstream failure",
+			data: `{"code":"provider.upstream.failure","message":"rate limit exceeded","error":"provider.upstream.failure"}`,
+		},
+		{
+			name: "no code field (backward compat)",
+			data: `{"error":"provider_error","message":"rate limit exceeded"}`,
+		},
+		{
+			name: "unknown code",
+			data: `{"code":"some.unknown.code","message":"something failed","error":"some.unknown.code"}`,
+		},
+		{
+			name: "empty code",
+			data: `{"code":"","message":"empty code","error":"empty"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := []server.SSEEvent{
+				{Event: "error", Data: tt.data},
+			}
+			srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+			body := `{"content": "Hello", "workspace_id": "homelab"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadGateway, w.Code,
+				"test %q: non-security error must produce 502 Bad Gateway", tt.name)
+		})
+	}
+}
+
+func TestRoutes_SendMessage_ErrorEvent_BudgetAndTimeoutCodes(t *testing.T) {
+	tests := []struct {
+		name       string
+		data       string
+		wantStatus int
+	}{
+		{
+			name:       "budget exceeded → 429",
+			data:       `{"code":"agent.tool.budget_exceeded","message":"tool call budget exceeded"}`,
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name:       "provider budget exceeded → 429",
+			data:       `{"code":"provider.budget.exceeded","message":"provider budget exceeded"}`,
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name:       "tool timeout → 504",
+			data:       `{"code":"agent.tool.timeout","message":"tool execution timed out"}`,
+			wantStatus: http.StatusGatewayTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := []server.SSEEvent{
+				{Event: "error", Data: tt.data},
+			}
+			srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+			body := `{"content": "Hello", "workspace_id": "homelab"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, tt.wantStatus, w.Code,
+				"test %q: expected HTTP %d", tt.name, tt.wantStatus)
+		})
+	}
+}
+
+func TestRoutes_SendMessage_ErrorEvent_CodeFieldParsed(t *testing.T) {
+	// Verify the code field is parsed from the SSE error payload.
+	// security.scanner.input_blocked → 422 Unprocessable Entity (client content rejection).
+	events := []server.SSEEvent{
+		{Event: "error", Data: `{"code":"security.scanner.input_blocked","message":"your input was blocked","error":"security.scanner.input_blocked"}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Contains(t, w.Body.String(), "your input was blocked")
+}
+
+func TestRoutes_SendMessage_ErrorEvent_MessageTakesPriorityOverError(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "error", Data: `{"code":"provider.upstream.failure","error":"err_short","message":"human readable message"}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadGateway, w.Code)
+	assert.Contains(t, w.Body.String(), "human readable message")
+	assert.NotContains(t, w.Body.String(), "err_short")
+}
+
+func TestRoutes_SendMessage_ErrorEvent_CodeOnlyPayload_FallbackMessage(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "error", Data: `{"code":"security.scanner.input_blocked"}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Contains(t, w.Body.String(), "unknown stream error")
 }
 
 func TestRoutes_SendMessage_NoStreamHandler_Returns503(t *testing.T) {

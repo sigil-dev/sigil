@@ -6,6 +6,7 @@ package errors
 import (
 	stderrors "errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -303,6 +304,24 @@ func HTTPStatus(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+// HTTPStatusFromCode maps a sigilerr Code string directly to an HTTP status code.
+// This is the code-string counterpart of HTTPStatus(error) — useful when only
+// a code string is available (e.g., parsed from an SSE error event payload).
+//
+// The SSE handler acts as a proxy, so unknown/unclassified codes default to
+// 502 Bad Gateway (rather than HTTPStatus's 500 Internal Server Error).
+func HTTPStatusFromCode(code Code) int {
+	if code == "" {
+		return http.StatusBadGateway
+	}
+	status := HTTPStatus(New(code, ""))
+	if status == http.StatusInternalServerError {
+		slog.Warn("HTTPStatusFromCode: unrecognized error code mapped to 502", "code", code)
+		return http.StatusBadGateway
+	}
+	return status
 }
 
 func Join(errs ...error) error {
