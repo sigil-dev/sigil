@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,22 @@ func newTestSSEServer(t *testing.T, events []server.SSEEvent) *server.Server {
 		}
 	})
 	return srv
+}
+
+type chatConcurrencyStreamHandler struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (h *chatConcurrencyStreamHandler) HandleStream(ctx context.Context, _ server.ChatStreamRequest, ch chan<- server.SSEEvent) {
+	h.once.Do(func() { close(h.started) })
+	select {
+	case <-h.release:
+	case <-ctx.Done():
+	}
+	ch <- server.SSEEvent{Event: "done", Data: `{}`}
+	close(ch)
 }
 
 func TestSSE_StreamsEvents(t *testing.T) {
@@ -125,6 +142,128 @@ func TestSSE_NoStreamHandler(t *testing.T) {
 
 	// Should return error when no handler is configured.
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+func TestSSE_ChatRateLimitExceeded(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "done", Data: `{}`},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:               "127.0.0.1:0",
+		StreamHandler:            &mockStreamHandler{events: events},
+		ChatRateLimitEnabled:     true,
+		ChatRateLimitRPM:         60,
+		ChatRateLimitBurst:       1,
+		ChatMaxConcurrentStreams: 5,
+	})
+	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
+
+	body := `{"content":"Hello","workspace_id":"homelab"}`
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.RemoteAddr = "192.0.2.20:12345"
+	w1 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w1, req1)
+	assert.Equal(t, http.StatusOK, w1.Code)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.RemoteAddr = "192.0.2.20:12345"
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+	assert.Equal(t, "1", w2.Header().Get("Retry-After"))
+	assert.Contains(t, w2.Body.String(), "chat rate limit exceeded")
+}
+
+func TestSSE_NilStreamHandler_DoesNotConsumeRateLimitToken(t *testing.T) {
+	// Verify that requests rejected with 503 (stream handler not configured) do NOT
+	// consume a rate-limit token. The guard in handleChatStream returns 503 before
+	// checkChatRequestLimit is called, so even with a tiny burst budget, multiple
+	// nil-handler requests must all get 503 — never 429.
+	srv, err := server.New(server.Config{
+		ListenAddr:               "127.0.0.1:0",
+		ChatRateLimitEnabled:     true,
+		ChatRateLimitRPM:         60,
+		ChatRateLimitBurst:       1,
+		ChatMaxConcurrentStreams: 5,
+		// StreamHandler intentionally omitted (nil).
+	})
+	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
+
+	body := `{"content":"Hello","workspace_id":"homelab"}`
+
+	// Send multiple requests — all must get 503, not 429.
+	for i := range 3 {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "192.0.2.30:12345"
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+			"request %d: expected 503 (not 429), nil-handler 503s must not consume rate-limit tokens", i+1)
+	}
+}
+
+func TestSSE_ChatConcurrencyLimitAndRelease(t *testing.T) {
+	handler := &chatConcurrencyStreamHandler{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:               "127.0.0.1:0",
+		StreamHandler:            handler,
+		ChatRateLimitEnabled:     true,
+		ChatRateLimitRPM:         0, // disable request-start limiter for this test
+		ChatRateLimitBurst:       0,
+		ChatMaxConcurrentStreams: 1,
+	})
+	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
+
+	body := `{"content":"Hello","workspace_id":"homelab"}`
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.RemoteAddr = "192.0.2.21:12345"
+	w1 := httptest.NewRecorder()
+	done1 := make(chan struct{})
+	go func() {
+		srv.Handler().ServeHTTP(w1, req1)
+		close(done1)
+	}()
+
+	select {
+	case <-handler.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first stream did not start")
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.RemoteAddr = "192.0.2.21:12345"
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+	assert.Contains(t, w2.Body.String(), "too many active chat streams")
+
+	close(handler.release)
+	select {
+	case <-done1:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first stream did not finish after release")
+	}
+	assert.Equal(t, http.StatusOK, w1.Code)
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.RemoteAddr = "192.0.2.21:12345"
+	w3 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w3, req3)
+	assert.Equal(t, http.StatusOK, w3.Code, "stream slot should be released after first stream completes")
 }
 
 func TestSSE_CompoundAcceptHeader(t *testing.T) {

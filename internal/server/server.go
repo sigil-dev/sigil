@@ -23,19 +23,23 @@ import (
 
 // Config holds HTTP server configuration.
 type Config struct {
-	ListenAddr     string
-	CORSOrigins    []string
-	ReadTimeout    time.Duration
-	WriteTimeout   time.Duration
-	TokenValidator TokenValidator // nil = auth disabled (dev mode)
-	EnableHSTS     bool
-	RateLimit      RateLimitConfig // per-IP rate limiting
-	BehindProxy    bool            // true if behind a reverse proxy (enables RealIP middleware)
-	TrustedProxies []string        // CIDR ranges of trusted proxies (required when BehindProxy=true)
-	StreamHandler    StreamHandler // nil = SSE routes return 503 until handler is set
-	Services         *Services    // nil = service-dependent routes fail closed
-	ConfigDeps       *ConfigDeps  // nil = config routes return 503 until deps are set
-	DevCSPConnectSrc string       // additional connect-src origin for dev (e.g. Tauri WebSocket); empty in production
+	ListenAddr              string
+	CORSOrigins             []string
+	ReadTimeout             time.Duration
+	WriteTimeout            time.Duration
+	TokenValidator          TokenValidator  // nil = auth disabled (dev mode)
+	EnableHSTS              bool
+	RateLimit               RateLimitConfig // per-IP rate limiting
+	ChatRateLimitEnabled    bool
+	ChatRateLimitRPM        int
+	ChatRateLimitBurst      int
+	ChatMaxConcurrentStreams int
+	BehindProxy             bool            // true if behind a reverse proxy (enables RealIP middleware)
+	TrustedProxies          []string        // CIDR ranges of trusted proxies (required when BehindProxy=true)
+	StreamHandler           StreamHandler   // nil = SSE routes return 503 until handler is set
+	Services                *Services       // nil = service-dependent routes fail closed
+	ConfigDeps              *ConfigDeps     // nil = config routes return 503 until deps are set
+	DevCSPConnectSrc        string          // additional connect-src origin for dev (e.g. Tauri WebSocket); empty in production
 }
 
 // ApplyDefaults sets default values for zero-valued fields.
@@ -57,6 +61,16 @@ func (c *Config) Validate() error {
 
 	// Validate rate limit config
 	if err := c.RateLimit.Validate(); err != nil {
+		return err
+	}
+	chatCfg := chatRateLimitConfig{
+		Enabled:              c.ChatRateLimitEnabled,
+		RequestsPerMinute:    c.ChatRateLimitRPM,
+		Burst:                c.ChatRateLimitBurst,
+		MaxConcurrentStreams: c.ChatMaxConcurrentStreams,
+	}
+	chatCfg.applyDefaults()
+	if err := chatCfg.validate(); err != nil {
 		return err
 	}
 
@@ -97,9 +111,11 @@ type Server struct {
 	api           huma.API
 	cfg           Config
 	streamHandler StreamHandler
+	chatLimiter   *chatRateLimiter
 	services      *Services
 	configDeps    *ConfigDeps
 	rateLimitDone chan struct{}
+	chatLimitDone chan struct{}
 	closeOnce     sync.Once
 }
 
@@ -128,6 +144,26 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	rateLimitDone := make(chan struct{})
+	chatLimitDone := make(chan struct{})
+	// Note: applyDefaults is called inside newChatRateLimiter, so runtime
+	// defaults (e.g. MaxKeys=10000) may differ from what was validated
+	// by Config.Validate(). This is intentional: Validate checks bounds,
+	// not exact defaults.
+	chatLimiter, err := newChatRateLimiter(chatRateLimitConfig{
+		Enabled:              cfg.ChatRateLimitEnabled,
+		RequestsPerMinute:    cfg.ChatRateLimitRPM,
+		Burst:                cfg.ChatRateLimitBurst,
+		MaxConcurrentStreams: cfg.ChatMaxConcurrentStreams,
+	}, chatLimitDone)
+	if err != nil {
+		close(rateLimitDone)
+		// Close chatLimitDone even on error: newChatRateLimiter starts a
+		// cleanup goroutine only when Enabled=true and validation passes,
+		// so this close is precautionary (no goroutine is running here),
+		// but ensures consistent lifecycle if the implementation changes.
+		close(chatLimitDone)
+		return nil, err
+	}
 
 	r := chi.NewRouter()
 
@@ -137,6 +173,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.BehindProxy {
 		r.Use(trustedProxyRealIP(trustedNets))
 	}
+	r.Use(clientIPContextMiddleware)
 	r.Use(securityHeadersMiddleware(cfg.EnableHSTS, cfg.DevCSPConnectSrc))
 	r.Use(corsMiddleware(cfg.CORSOrigins, cfg.ListenAddr))
 	r.Use(rateLimitMiddleware(cfg.RateLimit, rateLimitDone))
@@ -163,9 +200,11 @@ func New(cfg Config) (*Server, error) {
 		api:           api,
 		cfg:           cfg,
 		streamHandler: cfg.StreamHandler,
+		chatLimiter:   chatLimiter,
 		services:      cfg.Services,
 		configDeps:    cfg.ConfigDeps,
 		rateLimitDone: rateLimitDone,
+		chatLimitDone: chatLimitDone,
 	}
 
 	// Register SSE route (returns 503 if no StreamHandler).
@@ -187,6 +226,29 @@ func (s *Server) authDisabled() bool {
 	return s.cfg.TokenValidator == nil
 }
 
+// ChatRateLimitValues holds the effective chat rate limit configuration values for inspection.
+type ChatRateLimitValues struct {
+	RateLimitRPS            float64
+	RateLimitBurst          int
+	ChatRateLimitEnabled    bool
+	ChatRateLimitRPM        int
+	ChatRateLimitBurst      int
+	ChatMaxConcurrentStreams int
+}
+
+// ChatRateLimitConfig returns the effective chat rate limit configuration values.
+// This is provided for integration testing and introspection; do not use for policy enforcement.
+func (s *Server) ChatRateLimitConfig() ChatRateLimitValues {
+	return ChatRateLimitValues{
+		RateLimitRPS:            s.cfg.RateLimit.RequestsPerSecond,
+		RateLimitBurst:          s.cfg.RateLimit.Burst,
+		ChatRateLimitEnabled:    s.cfg.ChatRateLimitEnabled,
+		ChatRateLimitRPM:        s.cfg.ChatRateLimitRPM,
+		ChatRateLimitBurst:      s.cfg.ChatRateLimitBurst,
+		ChatMaxConcurrentStreams: s.cfg.ChatMaxConcurrentStreams,
+	}
+}
+
 // Handler returns the underlying http.Handler for testing.
 func (s *Server) Handler() http.Handler {
 	return s.router
@@ -203,6 +265,7 @@ func (s *Server) API() huma.API {
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.rateLimitDone)
+		close(s.chatLimitDone)
 		// Note: We cannot stop httpServer here because it's only created in Start()
 		// and stopping it requires the shutdown context. Callers should use ctx
 		// cancellation to stop Start()'s HTTP server gracefully.

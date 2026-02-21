@@ -46,14 +46,18 @@ type TokenConfig struct {
 
 // NetworkingConfig controls how Sigil listens for connections.
 type NetworkingConfig struct {
-	Mode             string   `mapstructure:"mode"`
-	Listen           string   `mapstructure:"listen"`
-	CORSOrigins      []string `mapstructure:"cors_origins"`
-	EnableHSTS       bool     `mapstructure:"enable_hsts"`
-	RateLimitRPS     float64  `mapstructure:"rate_limit_rps"`
-	RateLimitBurst   int      `mapstructure:"rate_limit_burst"`
-	TrustedProxies   []string `mapstructure:"trusted_proxies"`   // CIDR ranges of trusted reverse proxies
-	DevCSPConnectSrc string   `mapstructure:"dev_csp_connect_src"` // dev-only: extra connect-src origin (e.g. Tauri WebSocket)
+	Mode                    string   `mapstructure:"mode"`
+	Listen                  string   `mapstructure:"listen"`
+	CORSOrigins             []string `mapstructure:"cors_origins"`
+	EnableHSTS              bool     `mapstructure:"enable_hsts"`
+	RateLimitRPS            float64  `mapstructure:"rate_limit_rps"`
+	RateLimitBurst          int      `mapstructure:"rate_limit_burst"`
+	ChatRateLimitEnabled    bool     `mapstructure:"chat_rate_limit_enabled"`
+	ChatRateLimitRPM        int      `mapstructure:"chat_rate_limit_rpm"`
+	ChatRateLimitBurst      int      `mapstructure:"chat_rate_limit_burst"`
+	ChatMaxConcurrentStreams int      `mapstructure:"chat_max_concurrent_streams"`
+	TrustedProxies          []string `mapstructure:"trusted_proxies"`    // CIDR ranges of trusted reverse proxies
+	DevCSPConnectSrc        string   `mapstructure:"dev_csp_connect_src"` // dev-only: extra connect-src origin (e.g. Tauri WebSocket)
 }
 
 // ProviderConfig holds credentials and endpoint for an LLM provider.
@@ -136,10 +140,10 @@ type AuditConfig struct {
 
 // ScannerConfig controls per-hook scanner detection modes.
 type ScannerConfig struct {
-	Input                    types.ScannerMode  `mapstructure:"input"`
-	Tool                     types.ScannerMode  `mapstructure:"tool"`
-	Output                   types.ScannerMode  `mapstructure:"output"`
-	AllowPermissiveInputMode bool               `mapstructure:"allow_permissive_input_mode"`
+	Input                    types.ScannerMode   `mapstructure:"input"`
+	Tool                     types.ScannerMode   `mapstructure:"tool"`
+	Output                   types.ScannerMode   `mapstructure:"output"`
+	AllowPermissiveInputMode bool                `mapstructure:"allow_permissive_input_mode"`
 	Limits                   ScannerLimitsConfig `mapstructure:"limits"`
 	// DisableOriginTagging controls whether origin tag prepending is disabled.
 	// When false (the default), origin tags ([user_input], [tool_output], etc.)
@@ -172,6 +176,10 @@ type ScannerLimitsConfig struct {
 func SetDefaults(v *viper.Viper) {
 	v.SetDefault("networking.mode", "local")
 	v.SetDefault("networking.listen", "127.0.0.1:18789")
+	v.SetDefault("networking.chat_rate_limit_enabled", true)
+	v.SetDefault("networking.chat_rate_limit_rpm", 30)
+	v.SetDefault("networking.chat_rate_limit_burst", 10)
+	v.SetDefault("networking.chat_max_concurrent_streams", 5)
 	v.SetDefault("storage.backend", "sqlite")
 	v.SetDefault("sessions.memory.active_window", 20)
 	v.SetDefault("sessions.memory.compaction.strategy", "summarize")
@@ -309,6 +317,27 @@ func (c *Config) validateNetworking() []error {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"config: networking.rate_limit_burst must be positive when rate_limit_rps is set, got burst=%d, rps=%g",
 			c.Networking.RateLimitBurst, c.Networking.RateLimitRPS,
+		))
+	}
+
+	if c.Networking.ChatRateLimitRPM < 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: networking.chat_rate_limit_rpm must not be negative, got %d",
+			c.Networking.ChatRateLimitRPM,
+		))
+	}
+
+	if c.Networking.ChatRateLimitRPM > 0 && c.Networking.ChatRateLimitBurst <= 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: networking.chat_rate_limit_burst must be positive when chat_rate_limit_rpm is set, got burst=%d, rpm=%d",
+			c.Networking.ChatRateLimitBurst, c.Networking.ChatRateLimitRPM,
+		))
+	}
+
+	if c.Networking.ChatRateLimitEnabled && c.Networking.ChatMaxConcurrentStreams <= 0 {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
+			"config: networking.chat_max_concurrent_streams must be positive when chat_rate_limit_enabled is true, got %d",
+			c.Networking.ChatMaxConcurrentStreams,
 		))
 	}
 
@@ -487,8 +516,8 @@ func (c *Config) ValidateSecurity() []error {
 	// Validate scanner limits: range checks ensure limits are within safe bounds.
 	// Min 64KB (below this scanning is effectively useless), max 10MB (above this risks CPU DoS).
 	const (
-		scannerLimitMin = 65536      // 64KB
-		scannerLimitMax = 10485760   // 10MB
+		scannerLimitMin = 65536    // 64KB
+		scannerLimitMax = 10485760 // 10MB
 	)
 	limits := c.Security.Scanner.Limits
 	for _, lv := range []struct {

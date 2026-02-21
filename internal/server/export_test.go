@@ -3,7 +3,9 @@
 
 package server
 
-import "context"
+import (
+	"context"
+)
 
 // ContextWithUser injects an AuthenticatedUser into a context for testing.
 // This is exported only to _test packages via the export_test.go convention.
@@ -19,4 +21,12 @@ func (s *Server) CheckWorkspaceMembership(ctx context.Context, workspaceID strin
 // RequireAdmin exposes requireAdmin for direct unit testing.
 func (s *Server) RequireAdmin(ctx context.Context, permission, op string) error {
 	return s.requireAdmin(ctx, permission, op)
+}
+
+// RunCleanupNow synchronously executes the cleanup body of cleanupLoop once.
+// It is provided for testing only, so tests do not have to wait for the 5-minute ticker.
+func (l *chatRateLimiter) RunCleanupNow() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.runEvictionLocked()
 }

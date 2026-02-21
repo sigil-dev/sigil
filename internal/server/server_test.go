@@ -50,6 +50,19 @@ func TestServer_New_EmptyListenAddr(t *testing.T) {
 	assert.Contains(t, err.Error(), "listen address is required")
 }
 
+func TestServer_New_InvalidChatRateLimitConfig(t *testing.T) {
+	_, err := server.New(server.Config{
+		ListenAddr:               "127.0.0.1:0",
+		ChatRateLimitEnabled:     true,
+		ChatRateLimitRPM:         10,
+		ChatRateLimitBurst:       0,
+		ChatMaxConcurrentStreams: 1,
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerConfigInvalid), "expected CodeServerConfigInvalid, got %s", sigilerr.CodeOf(err))
+	assert.Contains(t, err.Error(), "chat rate limit burst must be positive")
+}
+
 func TestServer_HealthEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 

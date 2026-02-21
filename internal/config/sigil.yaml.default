@@ -34,6 +34,10 @@ networking:
   enable_hsts: false                # Enable HTTP Strict Transport Security
   rate_limit_rps: 0                 # Requests per second per IP (0 = disabled)
   rate_limit_burst: 0               # Burst size for rate limiting
+  chat_rate_limit_enabled: true     # Enable chat endpoint rate limiting
+  chat_rate_limit_rpm: 30           # Chat requests per minute per identity (0 = disabled)
+  chat_rate_limit_burst: 10         # Burst size for chat rate limiting
+  chat_max_concurrent_streams: 5    # Max concurrent chat streams per identity
   # cors_origins:                   # Allowed CORS origins (empty = dev default)
   #   - "http://localhost:5173"
   # trusted_proxies:                # CIDR ranges of trusted reverse proxies

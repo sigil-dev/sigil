@@ -80,6 +80,7 @@ const (
 	CodeServerStartFailure     Code = "server.start.failure"
 	CodeServerShutdownFailure  Code = "server.shutdown.failure"
 	CodeServerNotImplemented   Code = "server.method.not_implemented"
+	CodeServerRateLimited      Code = "server.rate_limited"
 
 	CodeCLIGatewayNotRunning Code = "cli.gateway.not_running"
 	CodeCLIRequestFailure    Code = "cli.request.failure"
@@ -289,6 +290,8 @@ func HTTPStatus(err error) int {
 			return http.StatusForbidden
 		}
 		return http.StatusUnauthorized
+	case HasCode(err, CodeServerRateLimited):
+		return http.StatusTooManyRequests
 	case IsBudgetExceeded(err):
 		return http.StatusTooManyRequests
 	case IsTimeout(err):

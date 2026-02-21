@@ -21,6 +21,10 @@ func TestLoad_DefaultValues(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "127.0.0.1:18789", cfg.Networking.Listen)
 	assert.Equal(t, "local", cfg.Networking.Mode)
+	assert.True(t, cfg.Networking.ChatRateLimitEnabled)
+	assert.Equal(t, 30, cfg.Networking.ChatRateLimitRPM)
+	assert.Equal(t, 10, cfg.Networking.ChatRateLimitBurst)
+	assert.Equal(t, 5, cfg.Networking.ChatMaxConcurrentStreams)
 	assert.Equal(t, "sqlite", cfg.Storage.Backend)
 	assert.Equal(t, 20, cfg.Sessions.Memory.ActiveWindow)
 }
@@ -87,8 +91,12 @@ func TestValidate_MissingProvider(t *testing.T) {
 func validConfig() *config.Config {
 	return &config.Config{
 		Networking: config.NetworkingConfig{
-			Mode:   "local",
-			Listen: "127.0.0.1:18789",
+			Mode:                     "local",
+			Listen:                   "127.0.0.1:18789",
+			ChatRateLimitEnabled:     true,
+			ChatRateLimitRPM:         30,
+			ChatRateLimitBurst:       10,
+			ChatMaxConcurrentStreams: 5,
 		},
 		Providers: map[string]config.ProviderConfig{
 			"anthropic": {APIKey: "test-key"},
@@ -122,9 +130,9 @@ func validConfig() *config.Config {
 				Output: "redact",
 				Limits: config.ScannerLimitsConfig{
 					MaxContentLength:        1048576,
-					MaxPreNormContentLength:  5242880,
-					MaxToolResultScanSize:    1048576,
-					MaxToolContentScanSize:   524288,
+					MaxPreNormContentLength: 5242880,
+					MaxToolResultScanSize:   1048576,
+					MaxToolContentScanSize:  524288,
 				},
 			},
 		},
@@ -712,9 +720,9 @@ func TestConfig_ScannerLimitsDefaults(t *testing.T) {
 
 func TestConfig_ScannerLimitsValidation(t *testing.T) {
 	tests := []struct {
-		name        string
-		overrides   map[string]int
-		wantErr     string
+		name      string
+		overrides map[string]int
+		wantErr   string
 	}{
 		{
 			name:    "defaults are valid",
@@ -748,7 +756,7 @@ func TestConfig_ScannerLimitsValidation(t *testing.T) {
 		{
 			name: "tool_content_scan_size must be less than content_length",
 			overrides: map[string]int{
-				"security.scanner.limits.max_content_length":       524288,
+				"security.scanner.limits.max_content_length":         524288,
 				"security.scanner.limits.max_tool_content_scan_size": 524288,
 			},
 			wantErr: "max_tool_content_scan_size (524288) must be < max_content_length (524288)",
@@ -764,10 +772,10 @@ func TestConfig_ScannerLimitsValidation(t *testing.T) {
 		{
 			name: "valid custom limits",
 			overrides: map[string]int{
-				"security.scanner.limits.max_content_length":         2097152,
+				"security.scanner.limits.max_content_length":          2097152,
 				"security.scanner.limits.max_pre_norm_content_length": 8388608,
-				"security.scanner.limits.max_tool_result_scan_size":  2097152,
-				"security.scanner.limits.max_tool_content_scan_size": 1048576,
+				"security.scanner.limits.max_tool_result_scan_size":   2097152,
+				"security.scanner.limits.max_tool_content_scan_size":  1048576,
 			},
 			wantErr: "",
 		},
@@ -874,6 +882,107 @@ func TestValidate_RateLimitConfig(t *testing.T) {
 			} else {
 				for _, err := range errs {
 					assert.NotContains(t, err.Error(), "rate_limit")
+				}
+			}
+		})
+	}
+}
+
+func TestValidate_ChatRateLimitConfig(t *testing.T) {
+	tests := []struct {
+		name                 string
+		enabled              bool
+		rpm                  int
+		burst                int
+		maxConcurrentStreams int
+		wantErr              string
+	}{
+		{
+			name:                 "valid defaults",
+			enabled:              true,
+			rpm:                  30,
+			burst:                10,
+			maxConcurrentStreams: 5,
+		},
+		{
+			name:                 "chat limiter disabled allows zero streams",
+			enabled:              false,
+			rpm:                  0,
+			burst:                0,
+			maxConcurrentStreams: 0,
+		},
+		{
+			name:                 "chat limiter disabled allows negative streams",
+			enabled:              false,
+			rpm:                  0,
+			burst:                0,
+			maxConcurrentStreams: -1,
+		},
+		{
+			name:                 "negative rpm",
+			enabled:              true,
+			rpm:                  -1,
+			burst:                10,
+			maxConcurrentStreams: 5,
+			wantErr:              "chat_rate_limit_rpm must not be negative",
+		},
+		{
+			name:                 "rpm set but burst is zero",
+			enabled:              true,
+			rpm:                  10,
+			burst:                0,
+			maxConcurrentStreams: 5,
+			wantErr:              "chat_rate_limit_burst must be positive",
+		},
+		{
+			name:                 "rpm set but burst is negative",
+			enabled:              true,
+			rpm:                  10,
+			burst:                -1,
+			maxConcurrentStreams: 5,
+			wantErr:              "chat_rate_limit_burst must be positive",
+		},
+		{
+			name:                 "enabled with zero max concurrent streams",
+			enabled:              true,
+			rpm:                  0,
+			burst:                0,
+			maxConcurrentStreams: 0,
+			wantErr:              "chat_max_concurrent_streams must be positive",
+		},
+		{
+			name:                 "enabled with negative max concurrent streams",
+			enabled:              true,
+			rpm:                  0,
+			burst:                0,
+			maxConcurrentStreams: -1,
+			wantErr:              "chat_max_concurrent_streams must be positive",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Networking.ChatRateLimitEnabled = tt.enabled
+			cfg.Networking.ChatRateLimitRPM = tt.rpm
+			cfg.Networking.ChatRateLimitBurst = tt.burst
+			cfg.Networking.ChatMaxConcurrentStreams = tt.maxConcurrentStreams
+
+			errs := cfg.Validate()
+			if tt.wantErr != "" {
+				require.NotEmpty(t, errs)
+				found := false
+				for _, err := range errs {
+					if strings.Contains(err.Error(), tt.wantErr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected error containing %q, got: %v", tt.wantErr, errs)
+			} else {
+				for _, err := range errs {
+					assert.NotContains(t, err.Error(), "chat_rate_limit")
+					assert.NotContains(t, err.Error(), "chat_max_concurrent_streams")
 				}
 			}
 		})
