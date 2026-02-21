@@ -17,6 +17,11 @@ import (
 
 const defaultQueueTTL = 60 * time.Second
 
+const (
+	maxArgsSizeBytes  = 64 * 1024 // 64 KB
+	maxPendingPerNode = 100
+)
+
 // Authenticator validates node identity during registration.
 type Authenticator interface {
 	Authenticate(reg Registration) error
@@ -104,7 +109,7 @@ func (m *Manager) Register(reg Registration) error {
 
 	if m.auth != nil {
 		if err := m.auth.Authenticate(reg); err != nil {
-			slog.Warn("node authentication failed", "node_id", nodeID)
+			slog.Warn("node authentication failed", "node_id", nodeID, "error", err)
 			return sigilerr.Wrapf(err, sigilerr.CodeServerAuthUnauthorized, "authenticating node %s", nodeID)
 		}
 	}
@@ -149,6 +154,7 @@ func (m *Manager) PrefixedTools(nodeID string) ([]string, error) {
 	node, ok := m.nodes[nodeID]
 	m.mu.RUnlock()
 	if !ok {
+		slog.Debug("prefixed tools: node not found", "node_id", nodeID)
 		return nil, sigilerr.New(sigilerr.CodeServerEntityNotFound, "node not found",
 			sigilerr.Field("node_id", nodeID))
 	}
@@ -167,7 +173,7 @@ func (m *Manager) Disconnect(nodeID string) {
 
 	node, ok := m.nodes[nodeID]
 	if !ok {
-		slog.Warn("Disconnect called for unknown node", "node_id", nodeID)
+		slog.Warn("disconnect called for unknown node", "node_id", nodeID)
 		return
 	}
 
@@ -188,6 +194,7 @@ func (m *Manager) List() []Node {
 	nodes := make([]Node, 0, len(ids))
 	for _, id := range ids {
 		node := m.nodes[id]
+		node.Capabilities = append([]string(nil), node.Capabilities...)
 		node.Tools = append([]string(nil), node.Tools...)
 		nodes = append(nodes, node)
 	}
@@ -204,6 +211,11 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 	tool = strings.TrimSpace(tool)
 	if tool == "" {
 		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "tool is required")
+	}
+
+	if len(args) > maxArgsSizeBytes {
+		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "args payload exceeds maximum size",
+			sigilerr.Field("node_id", nodeID), sigilerr.Field("size", len(args)))
 	}
 
 	m.mu.Lock()
@@ -228,6 +240,11 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 
 	now := m.now()
 	m.pruneExpiredLocked(nodeID, now)
+
+	if len(m.pending[nodeID]) >= maxPendingPerNode {
+		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "pending queue is full for node",
+			sigilerr.Field("node_id", nodeID))
+	}
 
 	m.nextID++
 	requestID := fmt.Sprintf("req-%d", m.nextID)

@@ -191,6 +191,24 @@ func TestManagerQueueToolCallValidationErrors(t *testing.T) {
 			tool:     "screen",
 			wantCode: sigilerr.CodeServerRequestInvalid,
 		},
+		{
+			name: "whitespace-only nodeID",
+			setup: func(_ *Manager) {
+			},
+			nodeID:   "   ",
+			tool:     "screen",
+			wantCode: sigilerr.CodeServerRequestInvalid,
+		},
+		{
+			name: "whitespace-only tool",
+			setup: func(mgr *Manager) {
+				require.NoError(t, mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}}))
+				mgr.Disconnect("mac")
+			},
+			nodeID:   "mac",
+			tool:     "   ",
+			wantCode: sigilerr.CodeServerRequestInvalid,
+		},
 	}
 
 	for _, tt := range tests {
@@ -211,6 +229,15 @@ type stubAuth struct {
 }
 
 func (s *stubAuth) Authenticate(_ Registration) error {
+	return s.err
+}
+
+// stubWorkspaceValidator is a test WorkspaceValidator that can be configured to pass or fail.
+type stubWorkspaceValidator struct {
+	err error
+}
+
+func (s *stubWorkspaceValidator) ValidateWorkspace(_, _ string) error {
 	return s.err
 }
 
@@ -266,6 +293,108 @@ func TestManagerRegisterEmptyNodeIDReturnsError(t *testing.T) {
 	assert.Empty(t, mgr.List())
 }
 
+func TestManagerRegisterWorkspaceValidator(t *testing.T) {
+	validatorErr := sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "workspace not allowed")
+
+	tests := []struct {
+		name         string
+		validatorErr error
+		wantErr      bool
+	}{
+		{
+			name:         "validator passes",
+			validatorErr: nil,
+			wantErr:      false,
+		},
+		{
+			name:         "validator returns error blocks registration",
+			validatorErr: validatorErr,
+			wantErr:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := NewManager(ManagerConfig{
+				WorkspaceValidator: &stubWorkspaceValidator{err: tt.validatorErr},
+			})
+
+			err := mgr.Register(Registration{
+				NodeID:      "phone",
+				WorkspaceID: "ws-123",
+				Tools:       []string{"camera"},
+			})
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerAuthUnauthorized))
+				assert.Empty(t, mgr.List())
+			} else {
+				require.NoError(t, err)
+				assert.Len(t, mgr.List(), 1)
+			}
+		})
+	}
+}
+
+func TestManagerDisconnectUnknownNode(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+
+	// Must not panic when disconnecting a node that was never registered.
+	mgr.Disconnect("nonexistent")
+
+	assert.Empty(t, mgr.List())
+}
+
+func TestManagerListCapsDefensiveCopy(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+
+	err := mgr.Register(Registration{
+		NodeID:       "mac",
+		Capabilities: []string{"cap:read"},
+		Tools:        []string{"screen"},
+	})
+	require.NoError(t, err)
+
+	nodes := mgr.List()
+	require.Len(t, nodes, 1)
+
+	// Mutate the returned slice in-place; the internal state must not change.
+	nodes[0].Capabilities[0] = "MUTATED"
+
+	nodes2 := mgr.List()
+	require.Len(t, nodes2, 1)
+	assert.Equal(t, "cap:read", nodes2[0].Capabilities[0])
+}
+
+func TestManagerQueueToolCallMixedExpiry(t *testing.T) {
+	const ttl = 50 * time.Millisecond
+
+	mgr := NewManager(ManagerConfig{
+		QueueTTL: ttl,
+	})
+
+	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"tool1"}})
+	require.NoError(t, err)
+	mgr.Disconnect("mac")
+
+	// Queue first request (will expire after TTL).
+	_, err = mgr.QueueToolCall("mac", "tool1", `{}`)
+	require.NoError(t, err)
+
+	// Wait for first request to expire.
+	time.Sleep(ttl + 10*time.Millisecond)
+
+	// Queue second request (should still be live).
+	secondID, err := mgr.QueueToolCall("mac", "tool1", `{}`)
+	require.NoError(t, err)
+
+	pending, err := mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, secondID, pending[0].ID)
+}
+
 func TestManagerRegisterReregistration(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -310,7 +439,7 @@ func TestManagerRegisterReregistration(t *testing.T) {
 				require.NoError(t, err)
 				nodes := mgr.List()
 				require.Len(t, nodes, 1)
-				assert.True(t, nodes[0].Online)
+				assert.Equal(t, tt.wantOnline, nodes[0].Online)
 				assert.Equal(t, []string{"screen", "camera"}, nodes[0].Tools)
 			}
 		})

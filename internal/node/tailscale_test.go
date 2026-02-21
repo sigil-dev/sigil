@@ -185,6 +185,16 @@ func TestTokenAuthRejectsEmptyCandidate(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerAuthUnauthorized))
 }
 
+func TestTokenAuthTrimsWhitespaceCandidates(t *testing.T) {
+	auth, err := node.NewTokenAuth("secret-token")
+	require.NoError(t, err)
+
+	// Leading/trailing whitespace should still match
+	assert.NoError(t, auth.CheckToken("  secret-token  "))
+	assert.NoError(t, auth.CheckToken("secret-token\n"))
+	assert.NoError(t, auth.CheckToken("\tsecret-token"))
+}
+
 func TestTailscaleAuthAuthenticate(t *testing.T) {
 	tests := []struct {
 		name     string
