@@ -1240,3 +1240,45 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 **Rationale:** This provides practical coverage for both tailnet and non-tailnet deployments while keeping implementation and test scope manageable for the phase.
 
 **Ref:** sigil-7ek.2, D012, D013, `docs/design/06-node-system.md`
+
+---
+
+## D079: Defer Windows Builds and Plugin Binary Distribution to Post-Phase 7
+
+**Status:** Decided (2026-02-21)
+
+**Question:** Should Windows builds and plugin binary distribution be included in Phase 7?
+
+**Context:** GoReleaser currently targets linux/darwin for the core binary. Adding Windows (.msi via Tauri) requires the Tauri Windows CI runner plus goreleaser-cross Docker image — significant CI infrastructure investment. Plugin binary bundling requires the full CI matrix.
+
+**Options considered:**
+
+1. Include Windows builds and plugin binary distribution in Phase 7 — rejected: CI infrastructure investment delays Phase 7 delivery.
+2. Defer Windows builds and plugin binary distribution to post-Phase 7 — accepted.
+
+**Decision:** Defer Windows builds and plugin binary distribution (as specified in design doc 10) to post-Phase 7. Phase 7 focuses on linux/darwin core binary only.
+
+**Rationale:** The infrastructure complexity (Tauri Windows CI runner, goreleaser-cross image, full CI matrix for plugin binaries) doesn't justify delaying Phase 7 delivery. Windows support and plugin distribution are important but not blocking core functionality.
+
+**Ref:** sigil-kqd.300, `docs/design/10-build-and-distribution.md`, `.goreleaser.yaml`
+
+---
+
+## D080: Defer Chat Attachment Support to Post-Phase 7
+
+**Status:** Decided (2026-02-21)
+
+**Question:** Should chat attachment support be included in Phase 7?
+
+**Context:** Design doc 09 §Chat specifies "Message input with attachment support". Implementing this requires a multipart upload endpoint, a file storage strategy, and provider-specific handling for vision vs text models — significant scope beyond core messaging.
+
+**Options considered:**
+
+1. Include attachment support in Phase 7 — rejected: disproportionate scope relative to user benefit at this stage.
+2. Defer chat attachment support to post-Phase 7 — accepted.
+
+**Decision:** Defer chat attachment support to post-Phase 7.
+
+**Rationale:** Attachment support doesn't block core messaging functionality. The additional scope (multipart upload endpoint, file storage strategy, provider-specific vision vs text handling) would delay Phase 7 delivery without proportional user benefit at this stage.
+
+**Ref:** sigil-kqd.307, `docs/design/09-ui-and-cli.md`

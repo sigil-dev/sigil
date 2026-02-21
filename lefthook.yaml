@@ -21,7 +21,7 @@ pre-commit:
       stage_fixed: true
     lint-markdown:
       glob: "*.md"
-      run: rumdl {staged_files}
+      run: rumdl check {staged_files}
     lint-yaml:
       glob: "*.{yaml,yml}"
       run: yamlfmt -lint {staged_files}

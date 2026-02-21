@@ -347,7 +347,8 @@ fn emit_critical_event<S: serde::Serialize + Clone>(
 
 /// Perform health check on the sidecar gateway
 fn health_check_sidecar() -> Result<bool, Box<dyn std::error::Error>> {
-    // Try to connect to the gateway's health endpoint
+    // Plain HTTP is intentionally used here — the gateway runs on localhost only.
+    // This URL never leaves the machine; it is not configurable from outside.
     let health_url = format!("http://localhost:{}/health", DEFAULT_GATEWAY_PORT);
 
     // Use ureq for a simple HTTP request
@@ -619,6 +620,8 @@ fn spawn_tray_health_poller(app: AppHandle) {
 /// failure gracefully so the tray item can be wired up now. The backend endpoint
 /// is tracked separately — see sigil-xb7 implementation note.
 fn call_agent_pause_endpoint(pausing: bool) -> Result<(), String> {
+    // Plain HTTP is intentionally used here — the gateway runs on localhost only.
+    // This URL never leaves the machine; it is not configurable from outside.
     let url = format!(
         "http://localhost:{}/api/v1/agent/pause",
         DEFAULT_GATEWAY_PORT
