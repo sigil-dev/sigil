@@ -1161,3 +1161,82 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 **Rationale:** These four constants are the operator-tunable security knobs that directly affect what content passes through the scanner pipeline. The other constants (circuit breaker threshold, HTML decode iterations, max arg length) are internal safety mechanisms that should not be tuned per-deployment. The 64KB–10MB range prevents both useless scanning (below 64KB) and CPU DoS (above 10MB).
 
 **Ref:** D064, sigil-7g5.956, `internal/config/config.go`, `internal/security/scanner/scanner.go`, `internal/agent/loop.go`
+
+---
+
+## D075: Phase 6 Node Transport Aligns to Remote Plugin Host Model
+
+**Status:** Accepted (2026-02-21)
+
+**Question:** Should Phase 6 Task 1 introduce a dedicated `NodeService` protocol, or implement node registration/handshake through the existing remote plugin-host model described in Section 6?
+
+**Options considered:**
+
+1. Introduce dedicated `NodeService` proto and stream RPC per the initial Phase 6 task draft.
+2. Implement node connectivity via the existing remote plugin-host model (chosen).
+
+**Decision:** Phase 6 Task 1 will use the existing remote plugin-host architecture. A separate dedicated node protocol is not introduced in this phase.
+
+**Rationale:** Section 6 explicitly defines nodes as remote plugin hosts. Introducing a second protocol now would duplicate responsibilities, increase maintenance surface, and diverge from the design intent without a compelling security or operability gain.
+
+**Ref:** sigil-7ek.1, `docs/design/06-node-system.md`, `docs/plans/06-phase-6-advanced-features.md`
+
+---
+
+## D076: Phase 6 Container Tier Completion Requires Minimal Runnable Runtime
+
+**Status:** Accepted (2026-02-21)
+
+**Question:** For Phase 6 Task 3, is config parsing/validation sufficient, or must the phase include a runnable container execution path?
+
+**Options considered:**
+
+1. Config-only foundation (manifest parsing, validation, interfaces/mocks).
+2. Minimal runnable runtime (chosen): real container lifecycle start/stop with basic isolation controls and integration coverage.
+3. Full production-grade tier (pull policy, advanced networking/observability/recovery) in Phase 6.
+
+**Decision:** Phase 6 requires a minimal runnable container tier, not config-only scaffolding.
+
+**Rationale:** The task is explicitly "Container Execution Tier." Config-only work would not satisfy that outcome and would defer core execution risk to later phases. A minimal runnable path keeps scope bounded while delivering real behavior.
+
+**Ref:** sigil-7ek.3, `docs/plans/06-phase-6-advanced-features.md`, `docs/design/02-plugin-system.md`
+
+---
+
+## D077: Phase 6 Task 6 Expanded with Status Subscription and Pause/Resume Controls
+
+**Status:** Accepted (2026-02-21)
+
+**Question:** Should Phase 6 Task 6 remain limited to node CRUD endpoints, or include backend APIs required by dependent desktop features?
+
+**Options considered:**
+
+1. Keep Task 6 strictly node CRUD.
+2. Expand Task 6 to include status subscription and agent pause/resume controls (chosen).
+3. Keep Task 6 narrow and create separate backend beads for those APIs.
+
+**Decision:** Task 6 includes node CRUD endpoints plus status subscription and pause/resume control surfaces needed by desktop tray integrations.
+
+**Rationale:** Multiple follow-on features already depend on these APIs. Including them in Task 6 removes artificial dependency gaps and keeps backend/platform behavior cohesive.
+
+**Ref:** sigil-7ek.6, sigil-94o, sigil-bt3, `docs/plans/06-phase-6-advanced-features.md`
+
+---
+
+## D078: Phase 6 Node Auth Baseline Is Tailscale Plus Token; mTLS Deferred
+
+**Status:** Accepted (2026-02-21)
+
+**Question:** Which node authentication methods are in-scope for Phase 6?
+
+**Options considered:**
+
+1. Tailscale-only baseline.
+2. Tailscale plus token auth (chosen), defer mTLS.
+3. Implement tailscale, token, and mTLS in Phase 6.
+
+**Decision:** Phase 6 baseline includes Tailscale tag-based auth and token-based auth. mTLS is deferred to later hardening scope.
+
+**Rationale:** This provides practical coverage for both tailnet and non-tailnet deployments while keeping implementation and test scope manageable for the phase.
+
+**Ref:** sigil-7ek.2, D012, D013, `docs/design/06-node-system.md`
