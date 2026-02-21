@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/pkg/plugin"
@@ -40,6 +41,7 @@ type Services struct {
 	plugins    PluginService
 	sessions   SessionService
 	users      UserService
+	providers  ProviderService // optional; nil = provider health endpoints unavailable
 }
 
 // NewServices creates a Services instance with validation.
@@ -85,6 +87,18 @@ func (s *Services) Users() UserService {
 	return s.users
 }
 
+// Providers returns the optional provider health service.
+// Returns nil when provider health endpoints are not configured.
+func (s *Services) Providers() ProviderService {
+	return s.providers
+}
+
+// SetProviders sets the optional provider health service.
+// This allows configuring provider health endpoints after initial Services creation.
+func (s *Services) SetProviders(ps ProviderService) {
+	s.providers = ps
+}
+
 // WorkspaceService provides workspace operations for REST handlers.
 type WorkspaceService interface {
 	List(ctx context.Context) ([]WorkspaceSummary, error)
@@ -110,6 +124,12 @@ type SessionService interface {
 // UserService provides user operations for REST handlers.
 type UserService interface {
 	List(ctx context.Context) ([]UserSummary, error)
+}
+
+// ProviderService provides provider health operations for REST handlers.
+// This is optional — when nil, provider health endpoints are not registered.
+type ProviderService interface {
+	GetHealth(ctx context.Context, name string) (*ProviderHealthDetail, error)
 }
 
 // WorkspaceSummary is the REST representation of a workspace in list results.
@@ -164,6 +184,16 @@ type SessionDetail struct {
 type UserSummary struct {
 	ID   string `json:"id" doc:"User identifier"`
 	Name string `json:"name" doc:"Display name"`
+}
+
+// ProviderHealthDetail is the REST representation of a provider's health metrics.
+type ProviderHealthDetail struct {
+	Provider      string     `json:"provider" doc:"Provider name"`
+	Available     bool       `json:"available" doc:"Whether the provider is currently available"`
+	FailureCount  int64      `json:"failure_count" doc:"Cumulative number of recorded failures"`
+	LastFailureAt *time.Time `json:"last_failure_at,omitempty" doc:"Time of the most recent failure"`
+	CooldownUntil *time.Time `json:"cooldown_until,omitempty" doc:"Cooldown deadline after failure"`
+	Message       string     `json:"message" doc:"Human-readable status message"`
 }
 
 // NewServicesForTest creates a Services instance for testing.

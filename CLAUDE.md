@@ -454,20 +454,20 @@ bd ready --json
 
 ```bash
 bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
-bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:sigil-abc --json
+bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
 ```
 
 **Claim and update:**
 
 ```bash
-bd update sigil-abc --status in_progress --json
-bd update sigil-abc --priority 1 --json
+bd update bd-42 --status in_progress --json
+bd update bd-42 --priority 1 --json
 ```
 
 **Complete work:**
 
 ```bash
-bd close sigil-abc --reason "Completed" --json
+bd close bd-42 --reason "Completed" --json
 ```
 
 ### Issue Types
