@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,9 +38,9 @@ func testGatewayConfig() *config.Config {
 			Scanner: config.ScannerConfig{
 				Limits: config.ScannerLimitsConfig{
 					MaxContentLength:        1048576,
-					MaxPreNormContentLength:  5242880,
-					MaxToolResultScanSize:    1048576,
-					MaxToolContentScanSize:   524288,
+					MaxPreNormContentLength: 5242880,
+					MaxToolResultScanSize:   1048576,
+					MaxToolContentScanSize:  524288,
 				},
 			},
 		},
@@ -405,14 +406,25 @@ func TestWireGateway_RateLimitConfig(t *testing.T) {
 	cfg := testGatewayConfig()
 	cfg.Networking.RateLimitRPS = 10.0
 	cfg.Networking.RateLimitBurst = 20
+	cfg.Networking.ChatRateLimitEnabled = true
+	cfg.Networking.ChatRateLimitRPM = 45
+	cfg.Networking.ChatRateLimitBurst = 12
+	cfg.Networking.ChatMaxConcurrentStreams = 7
 
 	gw, err := WireGateway(context.Background(), cfg, dir)
 	require.NoError(t, err)
 	defer func() { _ = gw.Close() }()
 
 	assert.NotNil(t, gw.Server())
-	// Server was created successfully with rate limit config.
-	// The middleware is tested separately in internal/server/ratelimit_test.go
+	srvVal := reflect.ValueOf(gw.Server()).Elem()
+	cfgVal := srvVal.FieldByName("cfg")
+
+	assert.Equal(t, cfg.Networking.RateLimitRPS, cfgVal.FieldByName("RateLimit").FieldByName("RequestsPerSecond").Float())
+	assert.Equal(t, int64(cfg.Networking.RateLimitBurst), cfgVal.FieldByName("RateLimit").FieldByName("Burst").Int())
+	assert.Equal(t, cfg.Networking.ChatRateLimitEnabled, cfgVal.FieldByName("ChatRateLimitEnabled").Bool())
+	assert.Equal(t, int64(cfg.Networking.ChatRateLimitRPM), cfgVal.FieldByName("ChatRateLimitRPM").Int())
+	assert.Equal(t, int64(cfg.Networking.ChatRateLimitBurst), cfgVal.FieldByName("ChatRateLimitBurst").Int())
+	assert.Equal(t, int64(cfg.Networking.ChatMaxConcurrentStreams), cfgVal.FieldByName("ChatMaxConcurrentStreams").Int())
 }
 
 func TestWireGateway_RegistryDefaultAndFailoverWired(t *testing.T) {

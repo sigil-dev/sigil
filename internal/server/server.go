@@ -23,19 +23,23 @@ import (
 
 // Config holds HTTP server configuration.
 type Config struct {
-	ListenAddr     string
-	CORSOrigins    []string
-	ReadTimeout    time.Duration
-	WriteTimeout   time.Duration
-	TokenValidator TokenValidator // nil = auth disabled (dev mode)
-	EnableHSTS     bool
-	RateLimit      RateLimitConfig // per-IP rate limiting
-	BehindProxy    bool            // true if behind a reverse proxy (enables RealIP middleware)
-	TrustedProxies []string        // CIDR ranges of trusted proxies (required when BehindProxy=true)
-	StreamHandler    StreamHandler // nil = SSE routes return 503 until handler is set
-	Services         *Services    // nil = service-dependent routes fail closed
-	ConfigDeps       *ConfigDeps  // nil = config routes return 503 until deps are set
-	DevCSPConnectSrc string       // additional connect-src origin for dev (e.g. Tauri WebSocket); empty in production
+	ListenAddr              string
+	CORSOrigins             []string
+	ReadTimeout             time.Duration
+	WriteTimeout            time.Duration
+	TokenValidator          TokenValidator  // nil = auth disabled (dev mode)
+	EnableHSTS              bool
+	RateLimit               RateLimitConfig // per-IP rate limiting
+	ChatRateLimitEnabled    bool
+	ChatRateLimitRPM        int
+	ChatRateLimitBurst      int
+	ChatMaxConcurrentStreams int
+	BehindProxy             bool            // true if behind a reverse proxy (enables RealIP middleware)
+	TrustedProxies          []string        // CIDR ranges of trusted proxies (required when BehindProxy=true)
+	StreamHandler           StreamHandler   // nil = SSE routes return 503 until handler is set
+	Services                *Services       // nil = service-dependent routes fail closed
+	ConfigDeps              *ConfigDeps     // nil = config routes return 503 until deps are set
+	DevCSPConnectSrc        string          // additional connect-src origin for dev (e.g. Tauri WebSocket); empty in production
 }
 
 // ApplyDefaults sets default values for zero-valued fields.
@@ -57,6 +61,16 @@ func (c *Config) Validate() error {
 
 	// Validate rate limit config
 	if err := c.RateLimit.Validate(); err != nil {
+		return err
+	}
+	chatCfg := chatRateLimitConfig{
+		Enabled:              c.ChatRateLimitEnabled,
+		RequestsPerMinute:    c.ChatRateLimitRPM,
+		Burst:                c.ChatRateLimitBurst,
+		MaxConcurrentStreams: c.ChatMaxConcurrentStreams,
+	}
+	chatCfg.applyDefaults()
+	if err := chatCfg.validate(); err != nil {
 		return err
 	}
 
@@ -97,6 +111,7 @@ type Server struct {
 	api           huma.API
 	cfg           Config
 	streamHandler StreamHandler
+	chatLimiter   *chatRateLimiter
 	services      *Services
 	configDeps    *ConfigDeps
 	rateLimitDone chan struct{}
@@ -128,6 +143,16 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	rateLimitDone := make(chan struct{})
+	chatLimiter, err := newChatRateLimiter(chatRateLimitConfig{
+		Enabled:              cfg.ChatRateLimitEnabled,
+		RequestsPerMinute:    cfg.ChatRateLimitRPM,
+		Burst:                cfg.ChatRateLimitBurst,
+		MaxConcurrentStreams: cfg.ChatMaxConcurrentStreams,
+	}, rateLimitDone)
+	if err != nil {
+		close(rateLimitDone)
+		return nil, err
+	}
 
 	r := chi.NewRouter()
 
@@ -137,6 +162,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.BehindProxy {
 		r.Use(trustedProxyRealIP(trustedNets))
 	}
+	r.Use(clientIPContextMiddleware)
 	r.Use(securityHeadersMiddleware(cfg.EnableHSTS, cfg.DevCSPConnectSrc))
 	r.Use(corsMiddleware(cfg.CORSOrigins, cfg.ListenAddr))
 	r.Use(rateLimitMiddleware(cfg.RateLimit, rateLimitDone))
@@ -163,6 +189,7 @@ func New(cfg Config) (*Server, error) {
 		api:           api,
 		cfg:           cfg,
 		streamHandler: cfg.StreamHandler,
+		chatLimiter:   chatLimiter,
 		services:      cfg.Services,
 		configDeps:    cfg.ConfigDeps,
 		rateLimitDone: rateLimitDone,

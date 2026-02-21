@@ -334,6 +334,9 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 		err503 := huma.Error503ServiceUnavailable("agent not configured")
 		return nil, huma.ErrorWithHeaders(err503, http.Header{"Retry-After": []string{"5"}})
 	}
+	if err := s.checkChatRequestLimit(ctx, "/api/v1/chat"); err != nil {
+		return nil, err
+	}
 
 	// Verify workspace membership.
 	if err := s.checkWorkspaceMembership(ctx, input.Body.WorkspaceID); err != nil {

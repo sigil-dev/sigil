@@ -322,6 +322,83 @@ func TestRoutes_SendMessage(t *testing.T) {
 	assert.Equal(t, "Hello world", resp.Content)
 }
 
+func TestRoutes_SendMessage_ChatRateLimitExceeded(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "done", Data: `{}`},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:               "127.0.0.1:0",
+		StreamHandler:            &mockStreamHandler{events: events},
+		ChatRateLimitEnabled:     true,
+		ChatRateLimitRPM:         60,
+		ChatRateLimitBurst:       1,
+		ChatMaxConcurrentStreams: 5,
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
+	})
+	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.RemoteAddr = "192.0.2.10:12345"
+	w1 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w1, req1)
+	assert.Equal(t, http.StatusOK, w1.Code)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.RemoteAddr = "192.0.2.10:12345"
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+	assert.Equal(t, "1", w2.Header().Get("Retry-After"))
+	assert.Contains(t, w2.Body.String(), "chat rate limit exceeded")
+}
+
+func TestRoutes_SendMessage_ChatRateLimitPerIPIsolation(t *testing.T) {
+	events := []server.SSEEvent{
+		{Event: "done", Data: `{}`},
+	}
+	srv, err := server.New(server.Config{
+		ListenAddr:               "127.0.0.1:0",
+		StreamHandler:            &mockStreamHandler{events: events},
+		ChatRateLimitEnabled:     true,
+		ChatRateLimitRPM:         60,
+		ChatRateLimitBurst:       1,
+		ChatMaxConcurrentStreams: 5,
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		),
+	})
+	require.NoError(t, err)
+	defer func() { _ = srv.Close() }()
+
+	body := `{"content": "Hello", "workspace_id": "homelab"}`
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.RemoteAddr = "192.0.2.10:12345"
+	w1 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w1, req1)
+	assert.Equal(t, http.StatusOK, w1.Code)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.RemoteAddr = "192.0.2.11:12345"
+	w2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusOK, w2.Code)
+}
+
 func TestRoutes_SendMessage_SessionFromStream(t *testing.T) {
 	events := []server.SSEEvent{
 		{Event: "session_id", Data: `{"session_id":"sess-new-123"}`},
@@ -1473,6 +1550,7 @@ func TestRoutes_SendMessage_UnparsableErrorEvent_Truncated(t *testing.T) {
 	// Response body should contain the safe generic message, not raw data.
 	assert.Contains(t, w.Body.String(), "agent reported an error; details unavailable")
 }
+
 // --- Part 1: Unknown event type warning ---
 
 func TestRoutes_SendMessage_UnknownEventType_DoesNotPanic(t *testing.T) {

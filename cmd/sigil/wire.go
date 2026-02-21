@@ -213,7 +213,11 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 			RequestsPerSecond: cfg.Networking.RateLimitRPS,
 			Burst:             cfg.Networking.RateLimitBurst,
 		},
-		Services: services,
+		ChatRateLimitEnabled:     cfg.Networking.ChatRateLimitEnabled,
+		ChatRateLimitRPM:         cfg.Networking.ChatRateLimitRPM,
+		ChatRateLimitBurst:       cfg.Networking.ChatRateLimitBurst,
+		ChatMaxConcurrentStreams: cfg.Networking.ChatMaxConcurrentStreams,
+		Services:                 services,
 	})
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
