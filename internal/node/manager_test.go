@@ -28,6 +28,21 @@ func TestManagerRegisterStoresNodeAndMarksOnline(t *testing.T) {
 	assert.Equal(t, []string{"camera", "screen"}, nodes[0].Tools)
 }
 
+func TestManagerRegisterWithWorkspaceID(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+
+	err := mgr.Register(Registration{
+		NodeID:      "macbook-pro",
+		WorkspaceID: "ws-123",
+		Tools:       []string{"camera"},
+	})
+	require.NoError(t, err)
+
+	nodes := mgr.List()
+	require.Len(t, nodes, 1)
+	assert.Equal(t, "ws-123", nodes[0].WorkspaceID)
+}
+
 func TestManagerPrefixedTools(t *testing.T) {
 	mgr := NewManager(ManagerConfig{})
 
@@ -37,8 +52,17 @@ func TestManagerPrefixedTools(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	tools := mgr.PrefixedTools("phone")
+	tools, err := mgr.PrefixedTools("phone")
+	require.NoError(t, err)
 	assert.Equal(t, []string{"node:phone:camera", "node:phone:location"}, tools)
+}
+
+func TestManagerPrefixedToolsUnknownNode(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+
+	_, err := mgr.PrefixedTools("nonexistent")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound))
 }
 
 func TestManagerDisconnectMarksNodeOffline(t *testing.T) {
@@ -88,7 +112,8 @@ func TestManagerQueueToolCallQueuesForOfflineNodeWithTTL(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, reqID)
 
-	pending := mgr.PendingRequests("mac")
+	pending, err := mgr.PendingRequests("mac")
+	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	assert.Equal(t, reqID, pending[0].ID)
 	assert.Equal(t, "mac", pending[0].NodeID)
@@ -112,10 +137,23 @@ func TestManagerQueueToolCallExpiresAfterTTL(t *testing.T) {
 
 	_, err = mgr.QueueToolCall("mac", "screen", `{"format":"png"}`)
 	require.NoError(t, err)
-	require.Len(t, mgr.PendingRequests("mac"), 1)
+
+	pending, err := mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
 
 	now = now.Add(3 * time.Second)
-	assert.Empty(t, mgr.PendingRequests("mac"))
+	pending, err = mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
+
+func TestManagerPendingRequestsUnknownNode(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+
+	_, err := mgr.PendingRequests("nonexistent")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound))
 }
 
 func TestManagerQueueToolCallValidationErrors(t *testing.T) {
@@ -163,6 +201,58 @@ func TestManagerQueueToolCallValidationErrors(t *testing.T) {
 			_, err := mgr.QueueToolCall(tt.nodeID, tt.tool, `{"format":"png"}`)
 			require.Error(t, err)
 			assert.True(t, sigilerr.HasCode(err, tt.wantCode))
+		})
+	}
+}
+
+// stubAuth is a test Authenticator that can be configured to pass or fail.
+type stubAuth struct {
+	err error
+}
+
+func (s *stubAuth) Authenticate(_ Registration) error {
+	return s.err
+}
+
+func TestManagerRegisterWithAuthValidates(t *testing.T) {
+	authErr := sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "auth failed")
+
+	tests := []struct {
+		name    string
+		authErr error
+		wantErr bool
+	}{
+		{
+			name:    "auth passes",
+			authErr: nil,
+			wantErr: false,
+		},
+		{
+			name:    "auth fails blocks registration",
+			authErr: authErr,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := NewManager(ManagerConfig{
+				Auth: &stubAuth{err: tt.authErr},
+			})
+
+			err := mgr.Register(Registration{
+				NodeID: "phone",
+				Tools:  []string{"camera"},
+			})
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerAuthUnauthorized))
+				assert.Empty(t, mgr.List())
+			} else {
+				require.NoError(t, err)
+				assert.Len(t, mgr.List(), 1)
+			}
 		})
 	}
 }

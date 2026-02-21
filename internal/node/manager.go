@@ -5,6 +5,7 @@ package node
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -16,15 +17,24 @@ import (
 
 const defaultQueueTTL = 60 * time.Second
 
+// Authenticator validates node identity during registration.
+type Authenticator interface {
+	Authenticate(reg Registration) error
+}
+
 type Registration struct {
-	NodeID string
-	Tools  []string
+	NodeID        string
+	WorkspaceID   string
+	TailscaleTags []string // for Tailscale tag-based auth
+	AuthToken     string   // for token-based auth
+	Tools         []string
 }
 
 type Node struct {
-	ID     string
-	Tools  []string
-	Online bool
+	ID          string
+	WorkspaceID string
+	Tools       []string
+	Online      bool
 }
 
 type PendingRequest struct {
@@ -39,6 +49,7 @@ type PendingRequest struct {
 type ManagerConfig struct {
 	QueueTTL time.Duration
 	Now      func() time.Time
+	Auth     Authenticator // optional; nil means no auth required
 }
 
 type Manager struct {
@@ -50,6 +61,7 @@ type Manager struct {
 	queueTTL time.Duration
 	now      func() time.Time
 	nextID   uint64
+	auth     Authenticator
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -68,6 +80,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		pending:  make(map[string][]PendingRequest),
 		queueTTL: queueTTL,
 		now:      now,
+		auth:     cfg.Auth,
 	}
 }
 
@@ -77,6 +90,12 @@ func (m *Manager) Register(reg Registration) error {
 		return sigilerr.New(sigilerr.CodeServerRequestInvalid, "node id is required")
 	}
 
+	if m.auth != nil {
+		if err := m.auth.Authenticate(reg); err != nil {
+			return err
+		}
+	}
+
 	tools := make([]string, len(reg.Tools))
 	copy(tools, reg.Tools)
 
@@ -84,20 +103,22 @@ func (m *Manager) Register(reg Registration) error {
 	defer m.mu.Unlock()
 
 	m.nodes[nodeID] = Node{
-		ID:     nodeID,
-		Tools:  tools,
-		Online: true,
+		ID:          nodeID,
+		WorkspaceID: reg.WorkspaceID,
+		Tools:       tools,
+		Online:      true,
 	}
 
 	return nil
 }
 
-func (m *Manager) PrefixedTools(nodeID string) []string {
+func (m *Manager) PrefixedTools(nodeID string) ([]string, error) {
 	m.mu.RLock()
 	node, ok := m.nodes[nodeID]
 	m.mu.RUnlock()
 	if !ok {
-		return nil
+		return nil, sigilerr.New(sigilerr.CodeServerEntityNotFound, "node not found",
+			sigilerr.Field("node_id", nodeID))
 	}
 
 	tools := make([]string, len(node.Tools))
@@ -105,7 +126,7 @@ func (m *Manager) PrefixedTools(nodeID string) []string {
 		tools[i] = "node:" + nodeID + ":" + tool
 	}
 
-	return tools
+	return tools, nil
 }
 
 func (m *Manager) Disconnect(nodeID string) {
@@ -157,6 +178,7 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 
 	node, ok := m.nodes[nodeID]
 	if !ok {
+		slog.Warn("QueueToolCall: node not found", "node_id", nodeID)
 		return "", sigilerr.New(sigilerr.CodeServerEntityNotFound, "node not found",
 			sigilerr.Field("node_id", nodeID))
 	}
@@ -165,6 +187,7 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 			sigilerr.Field("node_id", nodeID))
 	}
 	if !slices.Contains(node.Tools, tool) {
+		slog.Warn("QueueToolCall: tool not registered on node", "node_id", nodeID, "tool", tool)
 		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "tool is not registered on node",
 			sigilerr.Field("node_id", nodeID),
 			sigilerr.Field("tool", tool))
@@ -187,9 +210,14 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 	return requestID, nil
 }
 
-func (m *Manager) PendingRequests(nodeID string) []PendingRequest {
+func (m *Manager) PendingRequests(nodeID string) ([]PendingRequest, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	if _, ok := m.nodes[nodeID]; !ok {
+		return nil, sigilerr.New(sigilerr.CodeServerEntityNotFound, "node not found",
+			sigilerr.Field("node_id", nodeID))
+	}
 
 	now := m.now()
 	queued := m.pending[nodeID]
@@ -199,7 +227,7 @@ func (m *Manager) PendingRequests(nodeID string) []PendingRequest {
 			out = append(out, req)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (m *Manager) pruneExpiredLocked(nodeID string, now time.Time) {
