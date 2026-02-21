@@ -111,6 +111,10 @@ func (s *Server) registerRoutes() {
 		Tags:        []string{"system"},
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleStatus)
+
+	s.registerNodeRoutes()
+	s.registerAgentControlRoutes()
+	s.registerStatusStreamRoute()
 }
 
 // --- Request/Response types for huma ---

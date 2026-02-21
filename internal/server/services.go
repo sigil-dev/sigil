@@ -40,6 +40,9 @@ type Services struct {
 	plugins    PluginService
 	sessions   SessionService
 	users      UserService
+	nodes      NodeService
+	status     GatewayStatusService
+	agent      AgentControlService
 }
 
 // NewServices creates a Services instance with validation.
@@ -85,6 +88,39 @@ func (s *Services) Users() UserService {
 	return s.users
 }
 
+// Nodes returns the node service, if configured.
+func (s *Services) Nodes() NodeService {
+	return s.nodes
+}
+
+// GatewayStatus returns the gateway status subscription service, if configured.
+func (s *Services) GatewayStatus() GatewayStatusService {
+	return s.status
+}
+
+// AgentControl returns the agent pause/resume control service, if configured.
+func (s *Services) AgentControl() AgentControlService {
+	return s.agent
+}
+
+// WithNodeService sets the optional node service and returns s.
+func (s *Services) WithNodeService(nodes NodeService) *Services {
+	s.nodes = nodes
+	return s
+}
+
+// WithGatewayStatusService sets the optional gateway status service and returns s.
+func (s *Services) WithGatewayStatusService(status GatewayStatusService) *Services {
+	s.status = status
+	return s
+}
+
+// WithAgentControlService sets the optional agent control service and returns s.
+func (s *Services) WithAgentControlService(agent AgentControlService) *Services {
+	s.agent = agent
+	return s
+}
+
 // WorkspaceService provides workspace operations for REST handlers.
 type WorkspaceService interface {
 	List(ctx context.Context) ([]WorkspaceSummary, error)
@@ -110,6 +146,25 @@ type SessionService interface {
 // UserService provides user operations for REST handlers.
 type UserService interface {
 	List(ctx context.Context) ([]UserSummary, error)
+}
+
+// NodeService provides node CRUD operations for REST handlers.
+type NodeService interface {
+	List(ctx context.Context) ([]NodeSummary, error)
+	Get(ctx context.Context, id string) (*NodeDetail, error)
+	Approve(ctx context.Context, id string) error
+	Delete(ctx context.Context, id string) error
+}
+
+// GatewayStatusService provides status streaming updates for tray/status clients.
+type GatewayStatusService interface {
+	Subscribe(ctx context.Context) (<-chan GatewayStatus, error)
+}
+
+// AgentControlService provides pause/resume operations for the agent loop.
+type AgentControlService interface {
+	Pause(ctx context.Context) (AgentState, error)
+	Resume(ctx context.Context) (AgentState, error)
 }
 
 // WorkspaceSummary is the REST representation of a workspace in list results.
@@ -164,6 +219,37 @@ type SessionDetail struct {
 type UserSummary struct {
 	ID   string `json:"id" doc:"User identifier"`
 	Name string `json:"name" doc:"Display name"`
+}
+
+// NodeSummary is the REST representation of a node in list results.
+type NodeSummary struct {
+	ID       string `json:"id" doc:"Node identifier"`
+	Online   bool   `json:"online" doc:"Whether the node is currently connected"`
+	Approved bool   `json:"approved" doc:"Whether the node has been approved for use"`
+}
+
+// NodeDetail is the full REST representation of a node.
+type NodeDetail struct {
+	ID       string   `json:"id" doc:"Node identifier"`
+	Online   bool     `json:"online" doc:"Whether the node is currently connected"`
+	Approved bool     `json:"approved" doc:"Whether the node has been approved for use"`
+	Tools    []string `json:"tools" doc:"Registered tool names exposed by the node"`
+}
+
+// AgentState is the paused/running state of the agent loop.
+type AgentState string
+
+const (
+	AgentStateRunning AgentState = "running"
+	AgentStatePaused  AgentState = "paused"
+)
+
+// GatewayStatus is the tray-friendly status payload streamed over SSE.
+type GatewayStatus struct {
+	Status         string     `json:"status" doc:"Gateway status summary"`
+	AgentState     AgentState `json:"agent_state" doc:"Current agent state"`
+	ConnectedNodes int        `json:"connected_nodes" doc:"Number of connected nodes"`
+	ActiveChannels int        `json:"active_channels" doc:"Number of active channels"`
 }
 
 // NewServicesForTest creates a Services instance for testing.
