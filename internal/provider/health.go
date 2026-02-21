@@ -10,16 +10,27 @@ import (
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
+// HealthMetrics exposes the current health state of a provider for
+// monitoring and operator visibility. All fields are point-in-time
+// snapshots safe to serialize to JSON.
+type HealthMetrics struct {
+	FailureCount  int64      `json:"failure_count"`
+	LastFailureAt *time.Time `json:"last_failure_at,omitempty"`
+	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
+	Available     bool       `json:"available"`
+}
+
 // HealthTracker provides simple health state tracking for providers.
 // A provider is considered healthy until RecordFailure is called.
 // After a failure, the provider is marked unhealthy for a cooldown
 // period, after which it becomes available again to allow recovery.
 type HealthTracker struct {
-	mu       sync.RWMutex
-	healthy  bool
-	failedAt time.Time
-	cooldown time.Duration
-	nowFunc  func() time.Time // for testing
+	mu           sync.RWMutex
+	healthy      bool
+	failedAt     time.Time
+	cooldown     time.Duration
+	failureCount int64
+	nowFunc      func() time.Time // for testing
 }
 
 // DefaultHealthCooldown is the duration after which an unhealthy provider
@@ -59,11 +70,13 @@ func (h *HealthTracker) RecordSuccess() {
 	h.mu.Unlock()
 }
 
-// RecordFailure marks the provider as unhealthy.
+// RecordFailure marks the provider as unhealthy and increments the
+// cumulative failure count.
 func (h *HealthTracker) RecordFailure() {
 	h.mu.Lock()
 	h.healthy = false
 	h.failedAt = h.nowFunc()
+	h.failureCount++
 	h.mu.Unlock()
 }
 
@@ -72,4 +85,33 @@ func (h *HealthTracker) SetNowFunc(fn func() time.Time) {
 	h.mu.Lock()
 	h.nowFunc = fn
 	h.mu.Unlock()
+}
+
+// HealthMetrics returns a point-in-time snapshot of the tracker's health state.
+// The returned struct is safe to serialize and does not hold any references to
+// internal tracker state.
+func (h *HealthTracker) HealthMetrics() HealthMetrics {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	m := HealthMetrics{
+		FailureCount: h.failureCount,
+	}
+
+	if h.failureCount > 0 {
+		t := h.failedAt
+		m.LastFailureAt = &t
+	}
+
+	if h.healthy {
+		m.Available = true
+		// No active cooldown when healthy.
+		return m
+	}
+
+	// Provider is marked unhealthy — compute cooldown deadline.
+	cooldownEnd := h.failedAt.Add(h.cooldown)
+	m.CooldownUntil = &cooldownEnd
+	m.Available = h.nowFunc().Sub(h.failedAt) >= h.cooldown
+	return m
 }

@@ -18,7 +18,9 @@
     "**/node_modules",
     "**/*-lock.json",
     "internal/gen/**",
-    ".beads/**"
+    ".beads/**",
+    ".claude/worktrees/**",
+    ".worktrees/**"
   ],
   "plugins": [
     "https://plugins.dprint.dev/typescript-0.93.3.wasm",

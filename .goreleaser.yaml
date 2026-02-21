@@ -76,6 +76,9 @@ brews:
     install: |
       bin.install "sigil"
 dockers:
+  # Images are built without --no-cache to leverage layer caching in CI.
+  # Run periodic image scans (e.g. grype, trivy) against published images
+  # to catch vulnerabilities introduced via base image updates.
   - image_templates:
       - "ghcr.io/sigil-dev/sigil:{{ .Version }}-amd64"
     use: buildx

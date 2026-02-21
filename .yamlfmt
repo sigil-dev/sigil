@@ -7,6 +7,8 @@ exclude:
   - vendor
   - .direnv
   - internal/security/scanner/db
+  - .claude/worktrees
+  - .worktrees
 formatter:
   include_document_start: false
   pad_line_comments: 2

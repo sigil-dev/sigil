@@ -82,6 +82,18 @@ func (s *Server) registerRoutes() {
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleReloadPlugin)
 
+	// Provider health endpoint (only when ProviderService is available)
+	if s.services.Providers() != nil {
+		huma.Register(s.api, huma.Operation{
+			OperationID: "get-provider-health",
+			Method:      http.MethodGet,
+			Path:        "/api/v1/providers/{name}/health",
+			Summary:     "Get provider health metrics",
+			Tags:        []string{"providers"},
+			Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests},
+		}, s.handleGetProviderHealth)
+	}
+
 	// Chat endpoint (non-streaming, delegates to stream handler)
 	huma.Register(s.api, huma.Operation{
 		OperationID: "send-message",
@@ -188,6 +200,13 @@ type statusOutput struct {
 	Body struct {
 		Status string `json:"status" example:"ok" doc:"Gateway status"`
 	}
+}
+
+type providerNameInput struct {
+	Name string `path:"name"`
+}
+type getProviderHealthOutput struct {
+	Body ProviderHealthDetail
 }
 
 // --- Handlers ---
@@ -504,6 +523,20 @@ func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOu
 	out := &listUsersOutput{}
 	out.Body.Users = users
 	return out, nil
+}
+
+func (s *Server) handleGetProviderHealth(ctx context.Context, input *providerNameInput) (*getProviderHealthOutput, error) {
+	if err := s.requireAdmin(ctx, "admin:providers", "get provider health"); err != nil {
+		return nil, err
+	}
+
+	detail, err := s.services.Providers().GetHealth(ctx, input.Name)
+	if err != nil {
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("provider %q not found", input.Name),
+			fmt.Sprintf("getting provider health %q", input.Name))
+	}
+	return &getProviderHealthOutput{Body: *detail}, nil
 }
 
 func (s *Server) handleStatus(ctx context.Context, _ *struct{}) (*statusOutput, error) {
