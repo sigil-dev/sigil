@@ -573,6 +573,7 @@ func TestHTTPStatusFromCode(t *testing.T) {
 		{name: "empty code → 502", code: sigilerr.Code(""), want: http.StatusBadGateway},
 		{name: "unknown code → 502", code: sigilerr.Code("some.unknown.code"), want: http.StatusBadGateway},
 		{name: "store.database.failure → 502", code: sigilerr.CodeStoreDatabaseFailure, want: http.StatusBadGateway},
+		{name: "server.internal.failure → 502", code: sigilerr.CodeServerInternalFailure, want: http.StatusBadGateway},
 	}
 
 	for _, tt := range tests {

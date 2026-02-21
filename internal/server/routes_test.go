@@ -980,6 +980,34 @@ func TestRoutes_SendMessage_MalformedSessionID(t *testing.T) {
 	assert.Equal(t, "sess-fallback", resp.SessionID)
 }
 
+func TestRoutes_SendMessage_EmptySessionID(t *testing.T) {
+	// This test verifies that a valid JSON session_id event with an empty string
+	// value is ignored, and the fallback session ID from the request is returned.
+	events := []server.SSEEvent{
+		{Event: "session_id", Data: `{"session_id":""}`},
+		{Event: "text_delta", Data: `{"text":"Hello"}`},
+		{Event: "done", Data: `{}`},
+	}
+	srv := newTestServerWithStream(t, &mockStreamHandler{events: events})
+
+	body := `{"content": "Hello", "workspace_id": "homelab", "session_id": "sess-fallback"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Content   string `json:"content"`
+		SessionID string `json:"session_id"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// Fallback: original session ID returned when session_id event value is empty.
+	assert.Equal(t, "sess-fallback", resp.SessionID)
+}
+
 func TestRoutes_SendMessage_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(t *testing.T) {
 	// When auth is disabled, all workspaces are accessible.
 	events := []server.SSEEvent{

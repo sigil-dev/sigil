@@ -6,6 +6,7 @@ package errors
 import (
 	stderrors "errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -317,6 +318,7 @@ func HTTPStatusFromCode(code Code) int {
 	}
 	status := HTTPStatus(New(code, ""))
 	if status == http.StatusInternalServerError {
+		slog.Warn("HTTPStatusFromCode: unrecognized error code mapped to 502", "code", code)
 		return http.StatusBadGateway
 	}
 	return status
