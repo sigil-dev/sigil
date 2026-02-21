@@ -218,7 +218,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating server: %w", err)
 	}
 
-	return &Gateway{
+	gw := &Gateway{
 		server:           srv,
 		gatewayStore:     gs,
 		pluginManager:    pluginMgr,
@@ -227,7 +227,14 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 		enforcer:         enforcer,
 		scanner:          sc,
 		scannerModes:     scannerModes,
-	}, nil
+	}
+
+	// Validate at construction so callers never receive an invalid Gateway.
+	if err := gw.Validate(); err != nil {
+		return nil, err
+	}
+
+	return gw, nil
 }
 
 // Start runs the HTTP server and blocks until the context is cancelled.
