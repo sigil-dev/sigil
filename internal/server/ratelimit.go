@@ -133,27 +133,14 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 			mu.Lock()
 			v, exists := visitors[ip]
 			if !exists {
-				v = &visitorEntry{
-					tokens:     float64(cfg.Burst),
-					lastSeen:   time.Now(),
-					lastRefill: time.Now(),
-					rate:       cfg.RequestsPerSecond,
-					burst:      float64(cfg.Burst),
-				}
+				v = newVisitorEntry(cfg.RequestsPerSecond, cfg.Burst)
 				visitors[ip] = v
 			}
-			v.lastSeen = time.Now()
 
-			// Token bucket: refill based on elapsed time
-			elapsed := time.Since(v.lastRefill).Seconds()
-			v.tokens += elapsed * v.rate
-			if v.tokens > v.burst {
-				v.tokens = v.burst
-			}
-			v.lastRefill = time.Now()
+			allowed := v.allow()
+			mu.Unlock()
 
-			if v.tokens < 1 {
-				mu.Unlock()
+			if !allowed {
 				slog.Warn("rate limit exceeded", "ip", ip, "path", r.URL.Path)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", "1")
@@ -163,8 +150,6 @@ func rateLimitMiddleware(cfg RateLimitConfig, done <-chan struct{}) func(http.Ha
 				}
 				return
 			}
-			v.tokens--
-			mu.Unlock()
 
 			next.ServeHTTP(w, r)
 		})
@@ -177,4 +162,36 @@ type visitorEntry struct {
 	lastRefill time.Time
 	rate       float64
 	burst      float64
+}
+
+// newVisitorEntry creates a visitorEntry with a full token bucket.
+func newVisitorEntry(rate float64, burst int) *visitorEntry {
+	now := time.Now()
+	return &visitorEntry{
+		tokens:     float64(burst),
+		lastSeen:   now,
+		lastRefill: now,
+		rate:       rate,
+		burst:      float64(burst),
+	}
+}
+
+// allow refills tokens based on elapsed time and attempts to consume one.
+// Returns true if the request is permitted.
+func (v *visitorEntry) allow() bool {
+	now := time.Now()
+	v.lastSeen = now
+
+	elapsed := now.Sub(v.lastRefill).Seconds()
+	v.tokens += elapsed * v.rate
+	if v.tokens > v.burst {
+		v.tokens = v.burst
+	}
+	v.lastRefill = now
+
+	if v.tokens < 1 {
+		return false
+	}
+	v.tokens--
+	return true
 }
