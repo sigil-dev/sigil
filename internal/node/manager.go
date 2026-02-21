@@ -5,6 +5,7 @@ package node
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -133,9 +134,7 @@ func (m *Manager) List() []Node {
 	nodes := make([]Node, 0, len(ids))
 	for _, id := range ids {
 		node := m.nodes[id]
-		copiedTools := make([]string, len(node.Tools))
-		copy(copiedTools, node.Tools)
-		node.Tools = copiedTools
+		node.Tools = append([]string(nil), node.Tools...)
 		nodes = append(nodes, node)
 	}
 
@@ -165,7 +164,7 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "node is online; queueing is only for offline nodes",
 			sigilerr.Field("node_id", nodeID))
 	}
-	if !containsString(node.Tools, tool) {
+	if !slices.Contains(node.Tools, tool) {
 		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "tool is not registered on node",
 			sigilerr.Field("node_id", nodeID),
 			sigilerr.Field("tool", tool))
@@ -189,14 +188,17 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 }
 
 func (m *Manager) PendingRequests(nodeID string) []PendingRequest {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	m.pruneExpiredLocked(nodeID, m.now())
-
+	now := m.now()
 	queued := m.pending[nodeID]
-	out := make([]PendingRequest, len(queued))
-	copy(out, queued)
+	out := make([]PendingRequest, 0, len(queued))
+	for _, req := range queued {
+		if !req.ExpiresAt.Before(now) {
+			out = append(out, req)
+		}
+	}
 	return out
 }
 
@@ -208,7 +210,7 @@ func (m *Manager) pruneExpiredLocked(nodeID string, now time.Time) {
 
 	keep := queued[:0]
 	for _, req := range queued {
-		if req.ExpiresAt.After(now) || req.ExpiresAt.Equal(now) {
+		if !req.ExpiresAt.Before(now) {
 			keep = append(keep, req)
 		}
 	}
@@ -217,18 +219,5 @@ func (m *Manager) pruneExpiredLocked(nodeID string, now time.Time) {
 		delete(m.pending, nodeID)
 		return
 	}
-
-	copied := make([]PendingRequest, len(keep))
-	copy(copied, keep)
-	m.pending[nodeID] = copied
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-
-	return false
+	m.pending[nodeID] = keep
 }
