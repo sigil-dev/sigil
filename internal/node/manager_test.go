@@ -4,7 +4,9 @@
 package node
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,7 +77,7 @@ func TestManagerDisconnectMarksNodeOffline(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	mgr.Disconnect("tablet")
+	require.NoError(t, mgr.Disconnect("tablet"))
 
 	nodes := mgr.List()
 	require.Len(t, nodes, 1)
@@ -107,7 +109,7 @@ func TestManagerQueueToolCallQueuesForOfflineNodeWithTTL(t *testing.T) {
 
 	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
 	require.NoError(t, err)
-	mgr.Disconnect("mac")
+	require.NoError(t, mgr.Disconnect("mac"))
 
 	reqID, err := mgr.QueueToolCall("mac", "screen", `{"format":"png"}`)
 	require.NoError(t, err)
@@ -134,7 +136,7 @@ func TestManagerQueueToolCallExpiresAfterTTL(t *testing.T) {
 
 	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
 	require.NoError(t, err)
-	mgr.Disconnect("mac")
+	require.NoError(t, mgr.Disconnect("mac"))
 
 	_, err = mgr.QueueToolCall("mac", "screen", `{"format":"png"}`)
 	require.NoError(t, err)
@@ -186,7 +188,7 @@ func TestManagerQueueToolCallValidationErrors(t *testing.T) {
 			name: "tool not registered on node",
 			setup: func(mgr *Manager) {
 				require.NoError(t, mgr.Register(Registration{NodeID: "mac", Tools: []string{"camera"}}))
-				mgr.Disconnect("mac")
+				require.NoError(t, mgr.Disconnect("mac"))
 			},
 			nodeID:   "mac",
 			tool:     "screen",
@@ -204,7 +206,7 @@ func TestManagerQueueToolCallValidationErrors(t *testing.T) {
 			name: "whitespace-only tool",
 			setup: func(mgr *Manager) {
 				require.NoError(t, mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}}))
-				mgr.Disconnect("mac")
+				require.NoError(t, mgr.Disconnect("mac"))
 			},
 			nodeID:   "mac",
 			tool:     "   ",
@@ -361,8 +363,9 @@ func TestManagerRegisterAuthOrderBeforeWorkspaceValidator(t *testing.T) {
 func TestManagerDisconnectUnknownNode(t *testing.T) {
 	mgr := NewManager(ManagerConfig{})
 
-	// Must not panic when disconnecting a node that was never registered.
-	mgr.Disconnect("nonexistent")
+	err := mgr.Disconnect("nonexistent")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound))
 
 	assert.Empty(t, mgr.List())
 }
@@ -412,7 +415,7 @@ func TestManagerQueueToolCallArgsSizeLimit(t *testing.T) {
 
 			err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
 			require.NoError(t, err)
-			mgr.Disconnect("mac")
+			require.NoError(t, mgr.Disconnect("mac"))
 
 			args := strings.Repeat("x", tt.argsLen)
 
@@ -436,7 +439,7 @@ func TestManagerQueueToolCallMixedExpiry(t *testing.T) {
 
 	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"tool1"}})
 	require.NoError(t, err)
-	mgr.Disconnect("mac")
+	require.NoError(t, mgr.Disconnect("mac"))
 
 	// Queue first request (will expire after TTL).
 	_, err = mgr.QueueToolCall("mac", "tool1", `{}`)
@@ -466,7 +469,7 @@ func TestManagerQueueToolCallPendingCap(t *testing.T) {
 
 	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
 	require.NoError(t, err)
-	mgr.Disconnect("mac")
+	require.NoError(t, mgr.Disconnect("mac"))
 
 	// Fill the queue to exactly maxPendingPerNode.
 	for i := range maxPendingPerNode {
@@ -499,7 +502,7 @@ func TestManagerPendingRequestsExactBoundaryExpiry(t *testing.T) {
 
 	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
 	require.NoError(t, err)
-	mgr.Disconnect("mac")
+	require.NoError(t, mgr.Disconnect("mac"))
 
 	reqID, err := mgr.QueueToolCall("mac", "screen", `{"action":"capture"}`)
 	require.NoError(t, err)
@@ -561,7 +564,7 @@ func TestManagerRegisterReregistration(t *testing.T) {
 
 			// Optionally disconnect to make node offline
 			if !tt.nodeOnline {
-				mgr.Disconnect("mac")
+				require.NoError(t, mgr.Disconnect("mac"))
 			}
 
 			// Second registration attempt with different field values
@@ -587,4 +590,127 @@ func TestManagerRegisterReregistration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManagerRegisterNilToolsSlice(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+
+	err := mgr.Register(Registration{
+		NodeID: "phone",
+		Tools:  nil,
+	})
+	require.NoError(t, err)
+
+	nodes := mgr.List()
+	require.Len(t, nodes, 1)
+	assert.Equal(t, "phone", nodes[0].ID)
+	assert.True(t, nodes[0].Online)
+	// nil and empty slices are equivalent for ranging; only emptiness matters.
+	assert.Empty(t, nodes[0].Tools)
+
+	tools, err := mgr.PrefixedTools("phone")
+	require.NoError(t, err)
+	assert.NotNil(t, tools)
+	assert.Empty(t, tools)
+}
+
+func TestManagerPruneDeletesKeyWhenAllExpired(t *testing.T) {
+	start := time.Date(2026, time.February, 21, 16, 0, 0, 0, time.UTC)
+	now := start
+	const ttl = 5 * time.Second
+
+	mgr := NewManager(ManagerConfig{
+		QueueTTL: ttl,
+		Now: func() time.Time {
+			return now
+		},
+	})
+
+	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}})
+	require.NoError(t, err)
+	require.NoError(t, mgr.Disconnect("mac"))
+
+	// Queue 2 requests at time T.
+	req1, err := mgr.QueueToolCall("mac", "screen", `{"a":1}`)
+	require.NoError(t, err)
+	req2, err := mgr.QueueToolCall("mac", "screen", `{"a":2}`)
+	require.NoError(t, err)
+
+	// Both should be visible before expiry.
+	pending, err := mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+	assert.Equal(t, req1, pending[0].ID)
+	assert.Equal(t, req2, pending[1].ID)
+
+	// Advance clock past TTL so both requests expire.
+	now = start.Add(ttl + time.Second)
+
+	// Queue a new request at T+6s. This triggers pruneExpiredLocked which
+	// should delete the map key for the old (now empty) slice, then append
+	// the new request to a fresh slice.
+	newID, err := mgr.QueueToolCall("mac", "screen", `{"a":3}`)
+	require.NoError(t, err)
+
+	// Only the new request should be pending.
+	pending, err = mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, newID, pending[0].ID)
+
+	// Advance clock 1 more second (still within TTL of the new request).
+	now = start.Add(ttl + 2*time.Second)
+
+	pending, err = mgr.PendingRequests("mac")
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "new request must survive; no stale data from pruned slice")
+	assert.Equal(t, newID, pending[0].ID)
+}
+
+func TestManagerConcurrentAccess(t *testing.T) {
+	mgr := NewManager(ManagerConfig{QueueTTL: 10 * time.Minute})
+
+	const goroutines = 10
+	const ops = 20
+
+	var wg sync.WaitGroup
+
+	for i := range goroutines {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			nodeID := fmt.Sprintf("node-%d", i)
+			for range ops {
+				_ = mgr.Register(Registration{NodeID: nodeID, Tools: []string{"tool"}})
+				_ = mgr.List()
+				_ = mgr.Disconnect(nodeID)
+			}
+		}(i)
+	}
+	wg.Wait()
+	// If we reach here without panic or deadlock, concurrent access is safe.
+}
+
+func TestManagerConcurrentQueueOperations(t *testing.T) {
+	mgr := NewManager(ManagerConfig{QueueTTL: 10 * time.Minute})
+
+	require.NoError(t, mgr.Register(Registration{NodeID: "node", Tools: []string{"tool"}}))
+	require.NoError(t, mgr.Disconnect("node"))
+
+	const goroutines = 5
+	var wg sync.WaitGroup
+
+	for range goroutines {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = mgr.QueueToolCall("node", "tool", "{}")
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = mgr.PendingRequests("node")
+		}()
+	}
+	wg.Wait()
+	// No panic or data race means the mutex coverage is correct.
 }

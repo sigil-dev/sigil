@@ -54,29 +54,27 @@ func NewTailscaleAuth(cfg TailscaleConfig) (*TailscaleAuth, error) {
 	return &TailscaleAuth{requiredTag: strings.TrimSpace(cfg.RequiredTag)}, nil
 }
 
-func (a *TailscaleAuth) CheckTag(tags []string) bool {
-	if a == nil || a.requiredTag == "" {
-		return false
+func (a *TailscaleAuth) CheckTag(tags []string) error {
+	if a == nil {
+		return sigilerr.New(sigilerr.CodeServerConfigInvalid, "tailscale auth is not configured")
+	}
+	if a.requiredTag == "" {
+		return sigilerr.New(sigilerr.CodeServerConfigInvalid, "tailscale required tag is not set")
 	}
 
 	for _, tag := range tags {
 		if strings.TrimSpace(tag) == a.requiredTag {
-			return true
+			return nil
 		}
 	}
 
-	return false
+	return sigilerr.New(sigilerr.CodeServerAuthUnauthorized, "node does not have required tailscale tag",
+		sigilerr.Field("required_tag", a.requiredTag))
 }
 
 // Authenticate implements Authenticator for Tailscale tag-based validation.
 func (a *TailscaleAuth) Authenticate(reg Registration) error {
-	if !a.CheckTag(reg.TailscaleTags) {
-		return sigilerr.New(sigilerr.CodeServerAuthUnauthorized,
-			"node does not have required tailscale tag",
-			sigilerr.Field("node_id", reg.NodeID),
-			sigilerr.Field("required_tag", a.requiredTag))
-	}
-	return nil
+	return a.CheckTag(reg.TailscaleTags)
 }
 
 // TokenAuth provides Phase 6 token-based node authentication.

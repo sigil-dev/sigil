@@ -168,18 +168,19 @@ func (m *Manager) PrefixedTools(nodeID string) ([]string, error) {
 	return tools, nil
 }
 
-func (m *Manager) Disconnect(nodeID string) {
+func (m *Manager) Disconnect(nodeID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	node, ok := m.nodes[nodeID]
 	if !ok {
-		slog.Warn("disconnect called for unknown node", "node_id", nodeID)
-		return
+		return sigilerr.New(sigilerr.CodeServerEntityNotFound, "node not found",
+			sigilerr.Field("node_id", nodeID))
 	}
 
 	node.Online = false
 	m.nodes[nodeID] = node
+	return nil
 }
 
 func (m *Manager) List() []Node {

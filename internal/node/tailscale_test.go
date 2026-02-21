@@ -85,9 +85,42 @@ func TestTailscaleAuthCheckTag(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.True(t, auth.CheckTag([]string{"tag:agent-node", "tag:other"}))
-	assert.False(t, auth.CheckTag([]string{"tag:other"}))
-	assert.False(t, auth.CheckTag(nil))
+	tests := []struct {
+		name     string
+		tags     []string
+		wantErr  bool
+		wantCode sigilerr.Code
+	}{
+		{
+			name:    "required tag present",
+			tags:    []string{"tag:agent-node", "tag:other"},
+			wantErr: false,
+		},
+		{
+			name:     "required tag missing",
+			tags:     []string{"tag:other"},
+			wantErr:  true,
+			wantCode: sigilerr.CodeServerAuthUnauthorized,
+		},
+		{
+			name:     "empty tag list",
+			tags:     nil,
+			wantErr:  true,
+			wantCode: sigilerr.CodeServerAuthUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := auth.CheckTag(tt.tags)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.wantCode))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestTokenAuthCheckToken(t *testing.T) {
