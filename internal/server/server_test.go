@@ -233,6 +233,8 @@ func TestServer_CSPHeader_IsPresent(t *testing.T) {
 	assert.Contains(t, csp, "default-src 'self'")
 	assert.Contains(t, csp, "script-src 'self'")
 	assert.Contains(t, csp, "frame-ancestors 'none'")
+	// Tauri desktop app needs connect-src to allow API calls to the local gateway.
+	assert.Contains(t, csp, "connect-src 'self' http://localhost:18789")
 }
 
 func TestServer_RateLimiterBeforeAuth(t *testing.T) {

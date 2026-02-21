@@ -300,7 +300,7 @@ func securityHeadersMiddleware(enableHSTS bool) func(http.Handler) http.Handler 
 			// per-request nonce generation and template integration (not yet implemented).
 			// This weakens XSS protection for inline styles. Remove 'unsafe-inline'
 			// from style-src once nonce infrastructure is added.
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' http://localhost:18789; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 			if enableHSTS {
 				w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 			}
