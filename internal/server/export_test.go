@@ -5,8 +5,6 @@ package server
 
 import (
 	"context"
-	"slices"
-	"time"
 )
 
 // ContextWithUser injects an AuthenticatedUser into a context for testing.
@@ -30,39 +28,5 @@ func (s *Server) RequireAdmin(ctx context.Context, permission, op string) error 
 func (l *chatRateLimiter) RunCleanupNow() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	now := time.Now()
-	const staleThreshold = 10 * time.Minute
-
-	type entry struct {
-		key      string
-		lastSeen time.Time
-	}
-	entries := make([]entry, 0, len(l.visitors))
-	for key, v := range l.visitors {
-		if v.activeStreams == 0 && now.Sub(v.lastSeen) > staleThreshold {
-			delete(l.visitors, key)
-		} else {
-			entries = append(entries, entry{key: key, lastSeen: v.lastSeen})
-		}
-	}
-
-	if l.cfg.MaxKeys > 0 && len(entries) > l.cfg.MaxKeys {
-		slices.SortFunc(entries, func(a, b entry) int {
-			if a.lastSeen.Before(b.lastSeen) {
-				return -1
-			}
-			if a.lastSeen.After(b.lastSeen) {
-				return 1
-			}
-			return 0
-		})
-
-		toEvict := len(entries) - l.cfg.MaxKeys
-		for i := 0; i < toEvict; i++ {
-			if v := l.visitors[entries[i].key]; v != nil && v.activeStreams == 0 {
-				delete(l.visitors, entries[i].key)
-			}
-		}
-	}
+	l.runEvictionLocked()
 }

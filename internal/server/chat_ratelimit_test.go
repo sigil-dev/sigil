@@ -72,6 +72,16 @@ func TestChatRateLimitConfigValidate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "concurrency-only mode: rpm=0 burst=0 max_concurrent=5 is valid",
+			cfg: chatRateLimitConfig{
+				Enabled:              true,
+				RequestsPerMinute:    0,
+				Burst:                0,
+				MaxConcurrentStreams: 5,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -265,6 +275,53 @@ func TestChatRateLimiter_CleanupDoesNotEvictActiveStreams(t *testing.T) {
 	assert.False(t, bPresent, "entry with activeStreams==0 must be evicted when over MaxKeys")
 }
 
+func TestChatRateLimiter_LRUEvictionProtectsActiveStreams(t *testing.T) {
+	// Build a limiter directly without starting the background goroutine.
+	// MaxKeys=1 means any map with 2 entries is over-capacity.
+	limiter := &chatRateLimiter{
+		cfg: chatRateLimitConfig{
+			Enabled:              true,
+			RequestsPerMinute:    0,
+			Burst:                0,
+			MaxConcurrentStreams: 5,
+			MaxKeys:              1,
+		},
+		visitors: make(map[string]*chatVisitorEntry),
+	}
+
+	recentA := time.Now().Add(-1 * time.Minute) // newer of the two, well within 10-min stale threshold
+	recentB := time.Now().Add(-2 * time.Minute) // older of the two, still well within 10-min stale threshold
+
+	// Entry A: has an active stream, newer lastSeen — must NOT be evicted.
+	keyA := "ip:192.0.2.1"
+	limiter.visitors[keyA] = &chatVisitorEntry{
+		lastSeen:     recentA,
+		lastRefill:   recentA,
+		activeStreams: 1,
+	}
+
+	// Entry B: no active stream, older lastSeen — LRU sorts it first, eligible for eviction.
+	keyB := "ip:192.0.2.2"
+	limiter.visitors[keyB] = &chatVisitorEntry{
+		lastSeen:     recentB,
+		lastRefill:   recentB,
+		activeStreams: 0,
+	}
+
+	// Both entries are recent so the stale-threshold pass skips both.
+	// With 2 entries and MaxKeys=1, the LRU eviction block must fire
+	// and remove B (activeStreams==0) while protecting A (activeStreams>0).
+	limiter.RunCleanupNow()
+
+	limiter.mu.Lock()
+	_, aPresent := limiter.visitors[keyA]
+	_, bPresent := limiter.visitors[keyB]
+	limiter.mu.Unlock()
+
+	assert.True(t, aPresent, "entry with activeStreams>0 must not be evicted by LRU cap")
+	assert.False(t, bPresent, "entry with activeStreams==0 must be evicted when over MaxKeys via LRU")
+}
+
 func TestClientIPContextMiddleware(t *testing.T) {
 	mw := clientIPContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIPFromContext(r.Context())
@@ -281,5 +338,5 @@ func TestClientIPContextMiddleware(t *testing.T) {
 	req2.RemoteAddr = "198.51.100.8"
 	w2 := httptest.NewRecorder()
 	mw.ServeHTTP(w2, req2)
-	assert.Equal(t, "198.51.100.8", w2.Body.String())
+	assert.Equal(t, "ip:unparseable", w2.Body.String())
 }

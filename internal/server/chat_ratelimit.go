@@ -94,51 +94,57 @@ func (l *chatRateLimiter) cleanupLoop(done <-chan struct{}) {
 		select {
 		case <-ticker.C:
 			l.mu.Lock()
-			now := time.Now()
-			const staleThreshold = 10 * time.Minute
-
-			type entry struct {
-				key      string
-				lastSeen time.Time
-			}
-			entries := make([]entry, 0, len(l.visitors))
-			for key, v := range l.visitors {
-				if v.activeStreams == 0 && now.Sub(v.lastSeen) > staleThreshold {
-					delete(l.visitors, key)
-				} else {
-					entries = append(entries, entry{key: key, lastSeen: v.lastSeen})
-				}
-			}
-
-			if l.cfg.MaxKeys > 0 && len(entries) > l.cfg.MaxKeys {
-				slices.SortFunc(entries, func(a, b entry) int {
-					if a.lastSeen.Before(b.lastSeen) {
-						return -1
-					}
-					if a.lastSeen.After(b.lastSeen) {
-						return 1
-					}
-					return 0
-				})
-
-				toEvict := len(entries) - l.cfg.MaxKeys
-				actualEvicted := 0
-				for i := 0; i < toEvict; i++ {
-					if v := l.visitors[entries[i].key]; v != nil && v.activeStreams == 0 {
-						delete(l.visitors, entries[i].key)
-						actualEvicted++
-					}
-				}
-				slog.Warn("chat rate limiter key cap enforced",
-					"intended", toEvict, "evicted", actualEvicted, "max_keys", l.cfg.MaxKeys, "remaining", len(l.visitors))
-				if actualEvicted < toEvict {
-					slog.Warn("chat rate limiter: partial eviction — active streams protected some keys from eviction",
-						"intended", toEvict, "evicted", actualEvicted, "protected", toEvict-actualEvicted, "remaining", len(l.visitors))
-				}
-			}
+			l.runEvictionLocked()
 			l.mu.Unlock()
 		case <-done:
 			return
+		}
+	}
+}
+
+// runEvictionLocked executes one cleanup pass: stale-threshold eviction followed
+// by LRU cap eviction. Callers MUST hold l.mu.
+func (l *chatRateLimiter) runEvictionLocked() {
+	now := time.Now()
+	const staleThreshold = 10 * time.Minute
+
+	type entry struct {
+		key      string
+		lastSeen time.Time
+	}
+	entries := make([]entry, 0, len(l.visitors))
+	for key, v := range l.visitors {
+		if v.activeStreams == 0 && now.Sub(v.lastSeen) > staleThreshold {
+			delete(l.visitors, key)
+		} else {
+			entries = append(entries, entry{key: key, lastSeen: v.lastSeen})
+		}
+	}
+
+	if l.cfg.MaxKeys > 0 && len(entries) > l.cfg.MaxKeys {
+		slices.SortFunc(entries, func(a, b entry) int {
+			if a.lastSeen.Before(b.lastSeen) {
+				return -1
+			}
+			if a.lastSeen.After(b.lastSeen) {
+				return 1
+			}
+			return 0
+		})
+
+		toEvict := len(entries) - l.cfg.MaxKeys
+		actualEvicted := 0
+		for i := 0; i < toEvict; i++ {
+			if v := l.visitors[entries[i].key]; v != nil && v.activeStreams == 0 {
+				delete(l.visitors, entries[i].key)
+				actualEvicted++
+			}
+		}
+		slog.Warn("chat rate limiter key cap enforced",
+			"intended", toEvict, "evicted", actualEvicted, "max_keys", l.cfg.MaxKeys, "remaining", len(l.visitors))
+		if actualEvicted < toEvict {
+			slog.Warn("chat rate limiter: partial eviction — active streams protected some keys from eviction",
+				"intended", toEvict, "evicted", actualEvicted, "protected", toEvict-actualEvicted, "remaining", len(l.visitors))
 		}
 	}
 }
@@ -205,7 +211,7 @@ func (l *chatRateLimiter) releaseStream(key string) {
 	}
 	if v.activeStreams == 0 {
 		slog.Error("chat rate limiter: stream slot underflow — release called with no active streams",
-			"key", key,
+			"key_hash", hashKey(key),
 			"active_streams", v.activeStreams)
 		return
 	}
@@ -250,7 +256,7 @@ func clientIPFromRemoteAddr(remoteAddr string) string {
 		slog.Warn("chat rate limiter: failed to parse RemoteAddr, using raw value as key",
 			"remote_addr", truncated,
 			"error", err)
-		return remoteAddr
+		return "ip:unparseable"
 	}
 	return host
 }
@@ -312,5 +318,6 @@ func (s *Server) releaseChatStreamSlot(key string) {
 
 func chatTooManyRequests(msg string) error {
 	err429 := huma.NewError(http.StatusTooManyRequests, msg)
-	return huma.ErrorWithHeaders(err429, http.Header{"Retry-After": []string{chatRateLimitRetryAfter}})
+	humaErr := huma.ErrorWithHeaders(err429, http.Header{"Retry-After": []string{chatRateLimitRetryAfter}})
+	return sigilerr.Wrap(humaErr, sigilerr.CodeServerRateLimited, msg)
 }
