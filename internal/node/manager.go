@@ -127,12 +127,19 @@ func (m *Manager) cleanupLoop(interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
-			m.mu.Lock()
-			now := m.now()
-			for nodeID := range m.pending {
-				m.pruneExpiredLocked(nodeID, now)
-			}
-			m.mu.Unlock()
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("cleanupLoop panic recovered", "panic", r, "package", "node")
+					}
+				}()
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				now := m.now()
+				for nodeID := range m.pending {
+					m.pruneExpiredLocked(nodeID, now)
+				}
+			}()
 		case <-m.stopCh:
 			return
 		}
