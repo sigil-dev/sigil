@@ -188,7 +188,12 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing summary embedding for workspace %s", workspaceID)
 	}
 
-	keepLast := int(count) - len(batch)
+	currentCount, err := c.cfg.MemoryStore.Messages().Count(ctx, workspaceID)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "counting messages before trim for workspace %s", workspaceID)
+	}
+
+	keepLast := int(currentCount) - len(batch)
 	if keepLast < 0 {
 		keepLast = 0
 	}

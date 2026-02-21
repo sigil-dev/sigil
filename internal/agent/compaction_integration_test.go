@@ -352,6 +352,56 @@ func TestCompaction_Compact_TrimFailure(t *testing.T) {
 	assert.Len(t, vec.vectors, 1)
 }
 
+func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.T) {
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	ss := newMockSessionStore()
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{1.0},
+		summarizeHook: func() error {
+			return mem.messages.Append(context.Background(), "ws-1", &store.Message{
+				ID:        "msg-appended",
+				Role:      store.MessageRoleUser,
+				Content:   "appended while compacting",
+				CreatedAt: time.Now().UTC(),
+			})
+		},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+
+	c := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:           mem,
+		VectorStore:           vec,
+		SessionStore:          ss,
+		SummarizationProvider: p,
+		BatchSize:             5,
+		ExtractFacts:          false,
+	})
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 5, result.MessagesProcessed)
+	assert.Equal(t, int64(5), result.MessagesTrimmed)
+	assert.Equal(t, 1, mem.messages.lastTrimKeep)
+
+	count, countErr := mem.messages.Count(context.Background(), "ws-1")
+	require.NoError(t, countErr)
+	assert.Equal(t, int64(1), count, "newly appended message must be preserved")
+
+	messages, rangeErr := mem.messages.GetRange(
+		context.Background(),
+		"ws-1",
+		time.Time{},
+		time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+	)
+	require.NoError(t, rangeErr)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "msg-appended", messages[0].ID)
+}
+
 type lifecycleMemoryStore struct {
 	messages  *lifecycleMessageStore
 	summaries *lifecycleSummaryStore
@@ -561,6 +611,8 @@ type mockCompactionProvider struct {
 	extractErr   error
 	embedErr     error
 
+	summarizeHook func() error
+
 	summarizeCalls int
 	extractCalls   int
 	embedCalls     int
@@ -568,6 +620,11 @@ type mockCompactionProvider struct {
 
 func (m *mockCompactionProvider) Summarize(_ context.Context, _ []*store.Message) (string, error) {
 	m.summarizeCalls++
+	if m.summarizeHook != nil {
+		if err := m.summarizeHook(); err != nil {
+			return "", err
+		}
+	}
 	if m.summarizeErr != nil {
 		return "", m.summarizeErr
 	}
