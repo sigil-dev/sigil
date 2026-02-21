@@ -40,3 +40,34 @@ func TestWorkspaceBinderBindWithTools(t *testing.T) {
 
 	assert.Empty(t, binder.AllowedTools("family", "macbook-pro"))
 }
+
+func TestWorkspaceBinderAllowedToolsDedupAndSortAcrossRules(t *testing.T) {
+	binder := node.NewWorkspaceBinder()
+
+	binder.BindWithTools("family", "iphone-*", []string{"location", "camera"})
+	binder.BindWithTools("family", "iphone-sean", []string{"camera", "photos"})
+
+	tools := binder.AllowedTools("family", "iphone-sean")
+	assert.Equal(t, []string{
+		"node:iphone-sean:camera",
+		"node:iphone-sean:location",
+		"node:iphone-sean:photos",
+	}, tools)
+}
+
+func TestWorkspaceBinderNormalizesAndIgnoresInvalidEntries(t *testing.T) {
+	binder := node.NewWorkspaceBinder()
+
+	binder.Bind(" family ", []string{" iphone-* ", "", "iphone-*"})
+	binder.Bind("family", []string{"["})
+	binder.BindWithTools(" family ", " iphone-* ", []string{" location ", "", "camera", "camera"})
+	binder.BindWithTools("family", "", []string{"camera"})
+	binder.BindWithTools("", "iphone-*", []string{"camera"})
+
+	assert.True(t, binder.IsAllowed("family", "iphone-sean"))
+	assert.False(t, binder.IsAllowed("family", "macbook-pro"))
+	assert.Equal(t, []string{
+		"node:iphone-sean:camera",
+		"node:iphone-sean:location",
+	}, binder.AllowedTools("family", "iphone-sean"))
+}
