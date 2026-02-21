@@ -121,6 +121,15 @@ type ToolsConfig struct {
 // SecurityConfig holds security subsystem settings.
 type SecurityConfig struct {
 	Scanner ScannerConfig `mapstructure:"scanner"`
+	Audit   AuditConfig   `mapstructure:"audit"`
+}
+
+// AuditConfig controls audit logging behavior for the security Enforcer.
+type AuditConfig struct {
+	// FailClosed makes audit failures block operations. When true, an audit
+	// write failure on the ALLOW path causes Check() to return an error.
+	// Default false (best-effort).
+	FailClosed bool `mapstructure:"fail_closed"`
 }
 
 // ScannerConfig controls per-hook scanner detection modes.

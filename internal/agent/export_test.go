@@ -3,6 +3,8 @@
 
 package agent
 
+import "github.com/sigil-dev/sigil/internal/security"
+
 // SanitizeToolError exposes sanitizeToolError for white-box testing.
 // The method receiver is a zero-value Loop which is sufficient for the
 // sanitisation logic (no fields accessed).
@@ -26,6 +28,6 @@ var ScanBlockedReason = scanBlockedReason
 // ExportBuildBlockedAuditEntry exposes buildBlockedAuditEntry for white-box testing.
 var ExportBuildBlockedAuditEntry = buildBlockedAuditEntry
 
-// AuditLogEscalationThreshold exposes auditLogEscalationThreshold for white-box testing.
-const AuditLogEscalationThreshold = auditLogEscalationThreshold
+// AuditLogEscalationThreshold re-exports security.AuditLogEscalationThreshold for test compatibility.
+const AuditLogEscalationThreshold = security.AuditLogEscalationThreshold
 

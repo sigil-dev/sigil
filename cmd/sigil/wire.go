@@ -100,7 +100,9 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	cleanups = append(cleanups, gs.Close)
 
 	// 2. Security enforcer.
-	enforcer := security.NewEnforcer(gs.AuditLog())
+	enforcer := security.NewEnforcer(gs.AuditLog(),
+		security.WithAuditFailClosed(cfg.Security.Audit.FailClosed),
+	)
 
 	// 2b. Security scanner — create regex scanner with default rules
 	// and convert config scanner modes for use by the agent loop.

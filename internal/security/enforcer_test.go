@@ -606,6 +606,138 @@ func TestEnforcer_IndependentAuditIDSequences(t *testing.T) {
 	assert.Len(t, ids, 6, "expected 6 unique audit IDs across two independent enforcers")
 }
 
+// --- Audit fail-closed and threshold escalation tests ---
+
+func TestEnforcer_AuditFailClosed_BlocksAllowPath(t *testing.T) {
+	t.Parallel()
+
+	audit := &mockAuditStore{err: errors.New("database offline")}
+	enforcer := security.NewEnforcer(audit, security.WithAuditFailClosed(true))
+	enforcer.RegisterPlugin("test-plugin",
+		security.NewCapabilitySet("read"),
+		security.NewCapabilitySet())
+
+	err := enforcer.Check(context.Background(), security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	})
+	require.Error(t, err, "fail-closed mode: audit failure on allow path must return error")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeSecurityAuditFailure),
+		"expected CodeSecurityAuditFailure, got: %v", sigilerr.CodeOf(err))
+}
+
+func TestEnforcer_AuditFailClosed_DenyStillDenies(t *testing.T) {
+	t.Parallel()
+
+	// Even with fail-closed enabled, a deny decision should return CodePluginCapabilityDenied
+	// (not the audit error). The deny path always returns deniedErr regardless of fail-closed.
+	audit := &mockAuditStore{err: errors.New("database offline")}
+	enforcer := security.NewEnforcer(audit, security.WithAuditFailClosed(true))
+	enforcer.RegisterPlugin("test-plugin",
+		security.NewCapabilitySet("read"),
+		security.NewCapabilitySet())
+
+	err := enforcer.Check(context.Background(), security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "write", // not in allow set
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginCapabilityDenied),
+		"deny path must return capability denied error even in fail-closed mode, got: %v", sigilerr.CodeOf(err))
+}
+
+func TestEnforcer_AuditFailClosed_Disabled_AllowsThrough(t *testing.T) {
+	t.Parallel()
+
+	// Default (fail-closed=false): audit failure on allow path does not block.
+	audit := &mockAuditStore{err: errors.New("database offline")}
+	enforcer := security.NewEnforcer(audit) // no WithAuditFailClosed option = default false
+	enforcer.RegisterPlugin("test-plugin",
+		security.NewCapabilitySet("read"),
+		security.NewCapabilitySet())
+
+	err := enforcer.Check(context.Background(), security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	})
+	assert.NoError(t, err, "best-effort mode: audit failure must not block allowed operations")
+}
+
+func TestEnforcer_AuditThreshold_Escalation(t *testing.T) {
+	t.Parallel()
+
+	// After N consecutive failures, the consecutive counter should reflect that.
+	// We test via the AuditFailCount() accessor.
+	audit := &mockAuditStore{err: errors.New("database offline")}
+	enforcer := security.NewEnforcer(audit)
+	enforcer.RegisterPlugin("test-plugin",
+		security.NewCapabilitySet("read"),
+		security.NewCapabilitySet())
+
+	ctx := context.Background()
+	req := security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	}
+
+	assert.Equal(t, int64(0), enforcer.AuditFailCount(), "initial count should be 0")
+
+	// Each successful Check (allowed, but audit fails) increments the counter.
+	require.NoError(t, enforcer.Check(ctx, req))
+	assert.Equal(t, int64(1), enforcer.AuditFailCount())
+
+	require.NoError(t, enforcer.Check(ctx, req))
+	assert.Equal(t, int64(2), enforcer.AuditFailCount())
+
+	require.NoError(t, enforcer.Check(ctx, req))
+	assert.Equal(t, int64(3), enforcer.AuditFailCount(), "at threshold, count should be 3")
+}
+
+func TestEnforcer_AuditThreshold_ResetsOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	// After some failures, a successful audit write resets the counter to 0.
+	audit := &mockAuditStore{err: errors.New("database offline")}
+	enforcer := security.NewEnforcer(audit)
+	enforcer.RegisterPlugin("test-plugin",
+		security.NewCapabilitySet("read"),
+		security.NewCapabilitySet())
+
+	ctx := context.Background()
+	req := security.CheckRequest{
+		Plugin:          "test-plugin",
+		Capability:      "read",
+		WorkspaceID:     "ws-1",
+		WorkspaceAllow:  security.NewCapabilitySet("*"),
+		UserPermissions: security.NewCapabilitySet("*"),
+	}
+
+	// Accumulate some failures.
+	require.NoError(t, enforcer.Check(ctx, req))
+	require.NoError(t, enforcer.Check(ctx, req))
+	assert.Equal(t, int64(2), enforcer.AuditFailCount())
+
+	// Clear the error — next check will succeed and reset the counter.
+	audit.mu.Lock()
+	audit.err = nil
+	audit.mu.Unlock()
+
+	require.NoError(t, enforcer.Check(ctx, req))
+	assert.Equal(t, int64(0), enforcer.AuditFailCount(), "counter must reset to 0 after successful audit write")
+}
+
 func TestCheckRequest_Validate(t *testing.T) {
 	tests := []struct {
 		name    string

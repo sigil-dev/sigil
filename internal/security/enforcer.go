@@ -16,6 +16,11 @@ import (
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
+// AuditLogEscalationThreshold is the number of consecutive audit store append
+// failures after which the log level escalates from Warn to Error. Exported so
+// the agent package can share the same value without duplicating the constant.
+const AuditLogEscalationThreshold = 3
+
 type pluginCapabilities struct {
 	allow CapabilitySet
 	deny  CapabilitySet
@@ -44,25 +49,50 @@ func (r CheckRequest) Validate() error {
 	return nil
 }
 
+// EnforcerOption is a functional option for NewEnforcer.
+type EnforcerOption func(*Enforcer)
+
+// WithAuditFailClosed enables fail-closed mode for audit logging. When true,
+// an audit write failure on the ALLOW path causes Check() to return an error
+// with CodeSecurityAuditFailure. Default false (best-effort).
+func WithAuditFailClosed(failClosed bool) EnforcerOption {
+	return func(e *Enforcer) {
+		e.auditFailClosed = failClosed
+	}
+}
+
 // Enforcer applies plugin, workspace, and user capability policy checks.
 type Enforcer struct {
-	mu             sync.RWMutex
-	audit          store.AuditStore
-	plugins        map[string]pluginCapabilities
-	auditIDCounter uint64 // Per-enforcer audit ID sequence (not shared globally)
+	mu              sync.RWMutex
+	audit           store.AuditStore
+	plugins         map[string]pluginCapabilities
+	auditIDCounter  uint64 // Per-enforcer audit ID sequence (not shared globally)
+	auditFailClosed bool   // When true, audit failures block allow decisions
+	auditFailCount  atomic.Int64
 }
 
 // NewEnforcer creates an Enforcer that writes decision audits to audit.
 // If audit is nil, audit logging is silently disabled (all checks still enforced).
-func NewEnforcer(audit store.AuditStore) *Enforcer {
+// Use EnforcerOption functions (e.g., WithAuditFailClosed) to configure behavior.
+func NewEnforcer(audit store.AuditStore, opts ...EnforcerOption) *Enforcer {
 	if audit == nil {
 		slog.Warn("enforcer created with nil audit store; audit logging disabled")
 	}
 
-	return &Enforcer{
+	e := &Enforcer{
 		audit:   audit,
 		plugins: make(map[string]pluginCapabilities),
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
+}
+
+// AuditFailCount returns the current consecutive audit failure count.
+// Intended for testing and observability.
+func (e *Enforcer) AuditFailCount() int64 {
+	return e.auditFailCount.Load()
 }
 
 // RegisterPlugin registers a plugin with allow and deny capability sets.
@@ -127,14 +157,29 @@ func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
 		return e.deny(ctx, req, "user_permission_missing", pluginAllow, pluginDeny, workspaceAllow, userAllow)
 	}
 
-	// Audit logging is best-effort to prevent cascading failures from a flaky audit backend.
-	// In compliance-critical environments, consider making this configurable (fail-closed).
+	// Audit the allow decision. Failure handling depends on fail-closed mode.
 	if err := e.auditDecision(ctx, req, "allowed", "ok", pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
-		slog.Warn("audit log failure on allowed decision (best-effort, not blocking)",
-			"plugin", req.Plugin,
-			"capability", req.Capability,
-			"error", err,
-		)
+		consecutive := e.auditFailCount.Add(1)
+		if consecutive >= AuditLogEscalationThreshold {
+			slog.Error("audit log failure on allowed decision (persistent)",
+				"plugin", req.Plugin,
+				"capability", req.Capability,
+				"error", err,
+				"consecutive_failures", consecutive,
+			)
+		} else {
+			slog.Warn("audit log failure on allowed decision (best-effort, not blocking)",
+				"plugin", req.Plugin,
+				"capability", req.Capability,
+				"error", err,
+				"consecutive_failures", consecutive,
+			)
+		}
+		if e.auditFailClosed {
+			return sigilerr.New(sigilerr.CodeSecurityAuditFailure, "audit log failure on allowed decision (fail-closed mode)")
+		}
+	} else {
+		e.auditFailCount.Store(0)
 	}
 
 	return nil
@@ -157,14 +202,27 @@ func (e *Enforcer) deny(
 		reason,
 	)
 
-	// Audit logging is best-effort to prevent cascading failures from a flaky audit backend.
-	// In compliance-critical environments, consider making this configurable (fail-closed).
+	// Audit logging is best-effort on the deny path. Audit failure on deny is
+	// safe because the operation is blocked regardless.
 	if err := e.auditDecision(ctx, req, "denied", reason, pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
-		slog.Warn("audit log failure on denied decision (best-effort, not blocking)",
-			"plugin", req.Plugin,
-			"capability", req.Capability,
-			"error", err,
-		)
+		consecutive := e.auditFailCount.Add(1)
+		if consecutive >= AuditLogEscalationThreshold {
+			slog.Error("audit log failure on denied decision (persistent)",
+				"plugin", req.Plugin,
+				"capability", req.Capability,
+				"error", err,
+				"consecutive_failures", consecutive,
+			)
+		} else {
+			slog.Warn("audit log failure on denied decision (best-effort, not blocking)",
+				"plugin", req.Plugin,
+				"capability", req.Capability,
+				"error", err,
+				"consecutive_failures", consecutive,
+			)
+		}
+	} else {
+		e.auditFailCount.Store(0)
 	}
 
 	return deniedErr

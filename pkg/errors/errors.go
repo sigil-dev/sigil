@@ -89,6 +89,7 @@ const (
 
 	CodeSecurityCapabilityInvalid         Code = "security.capability.invalid"
 	CodeSecurityInvalidInput              Code = "security.input.invalid"
+	CodeSecurityAuditFailure              Code = "security.audit.failure"
 	CodeSecurityScannerInputBlocked       Code = "security.scanner.input_blocked"
 	CodeSecurityScannerToolBlocked        Code = "security.scanner.tool_blocked"
 	CodeSecurityScannerOutputBlocked      Code = "security.scanner.output_blocked"
@@ -294,6 +295,9 @@ func HTTPStatus(err error) int {
 		return http.StatusGatewayTimeout
 	case IsUpstreamFailure(err):
 		return http.StatusBadGateway
+	case HasCode(err, CodeSecurityAuditFailure):
+		// Audit write failure in fail-closed mode = service degraded: 503 Service Unavailable.
+		return http.StatusServiceUnavailable
 	case HasCode(err, CodeSecurityScannerInputBlocked):
 		// Client-supplied content was rejected by the scanner: 422 Unprocessable Entity.
 		return http.StatusUnprocessableEntity

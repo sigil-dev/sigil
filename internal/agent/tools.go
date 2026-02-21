@@ -306,7 +306,7 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 			slog.String("session_id", req.SessionID),
 			slog.Int64("consecutive_failures", consecutive),
 		}
-		if consecutive >= auditLogEscalationThreshold {
+		if consecutive >= security.AuditLogEscalationThreshold {
 			// Include cumulative total at error level so operators can see how many
 			// failures have occurred overall, even across success-interspersed sequences.
 			attrs = append(attrs, slog.Int64("total_failures", cumulative))

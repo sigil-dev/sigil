@@ -173,6 +173,16 @@ security:
     #   # Must be < max_content_length.
     #   max_tool_content_scan_size: 524288
 
+  # Audit logging controls.
+  # audit:
+  #   # Fail-closed mode. Default: false (best-effort).
+  #   # When true, audit write failures on the ALLOW path cause capability checks
+  #   # to return an error (CodeSecurityAuditFailure / 503). Use in compliance-
+  #   # critical environments where an unrecorded operation is unacceptable.
+  #   # When false (default), audit failures are logged as warnings and operations
+  #   # proceed. Consecutive failures escalate the log level from Warn to Error.
+  #   fail_closed: false
+
 # ---------------------------------------------------------------------------
 # Workspaces
 # ---------------------------------------------------------------------------
