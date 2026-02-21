@@ -36,6 +36,7 @@ networking:
   rate_limit_burst: 0               # Burst size for rate limiting
   # cors_origins:                   # Allowed CORS origins (empty = dev default)
   #   - "http://localhost:5173"
+  # dev_csp_connect_src: "http://localhost:18789"  # Tauri dev WebSocket (omit in production)
   # trusted_proxies:                # CIDR ranges of trusted reverse proxies
   #   - "10.0.0.0/8"               # Required when behind a reverse proxy
   #   - "172.16.0.0/12"            # Only X-Forwarded-For from these IPs is trusted

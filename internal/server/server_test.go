@@ -23,7 +23,9 @@ func newTestServer(t *testing.T) *server.Server {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = srv.Close()
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
 	})
 	return srv
 }
@@ -33,7 +35,11 @@ func TestServer_New(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 	})
 	require.NoError(t, err)
-	defer func() { _ = srv.Close() }()
+	defer func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	}()
 	assert.NotNil(t, srv)
 }
 
@@ -87,7 +93,11 @@ func TestServer_CORSHeaders(t *testing.T) {
 		CORSOrigins: []string{"http://localhost:5173"},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
@@ -140,7 +150,11 @@ func TestServer_CORSOrigins_FromConfig(t *testing.T) {
 		CORSOrigins: []string{"https://app.example.com", "https://admin.example.com"},
 	})
 	require.NoError(t, err)
-	defer func() { _ = srv.Close() }()
+	defer func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	}()
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 	req.Header.Set("Origin", "https://app.example.com")
@@ -171,7 +185,11 @@ func TestServer_CORSOrigins_NoConfig_NonLocalhostRejectsAll(t *testing.T) {
 		ListenAddr: "192.168.1.100:8080", // non-localhost address
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
@@ -199,7 +217,11 @@ func TestServer_HSTSHeader_WhenEnabled(t *testing.T) {
 		EnableHSTS: true,
 	})
 	require.NoError(t, err)
-	defer func() { _ = srv.Close() }()
+	defer func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
@@ -233,8 +255,9 @@ func TestServer_CSPHeader_IsPresent(t *testing.T) {
 	assert.Contains(t, csp, "default-src 'self'")
 	assert.Contains(t, csp, "script-src 'self'")
 	assert.Contains(t, csp, "frame-ancestors 'none'")
-	// Tauri desktop app needs connect-src to allow API calls to the local gateway.
-	assert.Contains(t, csp, "connect-src 'self' http://localhost:18789")
+	// connect-src should only include 'self' by default; DevCSPConnectSrc is empty in tests.
+	assert.Contains(t, csp, "connect-src 'self'")
+	assert.NotContains(t, csp, "localhost:18789")
 }
 
 func TestServer_RateLimiterBeforeAuth(t *testing.T) {
@@ -252,7 +275,11 @@ func TestServer_RateLimiterBeforeAuth(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer func() { _ = srv.Close() }()
+	defer func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	}()
 
 	// Send requests WITHOUT a valid token (unauthenticated brute-force).
 	// If rate limiter is before auth: after burst, we get 429.
@@ -295,7 +322,11 @@ func TestServer_BehindProxy_WithTrustedProxies(t *testing.T) {
 		TrustedProxies: []string{"10.0.0.0/8"},
 	})
 	require.NoError(t, err)
-	defer func() { _ = srv.Close() }()
+	defer func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	}()
 	assert.NotNil(t, srv)
 }
 
@@ -734,7 +765,11 @@ func TestServer_CORSOrigins_DevDefault_LocalhostVariants(t *testing.T) {
 				// No CORSOrigins configured
 			})
 			require.NoError(t, err)
-			t.Cleanup(func() { _ = srv.Close() })
+			t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 			req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 			req.Header.Set("Origin", "http://localhost:5173")

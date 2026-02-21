@@ -141,7 +141,11 @@ func newTestServerWithData(t *testing.T) *server.Server {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 	return srv
 }
 
@@ -159,7 +163,11 @@ func newTestServerWithStream(t *testing.T, handler server.StreamHandler) *server
 		StreamHandler: handler,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 	return srv
 }
 
@@ -275,7 +283,11 @@ func TestRoutes_ReloadPlugin_InternalError(t *testing.T) {
 			&mockUserService{}),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/failing/reload", nil)
 	w := httptest.NewRecorder()
@@ -481,7 +493,11 @@ func TestRoutes_Status_AuthEnabled_WithoutToken_Returns401(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	w := httptest.NewRecorder()
@@ -491,7 +507,11 @@ func TestRoutes_Status_AuthEnabled_WithoutToken_Returns401(t *testing.T) {
 	var resp map[string]string
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 	assert.Contains(t, resp["error"], "authorization header required")
 }
 
@@ -513,7 +533,11 @@ func TestRoutes_Status_AuthEnabled_WithInvalidToken_Returns401(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	req.Header.Set("Authorization", "Bearer invalid-token")
@@ -541,7 +565,11 @@ func TestRoutes_Status_AuthEnabled_WithoutAdminPermission_Returns403(t *testing.
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -569,7 +597,11 @@ func TestRoutes_Status_AuthEnabled_WithAdminToken_Returns200(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	req.Header.Set("Authorization", "Bearer admin-token")
@@ -598,7 +630,11 @@ func TestRoutes_Status_AuthEnabled_WithWildcardAdminToken_Returns200(t *testing.
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	req.Header.Set("Authorization", "Bearer admin-token")
@@ -650,7 +686,11 @@ func TestRoutes_ReloadPlugin_InsufficientPermissions_Returns403(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/anthropic/reload", nil)
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -680,7 +720,11 @@ func TestRoutes_ReloadPlugin_WithAdminWildcard_Succeeds(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/anthropic/reload", nil)
 	req.Header.Set("Authorization", "Bearer admin-token")
@@ -710,7 +754,11 @@ func TestRoutes_ReloadPlugin_WithExactPermission_Succeeds(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins/anthropic/reload", nil)
 	req.Header.Set("Authorization", "Bearer admin-token")
@@ -740,7 +788,11 @@ func TestRoutes_ListUsers_InsufficientPermissions_Returns403(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -770,7 +822,11 @@ func TestRoutes_ListPlugins_InsufficientPermissions_Returns403(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins", nil)
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -800,7 +856,11 @@ func TestRoutes_GetPlugin_InsufficientPermissions_Returns403(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins/anthropic", nil)
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -830,7 +890,11 @@ func TestRoutes_GetWorkspace_NonMember_Returns403(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	// workspace "homelab" has member "user-1", not "user-2"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/homelab", nil)
@@ -861,7 +925,11 @@ func TestRoutes_ListSessions_NonMember_Returns403(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	// workspace "homelab" has member "user-1", not "user-2"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/homelab/sessions", nil)
@@ -892,7 +960,11 @@ func TestRoutes_GetSession_NonMember_Returns403(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	// workspace "homelab" has member "user-1", not "user-2"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/homelab/sessions/sess-1", nil)
@@ -923,7 +995,11 @@ func TestRoutes_ListWorkspaces_FiltersByMembership(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -1044,7 +1120,11 @@ func TestRoutes_SendMessage_WorkspaceMembership_AuthDisabled_AllowsAnyWorkspace(
 		StreamHandler: &mockStreamHandler{events: events},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	body := `{"content": "Hello", "workspace_id": "any-workspace-id"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
@@ -1079,7 +1159,11 @@ func TestRoutes_SendMessage_WorkspaceMembership_ValidMember_Succeeds(t *testing.
 		StreamHandler: &mockStreamHandler{events: events},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	// workspace "homelab" has member "user-1"
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
@@ -1112,7 +1196,11 @@ func TestRoutes_SendMessage_WorkspaceMembership_NonMember_Returns403(t *testing.
 		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	// workspace "homelab" has member "user-1", not "user-2"
 	body := `{"content": "Hello", "workspace_id": "homelab"}`
@@ -1146,7 +1234,11 @@ func TestRoutes_SendMessage_WorkspaceMembership_WorkspaceNotFound_Returns403(t *
 		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	body := `{"content": "Hello", "workspace_id": "nonexistent"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
@@ -1179,7 +1271,11 @@ func TestRoutes_SendMessage_WorkspaceMembership_EmptyWorkspaceID_Succeeds(t *tes
 		StreamHandler: &mockStreamHandler{events: []server.SSEEvent{}},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	body := `{"content": "Hello", "workspace_id": ""}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", strings.NewReader(body))
@@ -1203,7 +1299,11 @@ func TestRoutes_RequireAdmin_AuthEnabled_NilUser_Returns401(t *testing.T) {
 		TokenValidator: validator,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	// Call requireAdmin with a bare context (no user).
 	gotErr := srv.RequireAdmin(context.Background(), "admin:plugins", "test-op")
@@ -1219,7 +1319,11 @@ func TestRoutes_RequireAdmin_AuthDisabled_NilUser_Allows(t *testing.T) {
 		ListenAddr: "127.0.0.1:0",
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	gotErr := srv.RequireAdmin(context.Background(), "admin:plugins", "test-op")
 	assert.NoError(t, gotErr)
@@ -1234,7 +1338,11 @@ func TestRoutes_RequireAdmin_UserWithPermission_Allows(t *testing.T) {
 		TokenValidator: validator,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	user := mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:plugins"})
 	ctx := server.ContextWithUser(context.Background(), user)
@@ -1252,7 +1360,11 @@ func TestRoutes_RequireAdmin_UserWithoutPermission_Returns403(t *testing.T) {
 		TokenValidator: validator,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	user := mustNewAuthenticatedUser("user-1", "Regular", []string{"workspace:read"})
 	ctx := server.ContextWithUser(context.Background(), user)
@@ -1284,7 +1396,11 @@ func TestRoutes_AdminEndpoints_AuthEnabled_NoToken_Returns401(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	endpoints := []struct {
 		method string

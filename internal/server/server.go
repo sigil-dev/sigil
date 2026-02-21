@@ -31,9 +31,10 @@ type Config struct {
 	RateLimit      RateLimitConfig // per-IP rate limiting
 	BehindProxy    bool            // true if behind a reverse proxy (enables RealIP middleware)
 	TrustedProxies []string        // CIDR ranges of trusted proxies (required when BehindProxy=true)
-	StreamHandler  StreamHandler   // nil = SSE routes return 503 until handler is set
-	Services       *Services       // nil = service-dependent routes fail closed
-	ConfigDeps     *ConfigDeps     // nil = config routes return 503 until deps are set
+	StreamHandler    StreamHandler // nil = SSE routes return 503 until handler is set
+	Services         *Services    // nil = service-dependent routes fail closed
+	ConfigDeps       *ConfigDeps  // nil = config routes return 503 until deps are set
+	DevCSPConnectSrc string       // additional connect-src origin for dev (e.g. Tauri WebSocket); empty in production
 }
 
 // ApplyDefaults sets default values for zero-valued fields.
@@ -122,7 +123,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.BehindProxy {
 		r.Use(trustedProxyRealIP(trustedNets))
 	}
-	r.Use(securityHeadersMiddleware(cfg.EnableHSTS))
+	r.Use(securityHeadersMiddleware(cfg.EnableHSTS, cfg.DevCSPConnectSrc))
 	r.Use(corsMiddleware(cfg.CORSOrigins, cfg.ListenAddr))
 	r.Use(rateLimitMiddleware(cfg.RateLimit, rateLimitDone))
 	r.Use(authMiddleware(cfg.TokenValidator))
@@ -289,7 +290,15 @@ func isLocalhostAddr(addr string) bool {
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses.
-func securityHeadersMiddleware(enableHSTS bool) func(http.Handler) http.Handler {
+// devCSPConnectSrc, if non-empty, is appended to the connect-src directive. It
+// should only be set in development (e.g. "http://localhost:18789" for Tauri).
+func securityHeadersMiddleware(enableHSTS bool, devCSPConnectSrc string) func(http.Handler) http.Handler {
+	connectSrc := "'self'"
+	if devCSPConnectSrc != "" {
+		connectSrc += " " + devCSPConnectSrc
+	}
+	csp := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -300,7 +309,7 @@ func securityHeadersMiddleware(enableHSTS bool) func(http.Handler) http.Handler 
 			// per-request nonce generation and template integration (not yet implemented).
 			// This weakens XSS protection for inline styles. Remove 'unsafe-inline'
 			// from style-src once nonce infrastructure is added.
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' http://localhost:18789; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+			w.Header().Set("Content-Security-Policy", csp)
 			if enableHSTS {
 				w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 			}

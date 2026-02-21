@@ -63,12 +63,13 @@ func WithAuditFailClosed(failClosed bool) EnforcerOption {
 
 // Enforcer applies plugin, workspace, and user capability policy checks.
 type Enforcer struct {
-	mu              sync.RWMutex
-	audit           store.AuditStore
-	plugins         map[string]pluginCapabilities
-	auditIDCounter  uint64 // Per-enforcer audit ID sequence (not shared globally)
-	auditFailClosed bool   // When true, audit failures block allow decisions
-	auditFailCount  atomic.Int64
+	mu                  sync.RWMutex
+	audit               store.AuditStore
+	plugins             map[string]pluginCapabilities
+	auditIDCounter      uint64 // Per-enforcer audit ID sequence (not shared globally)
+	auditFailClosed     bool   // When true, audit failures block allow decisions
+	auditAllowFailCount atomic.Int64
+	auditDenyFailCount  atomic.Int64
 }
 
 // NewEnforcer creates an Enforcer that writes decision audits to audit.
@@ -89,10 +90,16 @@ func NewEnforcer(audit store.AuditStore, opts ...EnforcerOption) *Enforcer {
 	return e
 }
 
-// AuditFailCount returns the current consecutive audit failure count.
+// AuditAllowFailCount returns the current consecutive allow-path audit failure count.
 // Intended for testing and observability.
-func (e *Enforcer) AuditFailCount() int64 {
-	return e.auditFailCount.Load()
+func (e *Enforcer) AuditAllowFailCount() int64 {
+	return e.auditAllowFailCount.Load()
+}
+
+// AuditDenyFailCount returns the current consecutive deny-path audit failure count.
+// Intended for testing and observability.
+func (e *Enforcer) AuditDenyFailCount() int64 {
+	return e.auditDenyFailCount.Load()
 }
 
 // RegisterPlugin registers a plugin with allow and deny capability sets.
@@ -159,7 +166,7 @@ func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
 
 	// Audit the allow decision. Failure handling depends on fail-closed mode.
 	if err := e.auditDecision(ctx, req, "allowed", "ok", pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
-		consecutive := e.auditFailCount.Add(1)
+		consecutive := e.auditAllowFailCount.Add(1)
 		if consecutive >= AuditLogEscalationThreshold {
 			slog.Error("audit log failure on allowed decision (persistent)",
 				"plugin", req.Plugin,
@@ -179,7 +186,7 @@ func (e *Enforcer) Check(ctx context.Context, req CheckRequest) error {
 			return sigilerr.New(sigilerr.CodeSecurityAuditFailure, "audit log failure on allowed decision (fail-closed mode)")
 		}
 	} else {
-		e.auditFailCount.Store(0)
+		e.auditAllowFailCount.Store(0)
 	}
 
 	return nil
@@ -205,7 +212,7 @@ func (e *Enforcer) deny(
 	// Audit logging is best-effort on the deny path. Audit failure on deny is
 	// safe because the operation is blocked regardless.
 	if err := e.auditDecision(ctx, req, "denied", reason, pluginAllow, pluginDeny, workspaceAllow, userAllow); err != nil {
-		consecutive := e.auditFailCount.Add(1)
+		consecutive := e.auditDenyFailCount.Add(1)
 		if consecutive >= AuditLogEscalationThreshold {
 			slog.Error("audit log failure on denied decision (persistent)",
 				"plugin", req.Plugin,
@@ -222,7 +229,7 @@ func (e *Enforcer) deny(
 			)
 		}
 	} else {
-		e.auditFailCount.Store(0)
+		e.auditDenyFailCount.Store(0)
 	}
 
 	return deniedErr

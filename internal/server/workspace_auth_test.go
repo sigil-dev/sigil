@@ -198,7 +198,11 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 				Services:   tt.services,
 			})
 			require.NoError(t, err)
-			t.Cleanup(func() { _ = srv.Close() })
+			t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 			ctx := context.Background()
 			if tt.user != nil {
@@ -247,7 +251,11 @@ func TestCheckWorkspaceMembership_ErrorObservability(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
 
 	user := mustNewAuthenticatedUser("user-1", "Sean", nil)
 	ctx := server.ContextWithUser(context.Background(), user)

@@ -202,12 +202,13 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	}
 
 	srv, err := server.New(server.Config{
-		ListenAddr:     cfg.Networking.Listen,
-		CORSOrigins:    cfg.Networking.CORSOrigins,
-		TokenValidator: tokenValidator,
-		BehindProxy:    cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
-		TrustedProxies: cfg.Networking.TrustedProxies,
-		EnableHSTS:     cfg.Networking.EnableHSTS,
+		ListenAddr:       cfg.Networking.Listen,
+		CORSOrigins:      cfg.Networking.CORSOrigins,
+		TokenValidator:   tokenValidator,
+		BehindProxy:      cfg.Networking.Mode == "tailscale", // Only trust proxy headers when behind tailscale
+		TrustedProxies:   cfg.Networking.TrustedProxies,
+		EnableHSTS:       cfg.Networking.EnableHSTS,
+		DevCSPConnectSrc: cfg.Networking.DevCSPConnectSrc,
 		RateLimit: server.RateLimitConfig{
 			RequestsPerSecond: cfg.Networking.RateLimitRPS,
 			Burst:             cfg.Networking.RateLimitBurst,
@@ -231,7 +232,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 
 	// Validate at construction so callers never receive an invalid Gateway.
 	if err := gw.Validate(); err != nil {
-		return nil, err
+		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "gateway validation failed: %w", err)
 	}
 
 	return gw, nil

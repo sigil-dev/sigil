@@ -6,6 +6,7 @@ package security_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 
@@ -46,6 +47,30 @@ func (m *mockAuditStore) snapshot() []*store.AuditEntry {
 	defer m.mu.Unlock()
 
 	return append([]*store.AuditEntry(nil), m.entries...)
+}
+
+// captureHandler is a slog.Handler that captures all log records for test assertions.
+type captureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	h.records = append(h.records, r)
+	h.mu.Unlock()
+	return nil
+}
+func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func (h *captureHandler) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]slog.Record, len(h.records))
+	copy(out, h.records)
+	return out
 }
 
 func TestEnforcer_AllowMatchingCapability(t *testing.T) {
@@ -673,10 +698,18 @@ func TestEnforcer_AuditFailClosed_Disabled_AllowsThrough(t *testing.T) {
 }
 
 func TestEnforcer_AuditThreshold_Escalation(t *testing.T) {
-	t.Parallel()
+	// NOTE: Not parallel — this test mutates the global slog default logger to
+	// capture log records. Running in parallel would cause other tests' log
+	// output to appear in this handler and vice versa.
 
-	// After N consecutive failures, the consecutive counter should reflect that.
-	// We test via the AuditFailCount() accessor.
+	// After N consecutive failures, the consecutive counter should reflect that
+	// and log level must escalate from Warn to Error at the threshold.
+	// We test via the AuditFailCount() accessor AND by capturing slog output.
+	handler := &captureHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
 	audit := &mockAuditStore{err: errors.New("database offline")}
 	enforcer := security.NewEnforcer(audit)
 	enforcer.RegisterPlugin("test-plugin",
@@ -692,17 +725,35 @@ func TestEnforcer_AuditThreshold_Escalation(t *testing.T) {
 		UserPermissions: security.NewCapabilitySet("*"),
 	}
 
-	assert.Equal(t, int64(0), enforcer.AuditFailCount(), "initial count should be 0")
+	assert.Equal(t, int64(0), enforcer.AuditAllowFailCount(), "initial count should be 0")
 
-	// Each successful Check (allowed, but audit fails) increments the counter.
+	// 1st failure: counter = 1, below threshold → Warn
 	require.NoError(t, enforcer.Check(ctx, req))
-	assert.Equal(t, int64(1), enforcer.AuditFailCount())
+	assert.Equal(t, int64(1), enforcer.AuditAllowFailCount())
 
+	// 2nd failure: counter = 2, below threshold → Warn
 	require.NoError(t, enforcer.Check(ctx, req))
-	assert.Equal(t, int64(2), enforcer.AuditFailCount())
+	assert.Equal(t, int64(2), enforcer.AuditAllowFailCount())
 
+	// 3rd failure: counter = 3 == AuditLogEscalationThreshold → Error
 	require.NoError(t, enforcer.Check(ctx, req))
-	assert.Equal(t, int64(3), enforcer.AuditFailCount(), "at threshold, count should be 3")
+	assert.Equal(t, int64(3), enforcer.AuditAllowFailCount(), "at threshold, count should be 3")
+
+	// Verify log levels: first two must be Warn, third must be Error.
+	// Filter to only the audit-failure records emitted by enforcer.Check (not
+	// the nil-store warning from NewEnforcer, which uses a different message).
+	records := handler.snapshot()
+	var auditFailRecords []slog.Record
+	for _, r := range records {
+		if r.Message == "audit log failure on allowed decision (best-effort, not blocking)" ||
+			r.Message == "audit log failure on allowed decision (persistent)" {
+			auditFailRecords = append(auditFailRecords, r)
+		}
+	}
+	require.Len(t, auditFailRecords, 3, "expected 3 audit-failure log records")
+	assert.Equal(t, slog.LevelWarn, auditFailRecords[0].Level, "1st failure must log at Warn")
+	assert.Equal(t, slog.LevelWarn, auditFailRecords[1].Level, "2nd failure must log at Warn")
+	assert.Equal(t, slog.LevelError, auditFailRecords[2].Level, "3rd failure (at threshold) must log at Error")
 }
 
 func TestEnforcer_AuditThreshold_ResetsOnSuccess(t *testing.T) {
@@ -727,7 +778,7 @@ func TestEnforcer_AuditThreshold_ResetsOnSuccess(t *testing.T) {
 	// Accumulate some failures.
 	require.NoError(t, enforcer.Check(ctx, req))
 	require.NoError(t, enforcer.Check(ctx, req))
-	assert.Equal(t, int64(2), enforcer.AuditFailCount())
+	assert.Equal(t, int64(2), enforcer.AuditAllowFailCount())
 
 	// Clear the error — next check will succeed and reset the counter.
 	audit.mu.Lock()
@@ -735,7 +786,7 @@ func TestEnforcer_AuditThreshold_ResetsOnSuccess(t *testing.T) {
 	audit.mu.Unlock()
 
 	require.NoError(t, enforcer.Check(ctx, req))
-	assert.Equal(t, int64(0), enforcer.AuditFailCount(), "counter must reset to 0 after successful audit write")
+	assert.Equal(t, int64(0), enforcer.AuditAllowFailCount(), "counter must reset to 0 after successful audit write")
 }
 
 func TestCheckRequest_Validate(t *testing.T) {

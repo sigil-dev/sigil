@@ -45,13 +45,14 @@ type TokenConfig struct {
 
 // NetworkingConfig controls how Sigil listens for connections.
 type NetworkingConfig struct {
-	Mode           string   `mapstructure:"mode"`
-	Listen         string   `mapstructure:"listen"`
-	CORSOrigins    []string `mapstructure:"cors_origins"`
-	EnableHSTS     bool     `mapstructure:"enable_hsts"`
-	RateLimitRPS   float64  `mapstructure:"rate_limit_rps"`
-	RateLimitBurst int      `mapstructure:"rate_limit_burst"`
-	TrustedProxies []string `mapstructure:"trusted_proxies"` // CIDR ranges of trusted reverse proxies
+	Mode             string   `mapstructure:"mode"`
+	Listen           string   `mapstructure:"listen"`
+	CORSOrigins      []string `mapstructure:"cors_origins"`
+	EnableHSTS       bool     `mapstructure:"enable_hsts"`
+	RateLimitRPS     float64  `mapstructure:"rate_limit_rps"`
+	RateLimitBurst   int      `mapstructure:"rate_limit_burst"`
+	TrustedProxies   []string `mapstructure:"trusted_proxies"`   // CIDR ranges of trusted reverse proxies
+	DevCSPConnectSrc string   `mapstructure:"dev_csp_connect_src"` // dev-only: extra connect-src origin (e.g. Tauri WebSocket)
 }
 
 // ProviderConfig holds credentials and endpoint for an LLM provider.
