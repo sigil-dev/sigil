@@ -667,10 +667,11 @@ func TestWorkspaceBinderBindWithToolsDeduplication(t *testing.T) {
 func TestWorkspaceBinderAllowedToolsDedupAndSortAcrossRules(t *testing.T) {
 	binder := node.NewWorkspaceBinder()
 
-	binder.BindWithTools("family", "iphone-*", []string{"location", "camera"})
-	binder.BindWithTools("family", "iphone-sean", []string{"camera", "photos"})
+	require.NoError(t, binder.BindWithTools("family", "iphone-*", []string{"location", "camera"}))
+	require.NoError(t, binder.BindWithTools("family", "iphone-sean", []string{"camera", "photos"}))
 
-	tools := binder.AllowedTools("family", "iphone-sean")
+	tools, err := binder.AllowedTools("family", "iphone-sean")
+	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"node:iphone-sean:camera",
 		"node:iphone-sean:location",
@@ -678,19 +679,37 @@ func TestWorkspaceBinderAllowedToolsDedupAndSortAcrossRules(t *testing.T) {
 	}, tools)
 }
 
-func TestWorkspaceBinderNormalizesAndIgnoresInvalidEntries(t *testing.T) {
-	binder := node.NewWorkspaceBinder()
+func TestWorkspaceBinderNormalizesAndRejectsInvalidEntries(t *testing.T) {
+	t.Run("whitespace trimming and dedup in Bind", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		require.NoError(t, binder.Bind(" family ", []string{" iphone-* ", "", "iphone-*"}))
+		assert.True(t, binder.IsAllowed("family", "iphone-sean"))
+		assert.False(t, binder.IsAllowed("family", "macbook-pro"))
+	})
 
-	binder.Bind(" family ", []string{" iphone-* ", "", "iphone-*"})
-	binder.Bind("family", []string{"["})
-	binder.BindWithTools(" family ", " iphone-* ", []string{" location ", "", "camera", "camera"})
-	binder.BindWithTools("family", "", []string{"camera"})
-	binder.BindWithTools("", "iphone-*", []string{"camera"})
+	t.Run("malformed glob pattern rejected", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		assert.Error(t, binder.Bind("family", []string{"["}))
+	})
 
-	assert.True(t, binder.IsAllowed("family", "iphone-sean"))
-	assert.False(t, binder.IsAllowed("family", "macbook-pro"))
-	assert.Equal(t, []string{
-		"node:iphone-sean:camera",
-		"node:iphone-sean:location",
-	}, binder.AllowedTools("family", "iphone-sean"))
+	t.Run("whitespace trimming and tool dedup in BindWithTools", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		require.NoError(t, binder.BindWithTools(" family ", " iphone-* ", []string{" location ", "", "camera", "camera"}))
+		tools, err := binder.AllowedTools("family", "iphone-sean")
+		require.NoError(t, err)
+		assert.Equal(t, []string{
+			"node:iphone-sean:camera",
+			"node:iphone-sean:location",
+		}, tools)
+	})
+
+	t.Run("empty nodePattern rejected", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		assert.Error(t, binder.BindWithTools("family", "", []string{"camera"}))
+	})
+
+	t.Run("empty workspaceID rejected", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		assert.Error(t, binder.BindWithTools("", "iphone-*", []string{"camera"}))
+	})
 }
