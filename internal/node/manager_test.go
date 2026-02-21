@@ -541,24 +541,26 @@ func TestManagerQueueToolCallArgsSizeLimit(t *testing.T) {
 }
 
 func TestManagerQueueToolCallMixedExpiry(t *testing.T) {
-	const ttl = 50 * time.Millisecond
+	base := time.Date(2026, time.February, 21, 14, 0, 0, 0, time.UTC)
+	now := base
 
 	mgr := NewManager(ManagerConfig{
-		QueueTTL: ttl,
+		QueueTTL: 50 * time.Millisecond,
+		Now:      func() time.Time { return now },
 	})
 
 	err := mgr.Register(Registration{NodeID: "mac", Tools: []string{"tool1"}})
 	require.NoError(t, err)
 	require.NoError(t, mgr.Disconnect("mac"))
 
-	// Queue first request (will expire after TTL).
+	// Queue first request at base time.
 	_, err = mgr.QueueToolCall("mac", "tool1", `{}`)
 	require.NoError(t, err)
 
-	// Wait for first request to expire.
-	time.Sleep(ttl + 10*time.Millisecond)
+	// Advance clock past TTL to expire the first request.
+	now = base.Add(60 * time.Millisecond)
 
-	// Queue second request (should still be live).
+	// Queue second request (should still be live, starts a new TTL window).
 	secondID, err := mgr.QueueToolCall("mac", "tool1", `{}`)
 	require.NoError(t, err)
 
@@ -801,4 +803,113 @@ func TestManagerConcurrentQueueOperations(t *testing.T) {
 	}
 	wg.Wait()
 	// No panic or data race means the mutex coverage is correct.
+}
+
+// TestManagerConcurrentRegisterSameNode verifies that the online-node
+// re-registration guard holds under concurrent load (finding sigil-t7xj.89).
+func TestManagerConcurrentRegisterSameNode(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+	require.NoError(t, mgr.Register(Registration{NodeID: "shared", Tools: []string{"t"}}))
+
+	// "shared" is online; all concurrent re-Register attempts must fail.
+	const goroutines = 20
+	var wg sync.WaitGroup
+	errs := make([]error, goroutines)
+
+	for i := range goroutines {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = mgr.Register(Registration{NodeID: "shared", Tools: []string{"t"}})
+		}(i)
+	}
+	wg.Wait()
+
+	errCount := 0
+	for _, err := range errs {
+		if err != nil {
+			errCount++
+			assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerRequestInvalid))
+		}
+	}
+	assert.Equal(t, goroutines, errCount, "all concurrent re-registrations of an online node must fail")
+}
+
+// TestManagerQueueToolCallAfterReRegistrationWithDifferentTools verifies that
+// re-registration replaces the tool list and QueueToolCall enforces the new set
+// (finding sigil-t7xj.90).
+func TestManagerQueueToolCallAfterReRegistrationWithDifferentTools(t *testing.T) {
+	now := time.Date(2026, time.February, 21, 14, 0, 0, 0, time.UTC)
+	mgr := NewManager(ManagerConfig{
+		QueueTTL: 1 * time.Minute,
+		Now:      func() time.Time { return now },
+	})
+
+	require.NoError(t, mgr.Register(Registration{NodeID: "mac", Tools: []string{"tool1"}}))
+	require.NoError(t, mgr.Disconnect("mac"))
+	require.NoError(t, mgr.Register(Registration{NodeID: "mac", Tools: []string{"tool2"}}))
+	require.NoError(t, mgr.Disconnect("mac"))
+
+	// tool1 is no longer registered after re-registration.
+	_, err := mgr.QueueToolCall("mac", "tool1", `{}`)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerRequestInvalid))
+	assert.Contains(t, err.Error(), "tool is not registered on node")
+
+	// tool2 is now registered.
+	_, err = mgr.QueueToolCall("mac", "tool2", `{}`)
+	require.NoError(t, err)
+}
+
+// TestManagerCleanupLoop verifies that the background cleanup goroutine deletes
+// fully-expired map keys from m.pending (finding sigil-t7xj.87).
+func TestManagerCleanupLoop(t *testing.T) {
+	base := time.Date(2026, time.February, 21, 14, 0, 0, 0, time.UTC)
+	now := base
+	mu := sync.Mutex{} // protect now across goroutines
+
+	mgr := NewManager(ManagerConfig{
+		QueueTTL:        50 * time.Millisecond,
+		CleanupInterval: 10 * time.Millisecond,
+		Now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return now
+		},
+	})
+	t.Cleanup(mgr.Stop)
+
+	require.NoError(t, mgr.Register(Registration{NodeID: "mac", Tools: []string{"screen"}}))
+	require.NoError(t, mgr.Disconnect("mac"))
+
+	_, err := mgr.QueueToolCall("mac", "screen", `{}`)
+	require.NoError(t, err)
+
+	mgr.mu.RLock()
+	_, exists := mgr.pending["mac"]
+	mgr.mu.RUnlock()
+	assert.True(t, exists, "pending key must exist immediately after queue")
+
+	// Advance clock past TTL so all queued requests are expired.
+	mu.Lock()
+	now = base.Add(100 * time.Millisecond)
+	mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		mgr.mu.RLock()
+		defer mgr.mu.RUnlock()
+		_, exists := mgr.pending["mac"]
+		return !exists
+	}, 500*time.Millisecond, 5*time.Millisecond, "cleanup goroutine must delete fully-expired map key")
+}
+
+func TestManagerStopIsIdempotent(t *testing.T) {
+	mgr := NewManager(ManagerConfig{CleanupInterval: 10 * time.Millisecond})
+	mgr.Stop()
+	mgr.Stop() // Must not panic.
+}
+
+func TestManagerStopWithoutCleanupGoroutine(t *testing.T) {
+	mgr := NewManager(ManagerConfig{})
+	mgr.Stop() // Must not panic when no cleanup goroutine was started.
 }

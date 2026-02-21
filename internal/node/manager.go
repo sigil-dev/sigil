@@ -62,6 +62,7 @@ type PendingRequest struct {
 
 type ManagerConfig struct {
 	QueueTTL           time.Duration
+	CleanupInterval    time.Duration      // interval for background expired-request cleanup; 0 = disabled
 	Now                func() time.Time
 	Auth               Authenticator      // optional; nil means no auth required
 	WorkspaceValidator WorkspaceValidator // optional; nil means no workspace enforcement
@@ -78,6 +79,9 @@ type Manager struct {
 	nextID             uint64
 	auth               Authenticator
 	workspaceValidator WorkspaceValidator
+
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -91,13 +95,47 @@ func NewManager(cfg ManagerConfig) *Manager {
 		now = time.Now
 	}
 
-	return &Manager{
+	m := &Manager{
 		nodes:              make(map[string]Node),
 		pending:            make(map[string][]PendingRequest),
 		queueTTL:           queueTTL,
 		now:                now,
 		auth:               cfg.Auth,
 		workspaceValidator: cfg.WorkspaceValidator,
+		stopCh:             make(chan struct{}),
+	}
+
+	if cfg.CleanupInterval > 0 {
+		go m.cleanupLoop(cfg.CleanupInterval)
+	}
+
+	return m
+}
+
+// Stop stops the background cleanup goroutine if one was started. Safe to call
+// multiple times and on managers created without a CleanupInterval.
+func (m *Manager) Stop() {
+	m.stopOnce.Do(func() { close(m.stopCh) })
+}
+
+// cleanupLoop periodically prunes fully-expired pending queues to prevent map
+// key accumulation for offline nodes that never call QueueToolCall again.
+func (m *Manager) cleanupLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.mu.Lock()
+			now := m.now()
+			for nodeID := range m.pending {
+				m.pruneExpiredLocked(nodeID, now)
+			}
+			m.mu.Unlock()
+		case <-m.stopCh:
+			return
+		}
 	}
 }
 
@@ -174,6 +212,7 @@ func (m *Manager) Disconnect(nodeID string) error {
 
 	node, ok := m.nodes[nodeID]
 	if !ok {
+		slog.Warn("Disconnect: node not found", "node_id", nodeID)
 		return sigilerr.New(sigilerr.CodeServerEntityNotFound, "node not found",
 			sigilerr.Field("node_id", nodeID))
 	}
@@ -230,6 +269,7 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 			sigilerr.Field("node_id", nodeID))
 	}
 	if node.Online {
+		slog.Warn("QueueToolCall: node is online, cannot queue", "node_id", nodeID)
 		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "node is online; queueing is only for offline nodes",
 			sigilerr.Field("node_id", nodeID))
 	}
@@ -244,6 +284,7 @@ func (m *Manager) QueueToolCall(nodeID, tool, args string) (string, error) {
 	m.pruneExpiredLocked(nodeID, now)
 
 	if len(m.pending[nodeID]) >= maxPendingPerNode {
+		slog.Warn("QueueToolCall: pending queue full", "node_id", nodeID, "queue_size", maxPendingPerNode)
 		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "pending queue is full for node",
 			sigilerr.Field("node_id", nodeID))
 	}
@@ -267,6 +308,7 @@ func (m *Manager) PendingRequests(nodeID string) ([]PendingRequest, error) {
 	defer m.mu.RUnlock()
 
 	if _, ok := m.nodes[nodeID]; !ok {
+		slog.Debug("PendingRequests: node not found", "node_id", nodeID)
 		return nil, sigilerr.New(sigilerr.CodeServerEntityNotFound, "node not found",
 			sigilerr.Field("node_id", nodeID))
 	}
@@ -299,5 +341,9 @@ func (m *Manager) pruneExpiredLocked(nodeID string, now time.Time) {
 		delete(m.pending, nodeID)
 		return
 	}
-	m.pending[nodeID] = keep
+
+	// Copy to a fresh allocation to release the backing array held by expired entries.
+	copied := make([]PendingRequest, len(keep))
+	copy(copied, keep)
+	m.pending[nodeID] = copied
 }

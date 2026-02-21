@@ -295,6 +295,20 @@ func TestTokenAuthAuthenticate(t *testing.T) {
 	})
 }
 
+func TestTailscaleAuthCheckTagNilReceiver(t *testing.T) {
+	var auth *node.TailscaleAuth
+	err := auth.CheckTag([]string{"tag:agent-node"})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerConfigInvalid))
+}
+
+func TestTokenAuthCheckTokenNilReceiver(t *testing.T) {
+	var auth *node.TokenAuth
+	err := auth.CheckToken("any-token")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerConfigInvalid))
+}
+
 func TestNewTailscaleAuthRejectsInvalidConfig(t *testing.T) {
 	tests := []struct {
 		name     string
