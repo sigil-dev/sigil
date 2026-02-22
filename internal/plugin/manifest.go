@@ -48,6 +48,13 @@ var validExecutionTiers = map[ExecutionTier]bool{
 
 // capPatternRe matches valid capability pattern characters.
 var capPatternRe = regexp.MustCompile(`^[a-zA-Z0-9.*_\-/]+$`)
+var containerMemoryLimitRe = regexp.MustCompile(`^([1-9][0-9]*)(Ki|Mi|Gi)?$`)
+
+var validContainerNetworkModes = map[string]bool{
+	"none":       true,
+	"restricted": true,
+	"host":       true,
+}
 
 // semverRe matches strict semver (no "v" prefix): MAJOR.MINOR.PATCH[-prerelease][+build].
 // Leading zeros on numeric segments are disallowed per semver spec.
@@ -75,8 +82,11 @@ type Manifest struct {
 
 // ExecutionConfig defines how the plugin should be executed.
 type ExecutionConfig struct {
-	Tier    ExecutionTier `yaml:"tier"`
-	Sandbox SandboxConfig `yaml:"sandbox,omitempty"`
+	Tier        ExecutionTier `yaml:"tier"`
+	Sandbox     SandboxConfig `yaml:"sandbox,omitempty"`
+	Image       string        `yaml:"image,omitempty"`
+	Network     string        `yaml:"network,omitempty"`
+	MemoryLimit string        `yaml:"memory_limit,omitempty"`
 }
 
 // SandboxConfig defines sandbox restrictions for process-tier plugins.
@@ -146,6 +156,9 @@ func (m *Manifest) Validate() []error {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 			"manifest validation: execution tier must be one of [wasm, process, container], got %q", m.Execution.Tier))
 	}
+	if m.Execution.Tier == TierContainer {
+		errs = append(errs, validateContainerExecution(m.Execution)...)
+	}
 
 	for i, cap := range m.Capabilities {
 		if err := validateCapPattern(cap); err != nil {
@@ -186,9 +199,41 @@ func (m *Manifest) Validate() []error {
 		}
 	}
 
-	// TODO(sigil-7ek.3): Add validation for container-tier specific fields when design is finalized.
-	// Fields to track: config_schema, dependencies, storage backends, resource limits, network isolation.
-	// See docs/design/02-plugin-system.md for container execution model.
+	return errs
+}
+
+func validateContainerExecution(execCfg ExecutionConfig) []error {
+	var errs []error
+
+	image := strings.TrimSpace(execCfg.Image)
+	if image == "" {
+		errs = append(errs, sigilerr.New(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation: execution.image is required for container tier"))
+	} else {
+		if strings.ContainsAny(image, " \t\r\n") {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+				"manifest validation: execution.image %q must not contain whitespace", execCfg.Image))
+		}
+		if strings.HasPrefix(image, "/") || strings.HasPrefix(image, ".") || strings.Contains(image, "..") {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+				"manifest validation: execution.image %q must be an OCI image reference", execCfg.Image))
+		}
+	}
+
+	mem := strings.TrimSpace(execCfg.MemoryLimit)
+	if mem == "" {
+		errs = append(errs, sigilerr.New(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation: execution.memory_limit is required for container tier"))
+	} else if !containerMemoryLimitRe.MatchString(mem) {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation: execution.memory_limit must match <positive-int>[Ki|Mi|Gi], got %q", execCfg.MemoryLimit))
+	}
+
+	network := strings.TrimSpace(execCfg.Network)
+	if network != "" && !validContainerNetworkModes[network] {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation: execution.network must be one of [none, restricted, host], got %q", execCfg.Network))
+	}
 
 	return errs
 }
