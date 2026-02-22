@@ -48,7 +48,6 @@ var validExecutionTiers = map[ExecutionTier]bool{
 
 // capPatternRe matches valid capability pattern characters.
 var capPatternRe = regexp.MustCompile(`^[a-zA-Z0-9.*_\-/]+$`)
-var containerMemoryLimitRe = regexp.MustCompile(`^([1-9][0-9]*)(Ki|Mi|Gi)?$`)
 
 var validContainerNetworkModes = map[string]bool{
 	"none":       true,
@@ -224,7 +223,7 @@ func validateContainerExecution(execCfg ExecutionConfig) []error {
 	if mem == "" {
 		errs = append(errs, sigilerr.New(sigilerr.CodePluginManifestValidateInvalid,
 			"manifest validation: execution.memory_limit is required for container tier"))
-	} else if !containerMemoryLimitRe.MatchString(mem) {
+	} else if _, err := ParseMemoryLimit(mem); err != nil {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 			"manifest validation: execution.memory_limit must match <positive-int>[Ki|Mi|Gi], got %q", execCfg.MemoryLimit))
 	}

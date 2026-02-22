@@ -83,6 +83,21 @@ func TestContainerConfigFromManifestValidation(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
 	})
+
+	t.Run("invalid network mode", func(t *testing.T) {
+		manifest := &plugin.Manifest{
+			Name: "bad",
+			Execution: plugin.ExecutionConfig{
+				Tier:        plugin.TierContainer,
+				Image:       "ghcr.io/org/tool:latest",
+				Network:     "macvlan",
+				MemoryLimit: "256Mi",
+			},
+		}
+		_, err := container.ConfigFromManifest(manifest)
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+	})
 }
 
 func TestParseMemoryLimit(t *testing.T) {
@@ -116,6 +131,7 @@ func TestParseMemoryLimitInvalid(t *testing.T) {
 		{name: "negative", input: "-1Mi"},
 		{name: "zero", input: "0"},
 		{name: "non numeric", input: "abc"},
+		{name: "overflow gi", input: "9999999999999Gi"},
 	}
 
 	for _, tt := range tests {
@@ -125,6 +141,16 @@ func TestParseMemoryLimitInvalid(t *testing.T) {
 			assert.True(t, sigilerr.HasCode(err, sigilerr.CodeConfigValidateInvalidValue))
 		})
 	}
+}
+
+func TestRuntimeLifecycleStopWithUnknownIDUsesDefaultTimeout(t *testing.T) {
+	engine := &fakeEngine{createID: "ctr-known"}
+	runtime := container.NewRuntime(engine)
+
+	// Stop an ID that was never registered via Start — runtime falls back to DefaultStopTimeout.
+	err := runtime.Stop(context.Background(), "unknown-ctr")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"stop", "remove"}, engine.calls)
 }
 
 func TestValidateImage(t *testing.T) {

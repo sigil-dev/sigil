@@ -39,6 +39,8 @@ func TestOCIEngineCreateRestrictedNetworkBuildsIsolationFlags(t *testing.T) {
 	assert.Contains(t, runner.calls[0].args, "--publish")
 	assert.Contains(t, runner.calls[0].args, "127.0.0.1:50051:50051/tcp")
 	assert.Contains(t, runner.calls[0].args, "ghcr.io/org/python-tool:latest")
+	assert.Contains(t, runner.calls[0].args, "--network")
+	assert.Contains(t, runner.calls[0].args, "bridge")
 }
 
 func TestOCIEngineCreateHostNetworkSkipsPortPublish(t *testing.T) {
@@ -61,19 +63,103 @@ func TestOCIEngineCreateHostNetworkSkipsPortPublish(t *testing.T) {
 }
 
 func TestOCIEngineCreateValidatesRequest(t *testing.T) {
-	runner := &fakeRunner{}
+	tests := []struct {
+		name     string
+		req      CreateContainerRequest
+		wantCode sigilerr.Code
+	}{
+		{
+			name: "zero memory limit",
+			req: CreateContainerRequest{
+				PluginName:       "python-tool",
+				Image:            "ghcr.io/org/python-tool:latest",
+				NetworkMode:      NetworkRestricted,
+				MemoryLimitBytes: 0,
+				GRPCPort:         50051,
+			},
+			wantCode: sigilerr.CodePluginRuntimeConfigInvalid,
+		},
+		{
+			name: "zero grpc port",
+			req: CreateContainerRequest{
+				PluginName:       "python-tool",
+				Image:            "ghcr.io/org/python-tool:latest",
+				NetworkMode:      NetworkRestricted,
+				MemoryLimitBytes: 256 * 1024 * 1024,
+				GRPCPort:         0,
+			},
+			wantCode: sigilerr.CodePluginRuntimeConfigInvalid,
+		},
+		{
+			name: "grpc port out of range",
+			req: CreateContainerRequest{
+				PluginName:       "python-tool",
+				Image:            "ghcr.io/org/python-tool:latest",
+				NetworkMode:      NetworkRestricted,
+				MemoryLimitBytes: 256 * 1024 * 1024,
+				GRPCPort:         65536,
+			},
+			wantCode: sigilerr.CodePluginRuntimeConfigInvalid,
+		},
+		{
+			name: "empty plugin name",
+			req: CreateContainerRequest{
+				PluginName:       "",
+				Image:            "ghcr.io/org/python-tool:latest",
+				NetworkMode:      NetworkRestricted,
+				MemoryLimitBytes: 256 * 1024 * 1024,
+				GRPCPort:         50051,
+			},
+			wantCode: sigilerr.CodePluginManifestValidateInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			engine := newOCIEngineWithRunner("docker", runner)
+
+			_, err := engine.Create(context.Background(), tt.req)
+			require.Error(t, err)
+			assert.True(t, sigilerr.HasCode(err, tt.wantCode))
+			assert.Empty(t, runner.calls)
+		})
+	}
+}
+
+func TestOCIEngineCreateDoesNotPassDetachFlag(t *testing.T) {
+	runner := &fakeRunner{
+		outputs: []string{"ctr-123"},
+	}
 	engine := newOCIEngineWithRunner("docker", runner)
 
 	_, err := engine.Create(context.Background(), CreateContainerRequest{
 		PluginName:       "python-tool",
 		Image:            "ghcr.io/org/python-tool:latest",
 		NetworkMode:      NetworkRestricted,
-		MemoryLimitBytes: 0,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+	})
+	require.NoError(t, err)
+	require.Len(t, runner.calls, 1)
+	assert.NotContains(t, runner.calls[0].args, "--detach")
+}
+
+func TestOCIEngineCreateReturnsErrorOnEmptyContainerID(t *testing.T) {
+	runner := &fakeRunner{
+		outputs: []string{""},
+	}
+	engine := newOCIEngineWithRunner("docker", runner)
+
+	_, err := engine.Create(context.Background(), CreateContainerRequest{
+		PluginName:       "python-tool",
+		Image:            "ghcr.io/org/python-tool:latest",
+		NetworkMode:      NetworkRestricted,
+		MemoryLimitBytes: 256 * 1024 * 1024,
 		GRPCPort:         50051,
 	})
 	require.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-	assert.Empty(t, runner.calls)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeStartFailure))
 }
 
 func TestOCIEngineLifecycleCommands(t *testing.T) {

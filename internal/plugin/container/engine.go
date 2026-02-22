@@ -69,7 +69,6 @@ func (e *OCIEngine) Create(ctx context.Context, req CreateContainerRequest) (str
 
 	args := []string{
 		"create",
-		"--detach",
 		"--name", containerName(req.PluginName),
 		"--read-only",
 		"--cap-drop", "ALL",
@@ -136,11 +135,11 @@ func validateCreateRequest(req CreateContainerRequest) error {
 			"network mode must be one of [none, restricted, host], got %q", req.NetworkMode)
 	}
 	if req.MemoryLimitBytes <= 0 {
-		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+		return sigilerr.Errorf(sigilerr.CodePluginRuntimeConfigInvalid,
 			"memory limit must be > 0, got %d", req.MemoryLimitBytes)
 	}
 	if req.GRPCPort <= 0 || req.GRPCPort > 65535 {
-		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+		return sigilerr.Errorf(sigilerr.CodePluginRuntimeConfigInvalid,
 			"grpc port must be in range 1..65535, got %d", req.GRPCPort)
 	}
 	return nil
@@ -161,5 +160,5 @@ func containerName(pluginName string) string {
 	name := strings.ToLower(strings.TrimSpace(pluginName))
 	name = strings.ReplaceAll(name, "_", "-")
 	name = strings.ReplaceAll(name, " ", "-")
-	return "sigil-" + name + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	return "sigil-" + name
 }

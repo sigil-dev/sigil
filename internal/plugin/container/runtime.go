@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,8 +37,7 @@ var (
 		NetworkRestricted: true,
 		NetworkHost:       true,
 	}
-	memoryPattern = regexp.MustCompile(`^([1-9][0-9]*)(Ki|Mi|Gi)?$`)
-	imagePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./:_-]*$`)
+	imagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./:_-]*$`)
 )
 
 // ContainerConfig captures runtime settings for container-tier plugin execution.
@@ -123,36 +121,9 @@ func ConfigFromManifest(manifest *plugin.Manifest) (*ContainerConfig, error) {
 }
 
 // ParseMemoryLimit parses memory limits like "256Mi", "1Gi", or raw bytes "4096".
+// Delegates to plugin.ParseMemoryLimit for canonical validation.
 func ParseMemoryLimit(limit string) (int64, error) {
-	match := memoryPattern.FindStringSubmatch(strings.TrimSpace(limit))
-	if len(match) != 3 {
-		return 0, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"memory_limit must match <positive-int>[Ki|Mi|Gi], got %q", limit)
-	}
-
-	base, err := strconv.ParseInt(match[1], 10, 64)
-	if err != nil {
-		return 0, sigilerr.Wrapf(err, sigilerr.CodeConfigValidateInvalidValue,
-			"parsing memory_limit %q", limit)
-	}
-
-	factor := int64(1)
-	switch match[2] {
-	case "Ki":
-		factor = 1024
-	case "Mi":
-		factor = 1024 * 1024
-	case "Gi":
-		factor = 1024 * 1024 * 1024
-	}
-
-	value := base * factor
-	if value <= 0 {
-		return 0, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
-			"memory_limit must be > 0, got %q", limit)
-	}
-
-	return value, nil
+	return plugin.ParseMemoryLimit(limit)
 }
 
 // ValidateImage performs basic validation on OCI image references.
@@ -280,13 +251,14 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 	if err := r.engine.Stop(ctx, id, timeout); err != nil {
 		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "stopping container %s", id)
 	}
-	if err := r.engine.Remove(ctx, id); err != nil {
-		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "removing container %s", id)
-	}
 
 	r.mu.Lock()
 	delete(r.stopTimeouts, id)
 	r.mu.Unlock()
+
+	if err := r.engine.Remove(ctx, id); err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "removing container %s", id)
+	}
 
 	return nil
 }
