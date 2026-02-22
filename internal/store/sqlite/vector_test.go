@@ -5,6 +5,7 @@ package sqlite_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/store/sqlite"
@@ -144,4 +145,27 @@ func TestVectorStore_SearchEmpty(t *testing.T) {
 	results, err := vs.Search(ctx, []float32{1.0, 0.0, 0.0}, 5, nil)
 	require.NoError(t, err)
 	assert.Empty(t, results)
+}
+
+func TestVectorStore_Persistence(t *testing.T) {
+	ctx := context.Background()
+	snapPath := filepath.Join(t.TempDir(), "vectors.chromem")
+
+	// Write to first instance
+	vs, err := sqlite.NewVectorStore(snapPath, 3)
+	require.NoError(t, err)
+	err = vs.Store(ctx, "v1", []float32{1.0, 0.0, 0.0}, map[string]any{"k": "v"})
+	require.NoError(t, err)
+	_ = vs.Close()
+
+	// Reopen from snapshot
+	vs2, err := sqlite.NewVectorStore(snapPath, 3)
+	require.NoError(t, err)
+	defer func() { _ = vs2.Close() }()
+
+	results, err := vs2.Search(ctx, []float32{1.0, 0.0, 0.0}, 1, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "v1", results[0].ID)
+	assert.Equal(t, "v", results[0].Metadata["k"])
 }

@@ -303,7 +303,7 @@ func TestMigrate_MemoryMessagesOriginColumn(t *testing.T) {
 
 	// Bootstrap a database with the old memory_messages schema — without origin.
 	{
-		db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+		db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 		require.NoError(t, err)
 
 		_, err = db.Exec(`

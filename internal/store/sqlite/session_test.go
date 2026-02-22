@@ -329,7 +329,7 @@ func TestMigrate_AddThreatInfoColumn(t *testing.T) {
 
 	// Bootstrap a database with the old schema — messages table without threat_info.
 	{
-		db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+		db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 		require.NoError(t, err)
 
 		_, err = db.Exec(`
@@ -516,7 +516,7 @@ func TestSessionStore_LegacyThreatInfoBackwardCompat(t *testing.T) {
 
 	// Simulate a legacy record by overwriting threat_info with '{}' via raw SQL.
 	// This represents a message written before the Scanned field was introduced.
-	rawDB, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+	rawDB, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 	require.NoError(t, err)
 	defer func() { _ = rawDB.Close() }()
 
