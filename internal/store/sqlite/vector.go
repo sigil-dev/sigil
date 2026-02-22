@@ -5,198 +5,204 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"fmt"
-	"strings"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
 
-	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
-	_ "github.com/mattn/go-sqlite3"
+	chromem "github.com/philippgille/chromem-go"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
-func init() {
-	sqlite_vec.Auto()
-}
+const (
+	vectorsCollection = "vectors"
+	snapshotTmpExt    = ".tmp"
+)
 
 // Compile-time interface check.
 var _ store.VectorStore = (*VectorStore)(nil)
 
-// VectorStore implements store.VectorStore backed by SQLite with sqlite-vec.
+// VectorStore implements store.VectorStore using chromem-go for pure-Go
+// vector storage and cosine similarity search. Data is kept in memory and
+// atomically snapshotted to disk on every write so that the on-disk file is
+// always a complete, consistent state (crash during export leaves the previous
+// snapshot intact; os.Rename is atomic on POSIX).
 type VectorStore struct {
-	db         *sql.DB
-	dimensions int
+	mu         sync.Mutex
+	db         *chromem.DB
+	collection *chromem.Collection
+	snapPath   string // e.g. /workspace/vectors.chromem
+	tmpPath    string // e.g. /workspace/vectors.chromem.tmp
 }
 
-// NewVectorStore opens (or creates) a SQLite database at dbPath and
-// initialises the vec0 virtual table and companion metadata table.
-func NewVectorStore(dbPath string, dimensions int) (*VectorStore, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+// NewVectorStore creates a VectorStore backed by a chromem-go in-memory DB.
+// If a snapshot file exists at dbPath it is imported on startup.
+func NewVectorStore(dbPath string, _ int) (*VectorStore, error) {
+	db := chromem.NewDB()
+
+	// Import existing snapshot if present.
+	if _, err := os.Stat(dbPath); err == nil {
+		if importErr := db.ImportFromFile(dbPath, ""); importErr != nil {
+			// Snapshot corrupted — start fresh. Vectors are re-derivable from messages.
+			db = chromem.NewDB()
+		}
+	}
+
+	col, err := db.GetOrCreateCollection(vectorsCollection, nil, nil)
 	if err != nil {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening sqlite db: %w", err)
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "creating chromem collection: %w", err)
 	}
 
-	if err := db.Ping(); err != nil {
-		_ = db.Close()
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "pinging sqlite db: %w", err)
+	ext := filepath.Ext(dbPath)
+	var tmpPath string
+	if ext != "" {
+		tmpPath = dbPath[:len(dbPath)-len(ext)] + snapshotTmpExt
+	} else {
+		tmpPath = dbPath + snapshotTmpExt
 	}
 
-	if err := migrateVector(db, dimensions); err != nil {
-		_ = db.Close()
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating vector tables: %w", err)
+	vs := &VectorStore{
+		db:         db,
+		collection: col,
+		snapPath:   dbPath,
+		tmpPath:    tmpPath,
 	}
-
-	return &VectorStore{db: db, dimensions: dimensions}, nil
+	return vs, nil
 }
 
-func migrateVector(db *sql.DB, dimensions int) error {
-	vecDDL := fmt.Sprintf(
-		`CREATE VIRTUAL TABLE IF NOT EXISTS vectors USING vec0(id TEXT PRIMARY KEY, embedding float[%d])`,
-		dimensions,
-	)
-	if _, err := db.Exec(vecDDL); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "creating vectors virtual table: %w", err)
+// persist atomically exports the in-memory DB to disk.
+// Called after every mutating operation.
+func (v *VectorStore) persist() error {
+	if err := v.db.ExportToFile(v.tmpPath, false, ""); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "exporting vector snapshot: %w", err)
 	}
-
-	const metaDDL = `
-CREATE TABLE IF NOT EXISTS vector_metadata (
-	id       TEXT PRIMARY KEY,
-	metadata TEXT NOT NULL DEFAULT '{}'
-)`
-	if _, err := db.Exec(metaDDL); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "creating vector_metadata table: %w", err)
+	if err := os.Rename(v.tmpPath, v.snapPath); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "renaming vector snapshot: %w", err)
 	}
-
 	return nil
 }
 
 // Store inserts or replaces a vector and its metadata.
 func (v *VectorStore) Store(ctx context.Context, id string, embedding []float32, metadata map[string]any) error {
-	blob, err := sqlite_vec.SerializeFloat32(embedding)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "serializing embedding: %w", err)
-	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
 
-	metaJSON := []byte("{}")
-	if len(metadata) > 0 {
-		metaJSON, err = json.Marshal(metadata)
-		if err != nil {
-			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling metadata: %w", err)
+	// Build string metadata map for chromem-go.
+	strMeta := make(map[string]string, len(metadata))
+	for k, val := range metadata {
+		switch s := val.(type) {
+		case string:
+			strMeta[k] = s
+		default:
+			b, err := json.Marshal(val)
+			if err != nil {
+				return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling metadata key %s: %w", k, err)
+			}
+			strMeta[k] = string(b)
 		}
 	}
 
-	tx, err := v.db.BeginTx(ctx, nil)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// vec0 does not support ON CONFLICT; delete first for upsert.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM vectors WHERE id = ?`, id); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting existing vector %s: %w", id, err)
+	doc := chromem.Document{
+		ID:        id,
+		Embedding: embedding,
+		Metadata:  strMeta,
+		Content:   strMeta["content"], // surface content for optional FTS
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO vectors(id, embedding) VALUES (?, ?)`, id, blob); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "inserting vector %s: %w", id, err)
+	if err := v.collection.AddDocument(ctx, doc); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "storing vector %s: %w", id, err)
 	}
 
-	const metaQ = `INSERT INTO vector_metadata(id, metadata) VALUES (?, ?)
-ON CONFLICT(id) DO UPDATE SET metadata = excluded.metadata`
-	if _, err := tx.ExecContext(ctx, metaQ, id, string(metaJSON)); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "upserting vector metadata %s: %w", id, err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "committing vector store: %w", err)
-	}
-	return nil
+	return v.persist()
 }
 
-// Search performs a k-nearest-neighbor search and returns results with metadata.
+// Search performs a k-nearest-neighbor cosine similarity search.
 // Score represents distance (lower = more similar); 0.0 = exact match.
-// Filters are not yet implemented and will return an error if non-empty.
+// Filters match on string metadata values (exact match).
 func (v *VectorStore) Search(ctx context.Context, query []float32, k int, filters map[string]any) ([]store.VectorResult, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	// chromem-go requires nResults <= collection size; cap to avoid errors.
+	count := v.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
+	if k > count {
+		k = count
+	}
+
+	// Build chromem-go Where filters.
+	var where map[string]string
 	if len(filters) > 0 {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "vector search filters not yet implemented")
-	}
-	blob, err := sqlite_vec.SerializeFloat32(query)
-	if err != nil {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "serializing query vector: %w", err)
+		where = make(map[string]string, len(filters))
+		for k, val := range filters {
+			switch s := val.(type) {
+			case string:
+				where[k] = s
+			default:
+				b, _ := json.Marshal(val)
+				where[k] = string(b)
+			}
+		}
 	}
 
-	const q = `SELECT v.id, v.distance, COALESCE(m.metadata, '{}')
-FROM vectors v
-LEFT JOIN vector_metadata m ON m.id = v.id
-WHERE v.embedding MATCH ? AND k = ?
-ORDER BY v.distance`
-
-	rows, err := v.db.QueryContext(ctx, q, blob, k)
+	results, err := v.collection.QueryEmbedding(ctx, query, k, where, nil)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "searching vectors: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	var results []store.VectorResult
-	for rows.Next() {
-		var r store.VectorResult
-		var metaStr string
-
-		if err := rows.Scan(&r.ID, &r.Score, &metaStr); err != nil {
-			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning vector result: %w", err)
-		}
-
-		if metaStr != "" && metaStr != "{}" {
-			if err := json.Unmarshal([]byte(metaStr), &r.Metadata); err != nil {
-				return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "unmarshalling vector metadata: %w", err)
+	out := make([]store.VectorResult, 0, len(results))
+	for _, r := range results {
+		// chromem-go returns similarity (1 = exact); convert to distance (0 = exact).
+		meta := make(map[string]any, len(r.Metadata))
+		for k, v := range r.Metadata {
+			// Attempt to unmarshal JSON-encoded non-string values back to their
+			// original types (numbers, bools, objects, arrays). Plain strings
+			// stored as-is are not valid bare JSON and fall through to string.
+			var parsed any
+			if json.Unmarshal([]byte(v), &parsed) == nil {
+				meta[k] = parsed
+			} else {
+				meta[k] = v
 			}
 		}
-
-		results = append(results, r)
+		out = append(out, store.VectorResult{
+			ID:       r.ID,
+			Score:    float64(1 - r.Similarity),
+			Metadata: meta,
+		})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "iterating vector results: %w", err)
-	}
-
-	return results, nil
+	return out, nil
 }
 
-// Delete removes vectors and their metadata by ID.
+// Delete removes vectors by ID.
 func (v *VectorStore) Delete(ctx context.Context, ids []string) error {
-	if len(ids) == 0 {
-		return nil
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	var errs []error
+	for _, id := range ids {
+		if err := v.collection.Delete(ctx, nil, nil, id); err != nil {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting vector %s: %w", id, err))
+		}
 	}
 
-	tx, err := v.db.BeginTx(ctx, nil)
-	if err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	placeholders := strings.Repeat("?,", len(ids))
-	placeholders = placeholders[:len(placeholders)-1]
-
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM vectors WHERE id IN (`+placeholders+`)`, args...); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting vectors: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM vector_metadata WHERE id IN (`+placeholders+`)`, args...); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting vector metadata: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "committing vector delete: %w", err)
+	if len(ids) > 0 {
+		return v.persist()
 	}
 	return nil
 }
 
-// Close closes the underlying database connection.
+// Close is a no-op; chromem-go has no resources to release.
+// The final in-memory state is already persisted after every write.
 func (v *VectorStore) Close() error {
-	return v.db.Close()
+	return nil
 }

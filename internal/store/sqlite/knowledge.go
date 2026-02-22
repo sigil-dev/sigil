@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
@@ -31,7 +31,7 @@ type KnowledgeStore struct {
 // NewKnowledgeStore opens (or creates) a SQLite database at dbPath and
 // initialises the single RDF triples table with SPO/POS/OSP indexes.
 func NewKnowledgeStore(dbPath string) (*KnowledgeStore, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening sqlite db: %w", err)
 	}

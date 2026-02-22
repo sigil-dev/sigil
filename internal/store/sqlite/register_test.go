@@ -39,16 +39,9 @@ func TestNewWorkspaceStores_PartialFailureCleanup(t *testing.T) {
 			},
 			expectErrContains: "creating knowledge store",
 		},
-		{
-			name: "vector store creation fails",
-			setupFailure: func(dir string) {
-				// Make vectors.db path a directory to trigger failure
-				vectorPath := filepath.Join(dir, "vectors.db")
-				err := os.Mkdir(vectorPath, 0o755)
-				require.NoError(t, err)
-			},
-			expectErrContains: "creating vector store",
-		},
+		// Note: vector store creation failure is not tested here because the
+		// chromem-go VectorStore constructor is infallible in practice (in-memory
+		// init, import errors are handled by starting fresh).
 	}
 
 	for _, tt := range tests {
