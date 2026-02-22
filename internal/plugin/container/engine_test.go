@@ -80,6 +80,36 @@ func TestOCIEngineCreateDoesNotPassDetachFlag(t *testing.T) {
 	assert.NotContains(t, runner.calls[0].args, "--detach")
 }
 
+func TestOCIEngineCreateRejectsInvalidPluginName(t *testing.T) {
+	tests := []struct {
+		name       string
+		pluginName string
+	}{
+		{"blank name", ""},
+		{"whitespace only", "   "},
+		{"all special chars", "!!!"},
+		{"only hyphens after sanitization", "@@@"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			engine := newOCIEngineWithRunner("docker", runner)
+
+			_, err := engine.Create(context.Background(), CreateContainerRequest{
+				PluginName:       tt.pluginName,
+				Image:            "ghcr.io/org/test:latest",
+				NetworkMode:      NetworkRestricted,
+				MemoryLimitBytes: 256 * 1024 * 1024,
+				GRPCPort:         50051,
+			})
+			require.Error(t, err)
+			assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+			assert.Empty(t, runner.calls, "runner must not be invoked for invalid plugin names")
+		})
+	}
+}
+
 func TestOCIEngineCreateReturnsErrorOnEmptyContainerID(t *testing.T) {
 	runner := &fakeRunner{
 		outputs: []string{""},
@@ -269,20 +299,27 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 
 func TestNetworkArg(t *testing.T) {
 	tests := []struct {
-		name string
-		mode NetworkMode
-		want string
+		name    string
+		mode    NetworkMode
+		want    string
+		wantErr bool
 	}{
-		{"NetworkNone returns none", NetworkNone, "none"},
-		{"NetworkHost returns host", NetworkHost, "host"},
-		{"NetworkRestricted returns bridge", NetworkRestricted, "bridge"},
-		{"unknown mode returns bridge", NetworkMode("unknown"), "bridge"},
+		{"NetworkNone returns none", NetworkNone, "none", false},
+		{"NetworkHost returns host", NetworkHost, "host", false},
+		{"NetworkRestricted returns bridge", NetworkRestricted, "bridge", false},
+		{"unknown mode returns error", NetworkMode("unknown"), "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := networkArg(tt.mode)
-			assert.Equal(t, tt.want, got)
+			got, err := networkArg(tt.mode)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
 		})
 	}
 }

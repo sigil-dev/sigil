@@ -38,7 +38,7 @@ func ParseMemoryLimit(limit string) (int64, error) {
 	}
 
 	value := base * factor
-	if factor != 0 && value/factor != base {
+	if value/factor != base {
 		return 0, sigilerr.Errorf(sigilerr.CodeConfigValidateInvalidValue,
 			"memory_limit %q overflows int64", limit)
 	}

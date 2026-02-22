@@ -6,6 +6,8 @@ package container_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,24 +19,51 @@ import (
 )
 
 func TestContainerConfigFromManifest(t *testing.T) {
-	manifest := &plugin.Manifest{
-		Name: "python-tool",
-		Execution: plugin.ExecutionConfig{
-			Tier:        plugin.TierContainer,
-			Image:       "ghcr.io/org/python-tool:latest",
-			Network:     "restricted",
-			MemoryLimit: "256Mi",
+	tests := []struct {
+		name            string
+		manifest        *plugin.Manifest
+		wantNetworkMode container.NetworkMode
+	}{
+		{
+			name: "explicit restricted network",
+			manifest: &plugin.Manifest{
+				Name: "python-tool",
+				Execution: plugin.ExecutionConfig{
+					Tier:        plugin.TierContainer,
+					Image:       "ghcr.io/org/python-tool:latest",
+					Network:     "restricted",
+					MemoryLimit: "256Mi",
+				},
+			},
+			wantNetworkMode: container.NetworkRestricted,
+		},
+		{
+			name: "empty network defaults to restricted",
+			manifest: &plugin.Manifest{
+				Name: "python-tool",
+				Execution: plugin.ExecutionConfig{
+					Tier:        plugin.TierContainer,
+					Image:       "ghcr.io/org/python-tool:latest",
+					Network:     "",
+					MemoryLimit: "256Mi",
+				},
+			},
+			wantNetworkMode: container.NetworkRestricted,
 		},
 	}
 
-	cfg, err := container.ConfigFromManifest(manifest)
-	require.NoError(t, err)
-	assert.Equal(t, "python-tool", cfg.PluginName)
-	assert.Equal(t, "ghcr.io/org/python-tool:latest", cfg.Image)
-	assert.Equal(t, container.NetworkRestricted, cfg.NetworkMode)
-	assert.Equal(t, int64(256*1024*1024), cfg.MemoryLimitBytes)
-	assert.Equal(t, container.DefaultGRPCPort, cfg.GRPCPort)
-	assert.Equal(t, container.DefaultStopTimeout, cfg.StopTimeout)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := container.ConfigFromManifest(tt.manifest)
+			require.NoError(t, err)
+			assert.Equal(t, "python-tool", cfg.PluginName)
+			assert.Equal(t, "ghcr.io/org/python-tool:latest", cfg.Image)
+			assert.Equal(t, tt.wantNetworkMode, cfg.NetworkMode)
+			assert.Equal(t, int64(256*1024*1024), cfg.MemoryLimitBytes)
+			assert.Equal(t, container.DefaultGRPCPort, cfg.GRPCPort)
+			assert.Equal(t, container.DefaultStopTimeout, cfg.StopTimeout)
+		})
+	}
 }
 
 func TestContainerConfigFromManifestValidation(t *testing.T) {
@@ -327,6 +356,69 @@ func TestRuntimeLifecycleStartRejectsInvalidConfig(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
 	assert.Empty(t, engine.calls)
 }
+
+func TestRuntimeConcurrentStartStop(t *testing.T) {
+	engine := &safeFakeEngine{}
+	runtime := container.NewRuntime(engine)
+
+	const workers = 10
+	var wg sync.WaitGroup
+
+	insts := make([]*container.ContainerInstance, workers)
+	var mu sync.Mutex
+	for i := range workers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cfg := container.ContainerConfig{
+				PluginName:       fmt.Sprintf("plugin-%d", i),
+				Image:            "docker.io/test:latest",
+				NetworkMode:      container.NetworkRestricted,
+				MemoryLimitBytes: 64 * 1024 * 1024,
+				GRPCPort:         50051 + i,
+				StopTimeout:      time.Second,
+			}
+			inst, err := runtime.Start(context.Background(), cfg)
+			if err == nil {
+				mu.Lock()
+				insts[i] = inst
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for _, inst := range insts {
+		if inst == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			_ = runtime.Stop(context.Background(), id)
+		}(inst.ID)
+	}
+	wg.Wait()
+}
+
+// safeFakeEngine is a thread-safe Engine implementation for concurrency tests.
+type safeFakeEngine struct {
+	mu      sync.Mutex
+	counter int
+}
+
+func (f *safeFakeEngine) Create(_ context.Context, _ container.CreateContainerRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.counter++
+	return fmt.Sprintf("ctr-%d", f.counter), nil
+}
+
+func (f *safeFakeEngine) Start(_ context.Context, _ string) error { return nil }
+
+func (f *safeFakeEngine) Stop(_ context.Context, _ string, _ time.Duration) error { return nil }
+
+func (f *safeFakeEngine) Remove(_ context.Context, _ string) error { return nil }
 
 type fakeEngine struct {
 	calls     []string

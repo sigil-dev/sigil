@@ -6,7 +6,6 @@ package container
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -28,7 +27,7 @@ func (r execCommandRunner) Run(ctx context.Context, name string, args ...string)
 	trimmed := strings.TrimSpace(string(output))
 	if err != nil {
 		return "", sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure,
-			"running %s %s: %s", name, strings.Join(args, " "), trimmed)
+			"running %s: %s", name, trimmed)
 	}
 	return trimmed, nil
 }
@@ -69,14 +68,27 @@ func (e *OCIEngine) Create(ctx context.Context, req CreateContainerRequest) (str
 	if strings.TrimSpace(req.PluginName) == "" {
 		return "", sigilerr.New(sigilerr.CodePluginManifestValidateInvalid, "plugin name must not be blank")
 	}
+	// Sanitize the plugin name segment first (without the "sigil-" prefix) so that
+	// the alphanumeric check is not trivially satisfied by the prefix itself.
+	nameSegment := invalidContainerNameChars.ReplaceAllString(
+		strings.ToLower(strings.TrimSpace(req.PluginName)), "-")
+	if !alphanumericPattern.MatchString(nameSegment) {
+		return "", sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"plugin name %q produces invalid container name after sanitization", req.PluginName)
+	}
+	sanitized := "sigil-" + nameSegment
+	networkFlag, err := networkArg(req.NetworkMode)
+	if err != nil {
+		return "", err
+	}
 	args := []string{
 		"create",
-		"--name", containerName(req.PluginName),
+		"--name", sanitized,
 		"--read-only",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--memory", strconv.FormatInt(req.MemoryLimitBytes, 10),
-		"--network", networkArg(req.NetworkMode),
+		"--network", networkFlag,
 	}
 	if req.NetworkMode == NetworkRestricted {
 		args = append(args, "--publish", fmt.Sprintf("127.0.0.1:%d:%d/tcp", req.GRPCPort, req.GRPCPort))
@@ -100,7 +112,10 @@ func (e *OCIEngine) Start(ctx context.Context, id string) error {
 		return sigilerr.New(sigilerr.CodePluginRuntimeCallFailure, "container id must not be empty")
 	}
 	_, err := e.runner.Run(ctx, e.runtimeBinary, "start", id)
-	return err
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeStartFailure, "starting container %s", id)
+	}
+	return nil
 }
 
 // Stop gracefully stops a running container.
@@ -113,7 +128,10 @@ func (e *OCIEngine) Stop(ctx context.Context, id string, timeout time.Duration) 
 		seconds = 1
 	}
 	_, err := e.runner.Run(ctx, e.runtimeBinary, "stop", "--time", strconv.Itoa(seconds), id)
-	return err
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "stopping container %s", id)
+	}
+	return nil
 }
 
 // Remove force-removes a container.
@@ -122,26 +140,32 @@ func (e *OCIEngine) Remove(ctx context.Context, id string) error {
 		return sigilerr.New(sigilerr.CodePluginRuntimeCallFailure, "container id must not be empty")
 	}
 	_, err := e.runner.Run(ctx, e.runtimeBinary, "rm", "--force", id)
-	return err
+	if err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "removing container %s", id)
+	}
+	return nil
 }
 
-func networkArg(mode NetworkMode) string {
+func networkArg(mode NetworkMode) (string, error) {
 	switch mode {
 	case NetworkNone:
-		return "none"
+		return "none", nil
 	case NetworkHost:
-		return "host"
+		return "host", nil
 	case NetworkRestricted:
-		return "bridge"
+		return "bridge", nil
 	default:
-		slog.Warn("unrecognized container network mode, defaulting to bridge", "mode", mode)
-		return "bridge"
+		return "", sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"unrecognized container network mode: %q", mode)
 	}
 }
 
 // invalidContainerNameChars matches characters not allowed in Docker container names.
 // Docker names must match [a-zA-Z0-9][a-zA-Z0-9_.-]*.
 var invalidContainerNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
+
+// alphanumericPattern matches strings that contain at least one alphanumeric character.
+var alphanumericPattern = regexp.MustCompile(`[a-zA-Z0-9]`)
 
 func containerName(pluginName string) string {
 	name := strings.ToLower(strings.TrimSpace(pluginName))
