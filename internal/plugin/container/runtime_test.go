@@ -166,6 +166,9 @@ func TestValidateImage(t *testing.T) {
 		{name: "whitespace", image: "ghcr.io/org/tool latest", wantErr: true},
 		{name: "absolute path", image: "/etc/passwd", wantErr: true},
 		{name: "path traversal mid-ref", image: "registry.io/org/../evil:latest", wantErr: true},
+		{name: "digest pinned", image: "ghcr.io/org/tool@sha256:abc123def456"},
+		{name: "tag and digest", image: "ghcr.io/org/tool:v1.0@sha256:abc123def456"},
+		{name: "bare at sign", image: "ghcr.io/org/tool@something"},
 	}
 
 	for _, tt := range tests {
@@ -243,14 +246,33 @@ func TestRuntimeLifecycleStopFailure(t *testing.T) {
 }
 
 func TestRuntimeLifecycleRemoveFailurePreservesTimeout(t *testing.T) {
-	engine := &fakeEngine{removeErr: errors.New("rm failed")}
+	engine := &fakeEngine{createID: "ctr-rm", removeErr: errors.New("rm failed")}
 	runtime := container.NewRuntime(engine)
 
-	err := runtime.Stop(context.Background(), "ctr-rm")
+	// Start registers the container's stop timeout in the runtime's internal map.
+	cfg := container.ContainerConfig{
+		PluginName:       "rm-fail-tool",
+		Image:            "ghcr.io/org/rm-fail-tool:latest",
+		NetworkMode:      container.NetworkRestricted,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      5 * time.Second,
+	}
+	inst, err := runtime.Start(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.Contains(t, runtime.StopTimeouts(), inst.ID, "stop timeout should be registered after Start")
+
+	// Stop succeeds for the engine stop call but Remove fails.
+	err = runtime.Stop(context.Background(), inst.ID)
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeCallFailure))
 	assert.Contains(t, err.Error(), "removing container")
-	assert.Equal(t, []string{"stop", "remove"}, engine.calls)
+	assert.Equal(t, []string{"create", "start", "stop", "remove"}, engine.calls)
+
+	// The stopTimeouts entry MUST be cleaned up even though Remove failed.
+	// Without the fix, delete(r.stopTimeouts, id) would have been skipped,
+	// leaking the entry and causing a memory/logic error on future Stop calls.
+	assert.NotContains(t, runtime.StopTimeouts(), inst.ID, "stop timeout must be deleted after Stop even when Remove fails")
 }
 
 func TestRuntimeLifecycleStartRejectsNetworkNone(t *testing.T) {

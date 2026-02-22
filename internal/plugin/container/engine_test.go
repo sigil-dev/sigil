@@ -266,3 +266,23 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 	}
 	return out, nil
 }
+
+func TestNetworkArg(t *testing.T) {
+	tests := []struct {
+		name string
+		mode NetworkMode
+		want string
+	}{
+		{"NetworkNone returns none", NetworkNone, "none"},
+		{"NetworkHost returns host", NetworkHost, "host"},
+		{"NetworkRestricted returns bridge", NetworkRestricted, "bridge"},
+		{"unknown mode returns bridge", NetworkMode("unknown"), "bridge"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := networkArg(tt.mode)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

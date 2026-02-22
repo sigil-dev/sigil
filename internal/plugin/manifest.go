@@ -30,6 +30,11 @@ var validPluginTypes = map[PluginType]bool{
 	TypeSkill:    true,
 }
 
+// validOCIImagePattern matches valid OCI image references.
+// Mirrors the imagePattern in internal/plugin/container/runtime.go.
+// A direct import is not possible due to a circular dependency (container imports plugin).
+var validOCIImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./:_@-]*$`)
+
 // ExecutionTier determines the isolation level for a plugin (internal runtime representation).
 type ExecutionTier string
 
@@ -49,8 +54,8 @@ var validExecutionTiers = map[ExecutionTier]bool{
 // capPatternRe matches valid capability pattern characters.
 var capPatternRe = regexp.MustCompile(`^[a-zA-Z0-9.*_\-/]+$`)
 
-// ValidContainerNetworkModes enumerates the allowed container network modes.
-var ValidContainerNetworkModes = map[string]bool{
+// validContainerNetworkModes enumerates the allowed container network modes.
+var validContainerNetworkModes = map[string]bool{
 	"none":       true,
 	"restricted": true,
 	"host":       true,
@@ -59,7 +64,7 @@ var ValidContainerNetworkModes = map[string]bool{
 // ValidateContainerNetworkMode returns an error if mode is not a recognized
 // container network mode (none, restricted, host).
 func ValidateContainerNetworkMode(mode string) error {
-	if !ValidContainerNetworkModes[mode] {
+	if !validContainerNetworkModes[mode] {
 		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 			"network mode must be one of [none, restricted, host], got %q", mode)
 	}
@@ -227,6 +232,9 @@ func validateContainerExecution(execCfg ExecutionConfig) []error {
 		if strings.HasPrefix(image, "/") || strings.HasPrefix(image, ".") || strings.Contains(image, "..") {
 			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 				"manifest validation: execution.image %q must be an OCI image reference", execCfg.Image))
+		} else if !validOCIImagePattern.MatchString(image) {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+				"manifest validation: execution.image %q contains invalid characters", execCfg.Image))
 		}
 	}
 

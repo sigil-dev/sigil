@@ -6,6 +6,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -65,6 +66,9 @@ func newOCIEngineWithRunner(runtimeBinary string, runner commandRunner) *OCIEngi
 // Create creates a container with baseline isolation flags applied.
 // The caller is responsible for validating the request fields (e.g., via ContainerConfig.Validate).
 func (e *OCIEngine) Create(ctx context.Context, req CreateContainerRequest) (string, error) {
+	if strings.TrimSpace(req.PluginName) == "" {
+		return "", sigilerr.New(sigilerr.CodePluginManifestValidateInvalid, "plugin name must not be blank")
+	}
 	args := []string{
 		"create",
 		"--name", containerName(req.PluginName),
@@ -127,7 +131,10 @@ func networkArg(mode NetworkMode) string {
 		return "none"
 	case NetworkHost:
 		return "host"
+	case NetworkRestricted:
+		return "bridge"
 	default:
+		slog.Warn("unrecognized container network mode, defaulting to bridge", "mode", mode)
 		return "bridge"
 	}
 }

@@ -6,6 +6,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -32,7 +33,7 @@ const (
 )
 
 var (
-	imagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./:_-]*$`)
+	imagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./:_@-]*$`)
 )
 
 // ContainerConfig captures runtime settings for container-tier plugin execution.
@@ -210,7 +211,12 @@ func (r *Runtime) Start(ctx context.Context, cfg ContainerConfig) (*ContainerIns
 	}
 
 	if err := r.engine.Start(ctx, containerID); err != nil {
-		_ = r.engine.Remove(ctx, containerID)
+		if removeErr := r.engine.Remove(ctx, containerID); removeErr != nil {
+			slog.Warn("container cleanup after start failure",
+				"plugin", cfg.PluginName,
+				"container_id", containerID,
+				"error", removeErr)
+		}
 		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeStartFailure,
 			"starting container %s for plugin %s", containerID, cfg.PluginName)
 	}
@@ -245,13 +251,15 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "stopping container %s", id)
 	}
 
-	if err := r.engine.Remove(ctx, id); err != nil {
-		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "removing container %s", id)
-	}
-
+	// The container is stopped; clean up the timeout entry unconditionally
+	// so it is not leaked if Remove fails below.
 	r.mu.Lock()
 	delete(r.stopTimeouts, id)
 	r.mu.Unlock()
+
+	if err := r.engine.Remove(ctx, id); err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "removing container %s", id)
+	}
 
 	return nil
 }
