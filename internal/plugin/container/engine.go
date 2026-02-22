@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -62,11 +63,8 @@ func newOCIEngineWithRunner(runtimeBinary string, runner commandRunner) *OCIEngi
 }
 
 // Create creates a container with baseline isolation flags applied.
+// The caller is responsible for validating the request fields (e.g., via ContainerConfig.Validate).
 func (e *OCIEngine) Create(ctx context.Context, req CreateContainerRequest) (string, error) {
-	if err := validateCreateRequest(req); err != nil {
-		return "", err
-	}
-
 	args := []string{
 		"create",
 		"--name", containerName(req.PluginName),
@@ -123,28 +121,6 @@ func (e *OCIEngine) Remove(ctx context.Context, id string) error {
 	return err
 }
 
-func validateCreateRequest(req CreateContainerRequest) error {
-	if strings.TrimSpace(req.PluginName) == "" {
-		return sigilerr.New(sigilerr.CodePluginManifestValidateInvalid, "plugin name must not be empty")
-	}
-	if err := ValidateImage(req.Image); err != nil {
-		return err
-	}
-	if !validNetworkModes[req.NetworkMode] {
-		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"network mode must be one of [none, restricted, host], got %q", req.NetworkMode)
-	}
-	if req.MemoryLimitBytes <= 0 {
-		return sigilerr.Errorf(sigilerr.CodePluginRuntimeConfigInvalid,
-			"memory limit must be > 0, got %d", req.MemoryLimitBytes)
-	}
-	if req.GRPCPort <= 0 || req.GRPCPort > 65535 {
-		return sigilerr.Errorf(sigilerr.CodePluginRuntimeConfigInvalid,
-			"grpc port must be in range 1..65535, got %d", req.GRPCPort)
-	}
-	return nil
-}
-
 func networkArg(mode NetworkMode) string {
 	switch mode {
 	case NetworkNone:
@@ -156,9 +132,12 @@ func networkArg(mode NetworkMode) string {
 	}
 }
 
+// invalidContainerNameChars matches characters not allowed in Docker container names.
+// Docker names must match [a-zA-Z0-9][a-zA-Z0-9_.-]*.
+var invalidContainerNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
+
 func containerName(pluginName string) string {
 	name := strings.ToLower(strings.TrimSpace(pluginName))
-	name = strings.ReplaceAll(name, "_", "-")
-	name = strings.ReplaceAll(name, " ", "-")
+	name = invalidContainerNameChars.ReplaceAllString(name, "-")
 	return "sigil-" + name
 }

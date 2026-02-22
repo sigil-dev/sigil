@@ -62,71 +62,6 @@ func TestOCIEngineCreateHostNetworkSkipsPortPublish(t *testing.T) {
 	assert.NotContains(t, runner.calls[0].args, "--publish")
 }
 
-func TestOCIEngineCreateValidatesRequest(t *testing.T) {
-	tests := []struct {
-		name     string
-		req      CreateContainerRequest
-		wantCode sigilerr.Code
-	}{
-		{
-			name: "zero memory limit",
-			req: CreateContainerRequest{
-				PluginName:       "python-tool",
-				Image:            "ghcr.io/org/python-tool:latest",
-				NetworkMode:      NetworkRestricted,
-				MemoryLimitBytes: 0,
-				GRPCPort:         50051,
-			},
-			wantCode: sigilerr.CodePluginRuntimeConfigInvalid,
-		},
-		{
-			name: "zero grpc port",
-			req: CreateContainerRequest{
-				PluginName:       "python-tool",
-				Image:            "ghcr.io/org/python-tool:latest",
-				NetworkMode:      NetworkRestricted,
-				MemoryLimitBytes: 256 * 1024 * 1024,
-				GRPCPort:         0,
-			},
-			wantCode: sigilerr.CodePluginRuntimeConfigInvalid,
-		},
-		{
-			name: "grpc port out of range",
-			req: CreateContainerRequest{
-				PluginName:       "python-tool",
-				Image:            "ghcr.io/org/python-tool:latest",
-				NetworkMode:      NetworkRestricted,
-				MemoryLimitBytes: 256 * 1024 * 1024,
-				GRPCPort:         65536,
-			},
-			wantCode: sigilerr.CodePluginRuntimeConfigInvalid,
-		},
-		{
-			name: "empty plugin name",
-			req: CreateContainerRequest{
-				PluginName:       "",
-				Image:            "ghcr.io/org/python-tool:latest",
-				NetworkMode:      NetworkRestricted,
-				MemoryLimitBytes: 256 * 1024 * 1024,
-				GRPCPort:         50051,
-			},
-			wantCode: sigilerr.CodePluginManifestValidateInvalid,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			runner := &fakeRunner{}
-			engine := newOCIEngineWithRunner("docker", runner)
-
-			_, err := engine.Create(context.Background(), tt.req)
-			require.Error(t, err)
-			assert.True(t, sigilerr.HasCode(err, tt.wantCode))
-			assert.Empty(t, runner.calls)
-		})
-	}
-}
-
 func TestOCIEngineCreateDoesNotPassDetachFlag(t *testing.T) {
 	runner := &fakeRunner{
 		outputs: []string{"ctr-123"},
@@ -247,6 +182,64 @@ func TestRuntimeLifecycleWithOCIEngineStartFailure(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeStartFailure))
 	require.Len(t, runner.calls, 3)
 	assert.Equal(t, commandCall{name: "docker", args: []string{"rm", "--force", "ctr-123"}}, runner.calls[2])
+}
+
+func TestNewOCIEngineWithRunnerDefaultsToDocker(t *testing.T) {
+	tests := []struct {
+		name          string
+		runtimeBinary string
+		wantBinary    string
+	}{
+		{"empty string", "", "docker"},
+		{"whitespace only", "   ", "docker"},
+		{"tab and spaces", " \t ", "docker"},
+		{"explicit podman", "podman", "podman"},
+		{"padded binary", " nerdctl ", "nerdctl"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeRunner{outputs: []string{"ctr-1"}}
+			engine := newOCIEngineWithRunner(tt.runtimeBinary, runner)
+
+			_, err := engine.Create(context.Background(), CreateContainerRequest{
+				PluginName:       "test-plugin",
+				Image:            "ghcr.io/org/test:latest",
+				NetworkMode:      NetworkRestricted,
+				MemoryLimitBytes: 256 * 1024 * 1024,
+				GRPCPort:         50051,
+			})
+			require.NoError(t, err)
+			require.Len(t, runner.calls, 1)
+			assert.Equal(t, tt.wantBinary, runner.calls[0].name)
+		})
+	}
+}
+
+func TestContainerNameSanitizesSpecialCharacters(t *testing.T) {
+	tests := []struct {
+		name       string
+		pluginName string
+		want       string
+	}{
+		{"simple name", "python-tool", "sigil-python-tool"},
+		{"underscores preserved", "my_plugin", "sigil-my_plugin"},
+		{"spaces replaced", "my plugin", "sigil-my-plugin"},
+		{"dots preserved", "my.plugin", "sigil-my.plugin"},
+		{"slashes replaced", "org/tool", "sigil-org-tool"},
+		{"mixed special chars", "org/my_plugin.v2 beta", "sigil-org-my_plugin.v2-beta"},
+		{"uppercase lowered", "MyPlugin", "sigil-myplugin"},
+		{"leading/trailing spaces trimmed", "  spaced  ", "sigil-spaced"},
+		{"at sign replaced", "user@host", "sigil-user-host"},
+		{"colons replaced", "image:latest", "sigil-image-latest"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := containerName(tt.pluginName)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 type commandCall struct {

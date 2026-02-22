@@ -32,11 +32,6 @@ const (
 )
 
 var (
-	validNetworkModes = map[NetworkMode]bool{
-		NetworkNone:       true,
-		NetworkRestricted: true,
-		NetworkHost:       true,
-	}
 	imagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./:_-]*$`)
 )
 
@@ -58,7 +53,7 @@ func (c ContainerConfig) Validate() error {
 	if err := ValidateImage(c.Image); err != nil {
 		return err
 	}
-	if !validNetworkModes[c.NetworkMode] {
+	if err := plugin.ValidateContainerNetworkMode(string(c.NetworkMode)); err != nil {
 		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 			"container config: network mode must be one of [none, restricted, host], got %q", c.NetworkMode)
 	}
@@ -94,7 +89,7 @@ func ConfigFromManifest(manifest *plugin.Manifest) (*ContainerConfig, error) {
 			"container config requires execution.memory_limit")
 	}
 
-	memBytes, err := ParseMemoryLimit(manifest.Execution.MemoryLimit)
+	memBytes, err := plugin.ParseMemoryLimit(manifest.Execution.MemoryLimit)
 	if err != nil {
 		return nil, sigilerr.Wrap(err, sigilerr.CodePluginManifestValidateInvalid, "invalid execution.memory_limit")
 	}
@@ -118,12 +113,6 @@ func ConfigFromManifest(manifest *plugin.Manifest) (*ContainerConfig, error) {
 	}
 
 	return cfg, nil
-}
-
-// ParseMemoryLimit parses memory limits like "256Mi", "1Gi", or raw bytes "4096".
-// Delegates to plugin.ParseMemoryLimit for canonical validation.
-func ParseMemoryLimit(limit string) (int64, error) {
-	return plugin.ParseMemoryLimit(limit)
 }
 
 // ValidateImage performs basic validation on OCI image references.
@@ -203,6 +192,10 @@ func (r *Runtime) Start(ctx context.Context, cfg ContainerConfig) (*ContainerIns
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if cfg.NetworkMode == NetworkNone {
+		return nil, sigilerr.New(sigilerr.CodePluginRuntimeConfigInvalid,
+			"container runtime: NetworkNone is not supported for gRPC plugins; use NetworkRestricted or NetworkHost")
+	}
 
 	containerID, err := r.engine.Create(ctx, CreateContainerRequest{
 		PluginName:       cfg.PluginName,
@@ -252,13 +245,13 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "stopping container %s", id)
 	}
 
-	r.mu.Lock()
-	delete(r.stopTimeouts, id)
-	r.mu.Unlock()
-
 	if err := r.engine.Remove(ctx, id); err != nil {
 		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "removing container %s", id)
 	}
+
+	r.mu.Lock()
+	delete(r.stopTimeouts, id)
+	r.mu.Unlock()
 
 	return nil
 }

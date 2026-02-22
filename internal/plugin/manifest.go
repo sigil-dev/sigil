@@ -49,10 +49,21 @@ var validExecutionTiers = map[ExecutionTier]bool{
 // capPatternRe matches valid capability pattern characters.
 var capPatternRe = regexp.MustCompile(`^[a-zA-Z0-9.*_\-/]+$`)
 
-var validContainerNetworkModes = map[string]bool{
+// ValidContainerNetworkModes enumerates the allowed container network modes.
+var ValidContainerNetworkModes = map[string]bool{
 	"none":       true,
 	"restricted": true,
 	"host":       true,
+}
+
+// ValidateContainerNetworkMode returns an error if mode is not a recognized
+// container network mode (none, restricted, host).
+func ValidateContainerNetworkMode(mode string) error {
+	if !ValidContainerNetworkModes[mode] {
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"network mode must be one of [none, restricted, host], got %q", mode)
+	}
+	return nil
 }
 
 // semverRe matches strict semver (no "v" prefix): MAJOR.MINOR.PATCH[-prerelease][+build].
@@ -229,9 +240,11 @@ func validateContainerExecution(execCfg ExecutionConfig) []error {
 	}
 
 	network := strings.TrimSpace(execCfg.Network)
-	if network != "" && !validContainerNetworkModes[network] {
-		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"manifest validation: execution.network must be one of [none, restricted, host], got %q", execCfg.Network))
+	if network != "" {
+		if err := ValidateContainerNetworkMode(network); err != nil {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+				"manifest validation: execution.network must be one of [none, restricted, host], got %q", execCfg.Network))
+		}
 	}
 
 	return errs

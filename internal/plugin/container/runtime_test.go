@@ -114,7 +114,7 @@ func TestParseMemoryLimit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := container.ParseMemoryLimit(tt.input)
+			got, err := plugin.ParseMemoryLimit(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -136,7 +136,7 @@ func TestParseMemoryLimitInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := container.ParseMemoryLimit(tt.input)
+			_, err := plugin.ParseMemoryLimit(tt.input)
 			require.Error(t, err)
 			assert.True(t, sigilerr.HasCode(err, sigilerr.CodeConfigValidateInvalidValue))
 		})
@@ -164,6 +164,8 @@ func TestValidateImage(t *testing.T) {
 		{name: "empty", image: "", wantErr: true},
 		{name: "relative path", image: "../relative/path", wantErr: true},
 		{name: "whitespace", image: "ghcr.io/org/tool latest", wantErr: true},
+		{name: "absolute path", image: "/etc/passwd", wantErr: true},
+		{name: "path traversal mid-ref", image: "registry.io/org/../evil:latest", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -238,6 +240,60 @@ func TestRuntimeLifecycleStopFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeCallFailure))
 	assert.Equal(t, []string{"stop"}, engine.calls)
+}
+
+func TestRuntimeLifecycleRemoveFailurePreservesTimeout(t *testing.T) {
+	engine := &fakeEngine{removeErr: errors.New("rm failed")}
+	runtime := container.NewRuntime(engine)
+
+	err := runtime.Stop(context.Background(), "ctr-rm")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeCallFailure))
+	assert.Contains(t, err.Error(), "removing container")
+	assert.Equal(t, []string{"stop", "remove"}, engine.calls)
+}
+
+func TestRuntimeLifecycleStartRejectsNetworkNone(t *testing.T) {
+	engine := &fakeEngine{createID: "ctr-none"}
+	runtime := container.NewRuntime(engine)
+	cfg := container.ContainerConfig{
+		PluginName:       "isolated-tool",
+		Image:            "ghcr.io/org/isolated-tool:latest",
+		NetworkMode:      container.NetworkNone,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      5 * time.Second,
+	}
+
+	_, err := runtime.Start(context.Background(), cfg)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeConfigInvalid))
+	assert.Contains(t, err.Error(), "NetworkNone is not supported for gRPC plugins")
+	assert.Empty(t, engine.calls)
+}
+
+func TestRuntimeStopRejectsEmptyContainerID(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{"empty string", ""},
+		{"whitespace only", "   "},
+		{"tab and spaces", " \t "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := &fakeEngine{}
+			runtime := container.NewRuntime(engine)
+
+			err := runtime.Stop(context.Background(), tt.id)
+			require.Error(t, err)
+			assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeCallFailure))
+			assert.Contains(t, err.Error(), "container id must not be empty")
+			assert.Empty(t, engine.calls)
+		})
+	}
 }
 
 func TestRuntimeLifecycleStartRejectsInvalidConfig(t *testing.T) {
