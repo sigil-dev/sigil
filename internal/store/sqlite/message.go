@@ -226,6 +226,31 @@ func (m *MessageStore) Count(ctx context.Context, workspaceID string) (int64, er
 	return count, nil
 }
 
+// DeleteByIDs deletes specific messages by ID within the workspace.
+// Returns the number of deleted messages.
+func (m *MessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, workspaceID)
+
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	q := `DELETE FROM memory_messages WHERE workspace_id = ? AND id IN (` + strings.Join(placeholders, ",") + `)`
+	result, err := m.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting messages by ids: %w", err)
+	}
+
+	return result.RowsAffected()
+}
+
 // Trim keeps only the keepLast most recent messages per workspace and
 // deletes the rest. Returns the number of deleted messages.
 func (m *MessageStore) Trim(ctx context.Context, workspaceID string, keepLast int) (int64, error) {
