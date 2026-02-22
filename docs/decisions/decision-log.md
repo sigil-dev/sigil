@@ -1240,3 +1240,20 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 **Rationale:** This provides practical coverage for both tailnet and non-tailnet deployments while keeping implementation and test scope manageable for the phase.
 
 **Ref:** sigil-7ek.2, D012, D013, `docs/design/06-node-system.md`
+
+---
+
+## D079: Replace CGO SQLite Dependencies with Pure-Go Equivalents
+
+**Status:** Accepted
+**Question:** How do we eliminate CGO from the Sigil binary to simplify cross-compilation?
+**Context:** `mattn/go-sqlite3` and `asg017/sqlite-vec-go-bindings` require CGO, forcing use of `goreleaser-cross` Docker image with pre-installed C cross-compilers. This complicates CI and local cross-builds.
+**Options considered:**
+
+- Use `zig cc` as a CGO C cross-compiler (keeps CGO, simplifies toolchain)
+- Pure-Go alternatives: `modernc.org/sqlite` + pure-Go cosine similarity
+- Pure-Go alternatives: `modernc.org/sqlite` + `chromem-go` embedded vector DB
+
+**Decision:** Option 3 — `modernc.org/sqlite` for SQLite driver, `chromem-go` for vector storage.
+**Rationale:** modernc is a production-grade pure-Go transpilation of SQLite with equivalent feature coverage. chromem-go eliminates sqlite-vec CGO dependency and as a bonus enables vector metadata filtering (previously unimplemented). Vectors are re-derivable from messages so chromem-go's durability trade-offs are acceptable. Atomic snapshot persistence (in-memory + os.Rename) mitigates chromem-go's lack of WAL.
+**Ref:** worktree-zig-eval, `docs/plans/2026-02-21-cgo-elimination-design.md`, `docs/plans/2026-02-21-cgo-elimination.md`
