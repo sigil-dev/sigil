@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +22,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	db, err := sql.Open("sqlite3", filepath.Join(dir, "test.db"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
