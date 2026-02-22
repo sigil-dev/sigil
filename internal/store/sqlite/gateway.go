@@ -34,7 +34,7 @@ type GatewayStore struct {
 // NewGatewayStore opens (or creates) a SQLite database at dbPath and
 // initialises the users, user_identities, pairings, and audit_log tables.
 func NewGatewayStore(dbPath string) (*GatewayStore, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening gateway db: %w", err)
 	}

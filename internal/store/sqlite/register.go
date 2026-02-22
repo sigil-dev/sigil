@@ -43,7 +43,7 @@ func newWorkspaceStores(workspacePath string, vectorDims int) (store.SessionStor
 
 	// Open memory.db once and share between MessageStore and SummaryStore
 	// to avoid connection waste and WAL contention.
-	memoryDB, err := sql.Open("sqlite", filepath.Join(workspacePath, "memory.db")+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	memoryDB, err := sql.Open("sqlite", filepath.Join(workspacePath, "memory.db")+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 	if err != nil {
 		return nil, nil, nil, errors.Join(sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "opening memory db: %w", err), cleanup())
 	}
