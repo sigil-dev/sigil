@@ -156,13 +156,13 @@ tasks:
   build:linux:
     desc: Build for Linux
     cmds:
-      - GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PKG}}
-      - GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PKG}}
+      - GOOS=linux GOARCH=amd64 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PKG}}
+      - GOOS=linux GOARCH=arm64 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PKG}}
   build:darwin:
     desc: Build for macOS
     cmds:
-      - GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PKG}}
-      - GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PKG}}
+      - GOOS=darwin GOARCH=amd64 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PKG}}
+      - GOOS=darwin GOARCH=arm64 go build -tags {{.GO_TAGS}} -o dist/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PKG}}
   # License headers
   license:check:
     desc: Check SPDX license headers
