@@ -242,6 +242,31 @@ func TestRuntimeLifecycleStartStopSuccess(t *testing.T) {
 	assert.Equal(t, []string{"create", "start", "stop", "remove"}, engine.calls)
 }
 
+func TestRuntimeStopUsesRegisteredStopTimeout(t *testing.T) {
+	engine := &fakeEngine{createID: "ctr-timeout"}
+	runtime := container.NewRuntime(engine)
+
+	const customTimeout = 30 * time.Second
+	cfg := container.ContainerConfig{
+		PluginName:       "timeout-tool",
+		Image:            "ghcr.io/org/timeout-tool:latest",
+		NetworkMode:      container.NetworkRestricted,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      customTimeout,
+	}
+
+	inst, err := runtime.Start(context.Background(), cfg)
+	require.NoError(t, err)
+
+	err = runtime.Stop(context.Background(), inst.ID)
+	require.NoError(t, err)
+
+	require.Len(t, engine.stopTimeouts, 1, "engine.Stop must be called exactly once")
+	assert.Equal(t, customTimeout, engine.stopTimeouts[0],
+		"engine.Stop must receive the per-container StopTimeout registered by Start, not DefaultStopTimeout")
+}
+
 func TestRuntimeLifecycleStartFailureCleansUp(t *testing.T) {
 	engine := &fakeEngine{
 		createID:  "ctr-2",
@@ -262,6 +287,27 @@ func TestRuntimeLifecycleStartFailureCleansUp(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeStartFailure))
 	assert.Equal(t, []string{"create", "start", "remove"}, engine.calls)
+}
+
+func TestRuntimeLifecycleStartCreateFailure(t *testing.T) {
+	engine := &fakeEngine{createErr: errors.New("create failed")}
+	runtime := container.NewRuntime(engine)
+	cfg := container.ContainerConfig{
+		PluginName:       "python-tool",
+		Image:            "ghcr.io/org/python-tool:latest",
+		NetworkMode:      container.NetworkRestricted,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      5 * time.Second,
+	}
+
+	_, err := runtime.Start(context.Background(), cfg)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeStartFailure))
+	// engine.Create was called, but engine.Start must NOT have been called.
+	assert.Equal(t, []string{"create"}, engine.calls)
+	// No container was registered, so stopTimeouts must be empty.
+	assert.Empty(t, runtime.StopTimeouts())
 }
 
 func TestRuntimeLifecycleStopFailure(t *testing.T) {
@@ -357,6 +403,62 @@ func TestRuntimeLifecycleStartRejectsInvalidConfig(t *testing.T) {
 	assert.Empty(t, engine.calls)
 }
 
+func TestContainerConfigValidateBoundaries(t *testing.T) {
+	// baseline is a fully valid config; each test overrides one field to isolate the boundary.
+	baseline := container.ContainerConfig{
+		PluginName:       "python-tool",
+		Image:            "ghcr.io/org/python-tool:latest",
+		NetworkMode:      container.NetworkRestricted,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      5 * time.Second,
+	}
+
+	tests := []struct {
+		name    string
+		cfg     container.ContainerConfig
+		wantErr bool
+	}{
+		{
+			name:    "port 0 is invalid",
+			cfg:     func() container.ContainerConfig { c := baseline; c.GRPCPort = 0; return c }(),
+			wantErr: true,
+		},
+		{
+			name:    "port 65535 is valid (max port)",
+			cfg:     func() container.ContainerConfig { c := baseline; c.GRPCPort = 65535; return c }(),
+			wantErr: false,
+		},
+		{
+			name:    "port 65536 is out of range",
+			cfg:     func() container.ContainerConfig { c := baseline; c.GRPCPort = 65536; return c }(),
+			wantErr: true,
+		},
+		{
+			name:    "zero StopTimeout is invalid",
+			cfg:     func() container.ContainerConfig { c := baseline; c.StopTimeout = 0; return c }(),
+			wantErr: true,
+		},
+		{
+			name:    "negative StopTimeout is invalid",
+			cfg:     func() container.ContainerConfig { c := baseline; c.StopTimeout = -1 * time.Second; return c }(),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestRuntimeConcurrentStartStop(t *testing.T) {
 	engine := &safeFakeEngine{}
 	runtime := container.NewRuntime(engine)
@@ -421,13 +523,14 @@ func (f *safeFakeEngine) Stop(_ context.Context, _ string, _ time.Duration) erro
 func (f *safeFakeEngine) Remove(_ context.Context, _ string) error { return nil }
 
 type fakeEngine struct {
-	calls     []string
-	createID  string
-	createReq container.CreateContainerRequest
-	createErr error
-	startErr  error
-	stopErr   error
-	removeErr error
+	calls        []string
+	createID     string
+	createReq    container.CreateContainerRequest
+	createErr    error
+	startErr     error
+	stopErr      error
+	removeErr    error
+	stopTimeouts []time.Duration
 }
 
 func (f *fakeEngine) Create(_ context.Context, req container.CreateContainerRequest) (string, error) {
@@ -447,8 +550,9 @@ func (f *fakeEngine) Start(_ context.Context, _ string) error {
 	return f.startErr
 }
 
-func (f *fakeEngine) Stop(_ context.Context, _ string, _ time.Duration) error {
+func (f *fakeEngine) Stop(_ context.Context, _ string, timeout time.Duration) error {
 	f.calls = append(f.calls, "stop")
+	f.stopTimeouts = append(f.stopTimeouts, timeout)
 	return f.stopErr
 }
 

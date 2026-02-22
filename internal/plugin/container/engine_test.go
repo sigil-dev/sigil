@@ -36,6 +36,8 @@ func TestOCIEngineCreateRestrictedNetworkBuildsIsolationFlags(t *testing.T) {
 	assert.Contains(t, runner.calls[0].args, "ALL")
 	assert.Contains(t, runner.calls[0].args, "--memory")
 	assert.Contains(t, runner.calls[0].args, "268435456")
+	assert.Contains(t, runner.calls[0].args, "--security-opt")
+	assert.Contains(t, runner.calls[0].args, "no-new-privileges")
 	assert.Contains(t, runner.calls[0].args, "--publish")
 	assert.Contains(t, runner.calls[0].args, "127.0.0.1:50051:50051/tcp")
 	assert.Contains(t, runner.calls[0].args, "ghcr.io/org/python-tool:latest")
@@ -151,9 +153,17 @@ func TestOCIEngineLifecycleCommandErrors(t *testing.T) {
 	}
 	engine := newOCIEngineWithRunner("docker", runner)
 
-	assert.Error(t, engine.Start(context.Background(), "ctr-1"))
-	assert.Error(t, engine.Stop(context.Background(), "ctr-1", 5*time.Second))
-	assert.Error(t, engine.Remove(context.Background(), "ctr-1"))
+	startErr := engine.Start(context.Background(), "ctr-1")
+	assert.Error(t, startErr)
+	assert.True(t, sigilerr.HasCode(startErr, sigilerr.CodePluginRuntimeStartFailure))
+
+	stopErr := engine.Stop(context.Background(), "ctr-1", 5*time.Second)
+	assert.Error(t, stopErr)
+	assert.True(t, sigilerr.HasCode(stopErr, sigilerr.CodePluginRuntimeCallFailure))
+
+	removeErr := engine.Remove(context.Background(), "ctr-1")
+	assert.Error(t, removeErr)
+	assert.True(t, sigilerr.HasCode(removeErr, sigilerr.CodePluginRuntimeCallFailure))
 }
 
 func TestRuntimeLifecycleWithOCIEngineSuccess(t *testing.T) {
@@ -251,23 +261,34 @@ func TestContainerNameSanitizesSpecialCharacters(t *testing.T) {
 		name       string
 		pluginName string
 		want       string
+		wantErr    bool
 	}{
-		{"simple name", "python-tool", "sigil-python-tool"},
-		{"underscores preserved", "my_plugin", "sigil-my_plugin"},
-		{"spaces replaced", "my plugin", "sigil-my-plugin"},
-		{"dots preserved", "my.plugin", "sigil-my.plugin"},
-		{"slashes replaced", "org/tool", "sigil-org-tool"},
-		{"mixed special chars", "org/my_plugin.v2 beta", "sigil-org-my_plugin.v2-beta"},
-		{"uppercase lowered", "MyPlugin", "sigil-myplugin"},
-		{"leading/trailing spaces trimmed", "  spaced  ", "sigil-spaced"},
-		{"at sign replaced", "user@host", "sigil-user-host"},
-		{"colons replaced", "image:latest", "sigil-image-latest"},
+		{"simple name", "python-tool", "sigil-python-tool", false},
+		{"underscores preserved", "my_plugin", "sigil-my_plugin", false},
+		{"spaces replaced", "my plugin", "sigil-my-plugin", false},
+		{"dots preserved", "my.plugin", "sigil-my.plugin", false},
+		{"slashes replaced", "org/tool", "sigil-org-tool", false},
+		{"mixed special chars", "org/my_plugin.v2 beta", "sigil-org-my_plugin.v2-beta", false},
+		{"uppercase lowered", "MyPlugin", "sigil-myplugin", false},
+		{"leading/trailing spaces trimmed", "  spaced  ", "sigil-spaced", false},
+		{"at sign replaced", "user@host", "sigil-user-host", false},
+		{"colons replaced", "image:latest", "sigil-image-latest", false},
+		{"blank name rejected", "", "", true},
+		{"whitespace only rejected", "   ", "", true},
+		{"all special chars rejected", "!!!", "", true},
+		{"only hyphens after sanitization rejected", "@@@", "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := containerName(tt.pluginName)
-			assert.Equal(t, tt.want, got)
+			got, err := containerName(tt.pluginName)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
 		})
 	}
 }

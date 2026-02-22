@@ -27,7 +27,7 @@ func (r execCommandRunner) Run(ctx context.Context, name string, args ...string)
 	trimmed := strings.TrimSpace(string(output))
 	if err != nil {
 		return "", sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure,
-			"running %s: %s", name, trimmed)
+			"running %s %s: %s", name, strings.Join(args, " "), trimmed)
 	}
 	return trimmed, nil
 }
@@ -65,18 +65,10 @@ func newOCIEngineWithRunner(runtimeBinary string, runner commandRunner) *OCIEngi
 // Create creates a container with baseline isolation flags applied.
 // The caller is responsible for validating the request fields (e.g., via ContainerConfig.Validate).
 func (e *OCIEngine) Create(ctx context.Context, req CreateContainerRequest) (string, error) {
-	if strings.TrimSpace(req.PluginName) == "" {
-		return "", sigilerr.New(sigilerr.CodePluginManifestValidateInvalid, "plugin name must not be blank")
+	sanitized, err := containerName(req.PluginName)
+	if err != nil {
+		return "", err
 	}
-	// Sanitize the plugin name segment first (without the "sigil-" prefix) so that
-	// the alphanumeric check is not trivially satisfied by the prefix itself.
-	nameSegment := invalidContainerNameChars.ReplaceAllString(
-		strings.ToLower(strings.TrimSpace(req.PluginName)), "-")
-	if !alphanumericPattern.MatchString(nameSegment) {
-		return "", sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"plugin name %q produces invalid container name after sanitization", req.PluginName)
-	}
-	sanitized := "sigil-" + nameSegment
 	networkFlag, err := networkArg(req.NetworkMode)
 	if err != nil {
 		return "", err
@@ -167,8 +159,20 @@ var invalidContainerNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 // alphanumericPattern matches strings that contain at least one alphanumeric character.
 var alphanumericPattern = regexp.MustCompile(`[a-zA-Z0-9]`)
 
-func containerName(pluginName string) string {
-	name := strings.ToLower(strings.TrimSpace(pluginName))
-	name = invalidContainerNameChars.ReplaceAllString(name, "-")
-	return "sigil-" + name
+// containerName returns the sanitized Docker container name for a plugin.
+// It lowercases, trims, and replaces invalid characters with hyphens, then
+// validates that the result contains at least one alphanumeric character.
+func containerName(pluginName string) (string, error) {
+	if strings.TrimSpace(pluginName) == "" {
+		return "", sigilerr.New(sigilerr.CodePluginManifestValidateInvalid, "plugin name must not be blank")
+	}
+	// Sanitize the plugin name segment first (without the "sigil-" prefix) so that
+	// the alphanumeric check is not trivially satisfied by the prefix itself.
+	nameSegment := invalidContainerNameChars.ReplaceAllString(
+		strings.ToLower(strings.TrimSpace(pluginName)), "-")
+	if !alphanumericPattern.MatchString(nameSegment) {
+		return "", sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"plugin name %q produces invalid container name after sanitization", pluginName)
+	}
+	return "sigil-" + nameSegment, nil
 }

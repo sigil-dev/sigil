@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -137,8 +138,8 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	}
 
 	if errs := m.Validate(); len(errs) > 0 {
-		// Return the first validation error for simplicity.
-		return nil, errs[0]
+		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation failed: %w", errors.Join(errs...))
 	}
 
 	return &m, nil
