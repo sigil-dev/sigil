@@ -257,10 +257,10 @@ type ModelCapabilities struct {
 
 // ProviderStatus indicates provider health.
 type ProviderStatus struct {
-	Available bool            `json:"available"`
-	Provider  string          `json:"provider"`
-	Message   string          `json:"message"`
-	Health    *HealthMetrics  `json:"health,omitempty"`
+	Available bool           `json:"available"`
+	Provider  string         `json:"provider"`
+	Message   string         `json:"message"`
+	Health    *HealthMetrics `json:"health,omitempty"`
 }
 
 // OriginTag returns the text marker for the given origin, or empty string if unknown.

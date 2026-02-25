@@ -192,8 +192,8 @@ const maxPreNormContentLength = 5 * 1024 * 1024 // 5MB
 
 // RegexScanner implements Scanner using compiled regexes.
 type RegexScanner struct {
-	rules                  []Rule
-	maxContentLength       int
+	rules                   []Rule
+	maxContentLength        int
 	maxPreNormContentLength int
 }
 

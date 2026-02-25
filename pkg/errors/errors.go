@@ -27,11 +27,11 @@ const (
 	CodeStoreConflict               Code = "store.conflict"
 	CodeStoreInvalidInput           Code = "store.invalid_input"
 
-	CodeConfigLoadReadFailure           Code = "config.load.read.failure"
-	CodeConfigParseInvalidFormat        Code = "config.parse.invalid_format"
-	CodeConfigValidateInvalidValue      Code = "config.validate.invalid_value"
-	CodeConfigAlreadyExists             Code = "config.already_exists"
-	CodeConfigKeyringResolutionFailure  Code = "config.keyring.resolution.failure"
+	CodeConfigLoadReadFailure          Code = "config.load.read.failure"
+	CodeConfigParseInvalidFormat       Code = "config.parse.invalid_format"
+	CodeConfigValidateInvalidValue     Code = "config.validate.invalid_value"
+	CodeConfigAlreadyExists            Code = "config.already_exists"
+	CodeConfigKeyringResolutionFailure Code = "config.keyring.resolution.failure"
 
 	CodePluginManifestValidateInvalid    Code = "plugin.manifest.validate.invalid"
 	CodePluginCapabilityDenied           Code = "plugin.capability.denied"

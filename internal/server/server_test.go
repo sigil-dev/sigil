@@ -827,10 +827,10 @@ func TestServer_CORSOrigins_DevDefault_LocalhostVariants(t *testing.T) {
 			})
 			require.NoError(t, err)
 			t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
+				if err := srv.Close(); err != nil {
+					t.Logf("srv.Close() in cleanup: %v", err)
+				}
+			})
 
 			req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces", nil)
 			req.Header.Set("Origin", "http://localhost:5173")

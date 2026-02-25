@@ -5791,6 +5791,7 @@ func (p *mockProviderToolCallCapturing) Available(_ context.Context) bool { retu
 func (p *mockProviderToolCallCapturing) Status(_ context.Context) (provider.ProviderStatus, error) {
 	return provider.ProviderStatus{Available: true, Provider: "mock-tool-capturing"}, nil
 }
+
 func (p *mockProviderToolCallCapturing) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
 	return nil, nil
 }

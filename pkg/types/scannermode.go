@@ -37,4 +37,3 @@ func ParseScannerMode(s string) (ScannerMode, error) {
 	}
 	return m, nil
 }
-

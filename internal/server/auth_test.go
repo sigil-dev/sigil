@@ -57,10 +57,10 @@ func TestAuthMiddleware_PublicEndpointsSkipAuth(t *testing.T) {
 			})
 			require.NoError(t, err)
 			t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
+				if err := srv.Close(); err != nil {
+					t.Logf("srv.Close() in cleanup: %v", err)
+				}
+			})
 
 			// Request WITHOUT auth header to a public endpoint.
 			req := httptest.NewRequest(http.MethodGet, path, nil)

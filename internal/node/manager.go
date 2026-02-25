@@ -62,7 +62,7 @@ type PendingRequest struct {
 
 type ManagerConfig struct {
 	QueueTTL           time.Duration
-	CleanupInterval    time.Duration      // interval for background expired-request cleanup; 0 = disabled
+	CleanupInterval    time.Duration // interval for background expired-request cleanup; 0 = disabled
 	Now                func() time.Time
 	Auth               Authenticator      // optional; nil means no auth required
 	WorkspaceValidator WorkspaceValidator // optional; nil means no workspace enforcement
