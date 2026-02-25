@@ -112,9 +112,3 @@ func (h *HealthTracker) HealthMetrics() HealthMetrics {
 	return m
 }
 
-// HealthMetricsPtr is a convenience wrapper around HealthMetrics that returns
-// a pointer, avoiding the need for an intermediate variable at call sites.
-func (h *HealthTracker) HealthMetricsPtr() *HealthMetrics {
-	hm := h.HealthMetrics()
-	return &hm
-}

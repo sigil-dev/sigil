@@ -510,6 +510,9 @@ type providerServiceAdapter struct {
 func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*server.ProviderHealthDetail, error) {
 	p, err := a.reg.Get(name)
 	if err != nil {
+		if sigilerr.HasCode(err, sigilerr.CodeProviderNotFound) {
+			return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "provider %q not found", name)
+		}
 		return nil, err
 	}
 	status, err := p.Status(ctx)

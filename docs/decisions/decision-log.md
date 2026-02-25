@@ -1339,11 +1339,13 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 
 **Rationale:** Attachment support doesn't block core messaging functionality. The additional scope (multipart upload endpoint, file storage strategy, provider-specific vision vs text handling) would delay Phase 7 delivery without proportional user benefit at this stage.
 
+**Ref:** sigil-kqd.307, `docs/design/09-ui-and-cli.md`
+
 ---
 
 ## D084: Provider Health REST Endpoint with Optional Registration
 
-**Status:** Decided
+**Status:** Decided (2026-02-21)
 
 **Question:** How should provider health metrics be exposed for operator visibility?
 
@@ -1355,10 +1357,8 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 2. REST endpoint with mandatory registration — Always register the endpoint. Requires a concrete ProviderService at server construction time.
 3. REST endpoint with optional registration — Register the endpoint only when a ProviderService is available. Graceful degradation when providers aren't configured.
 
-**Decision:** Option 3. Added GET /api/v1/providers/{name}/health with optional ProviderService registration. The endpoint is gated by `admin:providers` capability (new). The ProviderService interface is optional on Services — when nil, the endpoint is not registered. A providerServiceAdapter in cmd/sigil/wire.go bridges the provider.Registry to the server.ProviderService interface.
+**Decision:** Option 3. Added GET /api/v1/providers/{name}/health with optional ProviderService registration. The endpoint is gated by `admin:providers` capability (new). The ProviderService interface is optional on Services — when nil, the endpoint is not registered. A providerServiceAdapter in cmd/sigil/wire.go bridges the provider.Registry to the server.ProviderService interface. The protobuf StatusResponse was extended with health fields (failure_count, last_failure_at, cooldown_until) so plugin providers can expose the same metrics via gRPC.
 
 **Rationale:** Optional registration handles the case where Sigil runs without any providers configured (e.g., channel-only deployments). The admin:providers capability follows the existing ABAC pattern. The adapter pattern matches the existing service adapters (workspaceServiceAdapter, pluginServiceAdapter, etc.).
 
-**Ref:** PR #28, sigil-cv7y review epic
-
-**Ref:** sigil-kqd.307, `docs/design/09-ui-and-cli.md`
+**Ref:** PR #28, sigil-cv7y review epic, sigil-kqd.307, `docs/design/07-provider-system.md`

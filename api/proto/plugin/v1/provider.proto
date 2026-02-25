@@ -9,6 +9,7 @@ option go_package = "github.com/sigil-dev/sigil/internal/gen/proto/plugin/v1;plu
 
 import "common/v1/types.proto";
 import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
 
 service Provider {
   rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
@@ -64,4 +65,7 @@ message StatusResponse {
   bool available = 1;
   string provider = 2;
   string message = 3;
+  int64 failure_count = 4;
+  google.protobuf.Timestamp last_failure_at = 5;
+  google.protobuf.Timestamp cooldown_until = 6;
 }

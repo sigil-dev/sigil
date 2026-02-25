@@ -30,7 +30,7 @@ func (m *mockProviderService) GetHealth(_ context.Context, name string) (*server
 	return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "provider %q not found", name)
 }
 
-func newTestServerWithProviders(t *testing.T, ps server.ProviderService) *server.Server {
+func newTestServerWithProviders(t *testing.T, ps server.ProviderService, validator ...server.TokenValidator) *server.Server {
 	t.Helper()
 	svc := server.NewServicesForTest(
 		&mockWorkspaceService{},
@@ -39,33 +39,14 @@ func newTestServerWithProviders(t *testing.T, ps server.ProviderService) *server
 		&mockUserService{},
 		ps,
 	)
-	srv, err := server.New(server.Config{
+	cfg := server.Config{
 		ListenAddr: "127.0.0.1:0",
 		Services:   svc,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
-	return srv
-}
-
-func newTestServerWithProvidersAndAuth(t *testing.T, ps server.ProviderService, validator server.TokenValidator) *server.Server {
-	t.Helper()
-	svc := server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-		ps,
-	)
-	srv, err := server.New(server.Config{
-		ListenAddr:     "127.0.0.1:0",
-		TokenValidator: validator,
-		Services:       svc,
-	})
+	}
+	if len(validator) > 0 {
+		cfg.TokenValidator = validator[0]
+	}
+	srv, err := server.New(cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		if err := srv.Close(); err != nil {
@@ -166,7 +147,7 @@ func TestRoutes_GetProviderHealth_RequiresAdmin(t *testing.T) {
 		},
 	}
 
-	srv := newTestServerWithProvidersAndAuth(t, ps, validator)
+	srv := newTestServerWithProviders(t, ps, validator)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -190,7 +171,7 @@ func TestRoutes_GetProviderHealth_AdminWildcardSucceeds(t *testing.T) {
 		},
 	}
 
-	srv := newTestServerWithProvidersAndAuth(t, ps, validator)
+	srv := newTestServerWithProviders(t, ps, validator)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
 	req.Header.Set("Authorization", "Bearer admin-token")

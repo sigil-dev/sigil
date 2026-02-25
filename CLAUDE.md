@@ -15,7 +15,7 @@ Instructions for Claude Code working on the Sigil codebase.
 
    ```bash
    git pull --rebase
-   bd sync
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -35,13 +35,13 @@ Instructions for Claude Code working on the Sigil codebase.
 
 This project uses **bd** (beads) for issue tracking.
 
-| Command                               | Purpose             |
-| ------------------------------------- | ------------------- |
-| `bd ready`                            | Find available work |
-| `bd show <id>`                        | View issue details  |
-| `bd update <id> --status in_progress` | Claim work          |
-| `bd close <id>`                       | Complete work       |
-| `bd sync`                             | Sync with git       |
+| Command                               | Purpose              |
+| ------------------------------------- | -------------------- |
+| `bd ready`                            | Find available work  |
+| `bd show <id>`                        | View issue details   |
+| `bd update <id> --status in_progress` | Claim work           |
+| `bd close <id>`                       | Complete work        |
+| `bd dolt push`                        | Push beads to remote |
 
 ## Project Overview
 
@@ -321,11 +321,15 @@ internal/
     anthropic/           # Built-in Anthropic provider
     google/              # Built-in Google provider
     openai/              # Built-in OpenAI provider
+    openrouter/          # Built-in OpenRouter provider
   security/              # Capability enforcement, ABAC
   server/                # HTTP server (huma + chi)
   workspace/             # Workspace scoping
 pkg/
+  errors/                # Structured error codes (sigilerr)
+  health/                # Shared health metrics types
   plugin/                # Public plugin SDK types
+  types/                 # Shared value types (Origin, ScannerMode)
 plugins/                 # First-party plugins
 skills/                  # Built-in skills
 scripts/                 # Build and utility scripts
@@ -343,6 +347,10 @@ There are TWO separate SQLite message stores with independent schemas:
 | `MessageStore` | `memory_messages` | FTS5 search + memory retrieval                             | `internal/store/sqlite/message.go` |
 
 **MUST** update BOTH when adding/removing columns from message schema.
+
+### Shared Health Package
+
+`pkg/health` defines `health.Metrics` — the canonical health snapshot struct used by both `internal/provider` and `internal/server`. The `internal/provider` package re-exports it via type alias: `type HealthMetrics = health.Metrics`. Do NOT add health-related fields to `server.ProviderHealthDetail` directly — embed `health.Metrics` instead.
 
 ---
 
@@ -435,84 +443,17 @@ Three execution tiers:
 
 **IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
 
-### Why bd?
+The beads system-reminder hook injects full CLI reference into every session. Key commands:
 
-- Dependency-aware: Track blockers and relationships between issues
-- Git-friendly: Auto-syncs to JSONL for version control
-- Agent-optimized: JSON output, ready work detection, discovered-from links
-- Prevents duplicate tracking systems and confusion
+| Command                                                                | Purpose              |
+| ---------------------------------------------------------------------- | -------------------- |
+| `bd ready`                                                             | Find unblocked work  |
+| `bd show <id>`                                                         | View issue details   |
+| `bd update <id> --status in_progress`                                  | Claim work           |
+| `bd close <id>`                                                        | Complete work        |
+| `bd create --title="..." --description="..." --type=task --priority=2` | New issue            |
+| `bd dolt push`                                                         | Push beads to remote |
 
-### Quick Start
-
-**Check for ready work:**
-
-```bash
-bd ready --json
-```
-
-**Create new issues:**
-
-```bash
-bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
-bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
-```
-
-**Claim and update:**
-
-```bash
-bd update bd-42 --status in_progress --json
-bd update bd-42 --priority 1 --json
-```
-
-**Complete work:**
-
-```bash
-bd close bd-42 --reason "Completed" --json
-```
-
-### Issue Types
-
-- `bug` - Something broken
-- `feature` - New functionality
-- `task` - Work item (tests, docs, refactoring)
-- `epic` - Large feature with subtasks
-- `chore` - Maintenance (dependencies, tooling)
-
-### Priorities
-
-- `0` - Critical (security, data loss, broken builds)
-- `1` - High (major features, important bugs)
-- `2` - Medium (default, nice-to-have)
-- `3` - Low (polish, optimization)
-- `4` - Backlog (future ideas)
-
-### Workflow for AI Agents
-
-1. **Check ready work**: `bd ready` shows unblocked issues
-2. **Claim your task**: `bd update <id> --status in_progress`
-3. **Work on it**: Implement, test, document
-4. **Discover new work?** Create linked issue:
-   - `bd create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
-5. **Complete**: `bd close <id> --reason "Done"`
-
-### Auto-Sync
-
-bd automatically syncs with git:
-
-- Exports to `.beads/issues.jsonl` after changes (5s debounce)
-- Imports from JSONL when newer (e.g., after `git pull`)
-- No manual export/import needed!
-
-### Important Rules
-
-- ✅ Use bd for ALL task tracking
-- ✅ Always use `--json` flag for programmatic use
-- ✅ Link discovered work with `discovered-from` dependencies
-- ✅ Check `bd ready` before asking "what should I work on?"
-- ❌ Do NOT create markdown TODO lists
-- ❌ Do NOT use external issue trackers
-- ❌ Do NOT duplicate tracking systems
-
-For more details, see README.md and docs/QUICKSTART.md.
+**Rules:** Use `bd` for ALL tracking. No markdown TODOs. Link discovered work with `--deps discovered-from:<id>`.
 
 <!-- END BEADS INTEGRATION -->

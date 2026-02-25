@@ -116,20 +116,7 @@ func TestHealthTracker_HealthMetrics(t *testing.T) {
 			require.NoError(t, err)
 			tt.setup(h)
 			got := h.HealthMetrics()
-			assert.Equal(t, tt.want.Available, got.Available)
-			assert.Equal(t, tt.want.FailureCount, got.FailureCount)
-			if tt.want.LastFailureAt == nil {
-				assert.Nil(t, got.LastFailureAt)
-			} else {
-				require.NotNil(t, got.LastFailureAt)
-				assert.Equal(t, *tt.want.LastFailureAt, *got.LastFailureAt)
-			}
-			if tt.want.CooldownUntil == nil {
-				assert.Nil(t, got.CooldownUntil)
-			} else {
-				require.NotNil(t, got.CooldownUntil)
-				assert.Equal(t, *tt.want.CooldownUntil, *got.CooldownUntil)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
