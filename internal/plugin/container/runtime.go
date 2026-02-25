@@ -192,9 +192,9 @@ func (r *Runtime) Start(ctx context.Context, cfg ContainerConfig) (*ContainerIns
 				"plugin", cfg.PluginName,
 				"container_id", containerID,
 				"error", removeErr)
-			return nil, sigilerr.Errorf(sigilerr.CodePluginRuntimeStartFailure,
-				"starting container %s for plugin %s failed; cleanup also failed (%v): %w",
-				containerID, cfg.PluginName, removeErr, err)
+			return nil, sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeStartFailure,
+				"starting container %s for plugin %s failed; cleanup also failed: %v",
+				containerID, cfg.PluginName, removeErr)
 		}
 		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeStartFailure,
 			"starting container %s for plugin %s", containerID, cfg.PluginName)
@@ -246,6 +246,9 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 	r.mu.Unlock()
 
 	if err := r.engine.Remove(ctx, id); err != nil {
+		slog.Error("container remove after stop failed",
+			"container_id", id,
+			"error", err)
 		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "removing container %s", id)
 	}
 

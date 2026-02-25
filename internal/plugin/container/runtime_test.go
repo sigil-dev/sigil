@@ -311,13 +311,31 @@ func TestRuntimeLifecycleStartCreateFailure(t *testing.T) {
 }
 
 func TestRuntimeLifecycleStopFailure(t *testing.T) {
-	engine := &fakeEngine{stopErr: errors.New("stop failed")}
+	engine := &fakeEngine{createID: "ctr-stop", stopErr: errors.New("stop failed")}
 	runtime := container.NewRuntime(engine)
 
-	err := runtime.Stop(context.Background(), "ctr-stop")
+	// Register the container's stop timeout via Start so we can verify it is
+	// retained (not deleted) when the engine Stop call fails.
+	cfg := container.ContainerConfig{
+		PluginName:       "stop-fail-tool",
+		Image:            "ghcr.io/org/stop-fail-tool:latest",
+		NetworkMode:      container.NetworkRestricted,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      5 * time.Second,
+	}
+	inst, err := runtime.Start(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.Contains(t, runtime.StopTimeouts(), inst.ID, "stop timeout should be registered after Start")
+
+	err = runtime.Stop(context.Background(), inst.ID)
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeCallFailure))
-	assert.Equal(t, []string{"stop"}, engine.calls)
+	assert.Equal(t, []string{"create", "start", "stop"}, engine.calls)
+	// The entry must be retained when engine.Stop fails — the delete only runs
+	// after a successful stop so that timeout state is not lost on failure.
+	assert.Contains(t, runtime.StopTimeouts(), inst.ID,
+		"stop timeout entry must be retained when engine Stop fails")
 }
 
 func TestRuntimeLifecycleRemoveFailureClearsTimeout(t *testing.T) {
@@ -368,6 +386,25 @@ func TestRuntimeLifecycleStartRejectsNetworkNone(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeConfigInvalid))
 	assert.Contains(t, err.Error(), "NetworkNone is not supported for gRPC plugins")
 	assert.Empty(t, engine.calls)
+}
+
+func TestRuntimeLifecycleStartHostNetwork(t *testing.T) {
+	engine := &fakeEngine{createID: "ctr-host"}
+	runtime := container.NewRuntime(engine)
+	cfg := container.ContainerConfig{
+		PluginName:       "host-net-tool",
+		Image:            "ghcr.io/org/host-net-tool:latest",
+		NetworkMode:      container.NetworkHost,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      5 * time.Second,
+	}
+
+	inst, err := runtime.Start(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1:50051", inst.Endpoint)
+	assert.Equal(t, container.NetworkHost, engine.createReq.NetworkMode)
+	assert.Equal(t, []string{"create", "start"}, engine.calls)
 }
 
 func TestRuntimeStopRejectsEmptyContainerID(t *testing.T) {
@@ -543,6 +580,8 @@ func TestRuntimeConcurrentStartStop(t *testing.T) {
 		}(inst.ID)
 	}
 	wg.Wait()
+
+	assert.Empty(t, runtime.StopTimeouts(), "all timeout entries must be removed after concurrent stops")
 }
 
 // safeFakeEngine is a thread-safe Engine implementation for concurrency tests.

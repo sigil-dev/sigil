@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -133,7 +134,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 
 	if errs := m.Validate(); len(errs) > 0 {
 		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"manifest validation failed: %w", sigilerr.Join(errs...))
+			"manifest validation failed: %w", errors.Join(errs...))
 	}
 
 	return &m, nil
@@ -228,7 +229,7 @@ func validateContainerExecution(execCfg ExecutionConfig) []error {
 			"manifest validation: execution.memory_limit is required for container tier"))
 	} else if _, err := ParseMemoryLimit(mem); err != nil {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"manifest validation: execution.memory_limit must match <positive-int>[Ki|Mi|Gi], got %q", execCfg.MemoryLimit))
+			"manifest validation: execution.memory_limit %q is invalid: %w", execCfg.MemoryLimit, err))
 	}
 
 	network := strings.TrimSpace(execCfg.Network)
