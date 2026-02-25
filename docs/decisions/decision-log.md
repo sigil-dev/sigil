@@ -976,7 +976,6 @@ The threshold value (3) was chosen to tolerate:
 - A single transient regex engine error
 - A pair of rapid consecutive failures from the same edge case
   while catching:
-
 - Persistent scanner misconfiguration
 - Systematic regex compilation failures after a bad rules update
 
@@ -1240,3 +1239,62 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 **Rationale:** This provides practical coverage for both tailnet and non-tailnet deployments while keeping implementation and test scope manageable for the phase.
 
 **Ref:** sigil-7ek.2, D012, D013, `docs/design/06-node-system.md`
+
+---
+
+## D079: Container Tier NetworkRestricted Uses Bridge Network with Localhost-Publish Isolation
+
+**Status:** Accepted (2026-02-22)
+
+**Question:** What Docker network mode should `NetworkRestricted` map to in the container execution tier?
+
+**Options considered:**
+
+1. `--network none` — no network access at all; requires sidecar proxy for gRPC.
+2. `--network bridge` with `--publish 127.0.0.1:<port>:<port>/tcp` (chosen) — containers use Docker bridge network but gRPC is exposed only on localhost.
+3. Custom Docker network with iptables filtering — future work.
+
+**Decision:** `NetworkRestricted` maps to Docker bridge network with `--publish 127.0.0.1` for inbound gRPC isolation. Full outbound filtering is deferred.
+
+**Rationale:** The localhost-publish constraint prevents external inbound access while keeping the implementation simple. Full outbound network filtering (via custom Docker networks or iptables) is a security hardening follow-up, not a Phase 6 blocker. This is documented explicitly to prevent the "bridge = unrestricted" misread from being re-raised as a bug.
+
+**Ref:** sigil-7ek.3, sigil-jp39.1, `docs/design/02-plugin-system.md`
+
+---
+
+## D080: Container Execution Tier Implemented in internal/plugin/container/
+
+**Status:** Accepted (2026-02-22)
+
+**Question:** Where does the container execution tier implementation live in the repository?
+
+**Options considered:**
+
+1. `internal/plugin/container/` — parallel to existing `goplugin/`, `wasm/`, `sandbox/` subdirectories (chosen).
+2. `internal/container/` — top-level alongside other internal packages.
+
+**Decision:** Container tier lives at `internal/plugin/container/`, consistent with the pattern established by `goplugin/`, `wasm/`, and `sandbox/`.
+
+**Rationale:** The design doc directory structure table predates the container tier implementation. The `internal/plugin/` subdirectory pattern already exists for runtime-tier code and is the natural home for a new tier. No design doc modification is needed; this ADR records the location decision.
+
+**Ref:** sigil-7ek.3, sigil-jp39.5, `docs/design/02-plugin-system.md`, `docs/design/10-build-and-distribution.md`
+
+---
+
+## D081: Phase 6 Container Tier Uses Docker CLI as Initial OCI Runtime
+
+**Status:** Accepted (2026-02-22)
+
+**Question:** Which OCI runtime CLI should the container execution tier use in Phase 6?
+
+**Options considered:**
+
+1. Docker CLI (chosen for Phase 6) — widely available, well-documented, supports create/start/stop/rm lifecycle.
+2. containerd/nerdctl — spec mentions OCI/containerd; closer to spec intent but less ubiquitous in dev environments.
+3. Generic OCI runtime abstraction — `OCIEngine.runtimeBinary` is already configurable; full abstraction is future work.
+
+**Decision:** Docker CLI (`docker`) is the default and only tested runtime for Phase 6. The `runtimeBinary` field on `OCIEngine` allows substituting alternatives (podman, nerdctl) without code changes.
+
+**Rationale:** Docker is universally available in development and CI environments. The `commandRunner` interface and configurable `runtimeBinary` design already supports alternative runtimes. Expanding test coverage to containerd/nerdctl is a follow-up concern outside Phase 6 scope.
+
+**Ref:** sigil-7ek.3, sigil-jp39.8, `docs/design/02-plugin-system.md`

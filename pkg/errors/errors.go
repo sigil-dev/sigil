@@ -45,6 +45,7 @@ const (
 	CodePluginSandboxUnsupported         Code = "plugin.sandbox.unsupported"
 	CodePluginSandboxSetupFailure        Code = "plugin.sandbox.setup.failure"
 	CodePluginSandboxNetworkInvalid      Code = "plugin.sandbox.network.invalid"
+	CodePluginRuntimeConfigInvalid       Code = "plugin.runtime.config.invalid"
 
 	CodeProviderRequestInvalid  Code = "provider.request.invalid"
 	CodeProviderResponseInvalid Code = "provider.response.invalid"

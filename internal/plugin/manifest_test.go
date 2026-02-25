@@ -89,6 +89,150 @@ execution:
 		"invalid tier error should have CodePluginManifestValidateInvalid")
 }
 
+func TestParseManifest_ContainerExecutionFields(t *testing.T) {
+	yaml := `
+name: python-tool
+version: 1.0.0
+type: tool
+execution:
+  tier: container
+  image: ghcr.io/org/python-tool:latest
+  network: restricted
+  memory_limit: 256Mi
+capabilities:
+  - tools.execute
+`
+	m, err := plugin.ParseManifest([]byte(yaml))
+	require.NoError(t, err)
+	assert.Equal(t, plugin.TierContainer, m.Execution.Tier)
+	assert.Equal(t, "ghcr.io/org/python-tool:latest", m.Execution.Image)
+	assert.Equal(t, "restricted", m.Execution.Network)
+	assert.Equal(t, "256Mi", m.Execution.MemoryLimit)
+}
+
+func TestParseManifest_ContainerExecutionValidation(t *testing.T) {
+	t.Run("missing image", func(t *testing.T) {
+		yaml := `
+name: python-tool
+version: 1.0.0
+type: tool
+execution:
+  tier: container
+  network: restricted
+  memory_limit: 256Mi
+capabilities:
+  - tools.execute
+`
+		_, err := plugin.ParseManifest([]byte(yaml))
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+		assert.Contains(t, err.Error(), "execution.image")
+	})
+
+	t.Run("missing memory limit", func(t *testing.T) {
+		yaml := `
+name: python-tool
+version: 1.0.0
+type: tool
+execution:
+  tier: container
+  image: ghcr.io/org/python-tool:latest
+  network: restricted
+capabilities:
+  - tools.execute
+`
+		_, err := plugin.ParseManifest([]byte(yaml))
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+		assert.Contains(t, err.Error(), "execution.memory_limit")
+	})
+
+	t.Run("invalid network mode", func(t *testing.T) {
+		yaml := `
+name: python-tool
+version: 1.0.0
+type: tool
+execution:
+  tier: container
+  image: ghcr.io/org/python-tool:latest
+  network: open
+  memory_limit: 256Mi
+capabilities:
+  - tools.execute
+`
+		_, err := plugin.ParseManifest([]byte(yaml))
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+		assert.Contains(t, err.Error(), "execution.network")
+	})
+
+	t.Run("image with embedded tab character", func(t *testing.T) {
+		// Use struct construction so the tab survives without YAML escaping issues.
+		// The tab is embedded mid-string so TrimSpace does not remove it.
+		m := &plugin.Manifest{
+			Name:    "python-tool",
+			Version: "1.0.0",
+			Type:    plugin.TypeTool,
+			Execution: plugin.ExecutionConfig{
+				Tier:        plugin.TierContainer,
+				Image:       "ghcr.io/org/tool\t:v1",
+				MemoryLimit: "256Mi",
+			},
+			Capabilities: []string{"tools.execute"},
+		}
+		errs := m.Validate()
+		require.NotEmpty(t, errs)
+		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
+		combined := ""
+		for _, e := range errs {
+			combined += e.Error()
+		}
+		assert.Contains(t, combined, "execution.image")
+	})
+
+	t.Run("image with embedded newline character", func(t *testing.T) {
+		// Use struct construction so the newline survives without YAML escaping issues.
+		// The newline is embedded mid-string so TrimSpace does not remove it.
+		m := &plugin.Manifest{
+			Name:    "python-tool",
+			Version: "1.0.0",
+			Type:    plugin.TypeTool,
+			Execution: plugin.ExecutionConfig{
+				Tier:        plugin.TierContainer,
+				Image:       "ghcr.io/org/tool\n:v1",
+				MemoryLimit: "256Mi",
+			},
+			Capabilities: []string{"tools.execute"},
+		}
+		errs := m.Validate()
+		require.NotEmpty(t, errs)
+		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
+		combined := ""
+		for _, e := range errs {
+			combined += e.Error()
+		}
+		assert.Contains(t, combined, "execution.image")
+	})
+
+	t.Run("path-prefix image rejected as non-OCI reference", func(t *testing.T) {
+		yaml := `
+name: python-tool
+version: 1.0.0
+type: tool
+execution:
+  tier: container
+  image: ./local
+  memory_limit: 256Mi
+capabilities:
+  - tools.execute
+`
+		_, err := plugin.ParseManifest([]byte(yaml))
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+		assert.Contains(t, err.Error(), "execution.image")
+	})
+}
+
 func TestValidateManifest_ConflictingCapabilities(t *testing.T) {
 	m := &plugin.Manifest{
 		Name:             "conflict",

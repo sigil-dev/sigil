@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -49,6 +50,23 @@ var validExecutionTiers = map[ExecutionTier]bool{
 // capPatternRe matches valid capability pattern characters.
 var capPatternRe = regexp.MustCompile(`^[a-zA-Z0-9.*_\-/]+$`)
 
+// validContainerNetworkModes enumerates the allowed container network modes.
+var validContainerNetworkModes = map[string]bool{
+	"none":       true,
+	"restricted": true,
+	"host":       true,
+}
+
+// ValidateContainerNetworkMode returns an error if mode is not a recognized
+// container network mode (none, restricted, host).
+func ValidateContainerNetworkMode(mode string) error {
+	if !validContainerNetworkModes[mode] {
+		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"network mode must be one of [none, restricted, host], got %q", mode)
+	}
+	return nil
+}
+
 // semverRe matches strict semver (no "v" prefix): MAJOR.MINOR.PATCH[-prerelease][+build].
 // Leading zeros on numeric segments are disallowed per semver spec.
 // Matches the same pattern as pkg/plugin/validate.go.
@@ -75,8 +93,11 @@ type Manifest struct {
 
 // ExecutionConfig defines how the plugin should be executed.
 type ExecutionConfig struct {
-	Tier    ExecutionTier `yaml:"tier"`
-	Sandbox SandboxConfig `yaml:"sandbox,omitempty"`
+	Tier        ExecutionTier `yaml:"tier"`
+	Sandbox     SandboxConfig `yaml:"sandbox,omitempty"`
+	Image       string        `yaml:"image,omitempty"`
+	Network     string        `yaml:"network,omitempty"`
+	MemoryLimit string        `yaml:"memory_limit,omitempty"`
 }
 
 // SandboxConfig defines sandbox restrictions for process-tier plugins.
@@ -108,12 +129,12 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	var m Manifest
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"manifest parse: %s", err)
+			"manifest parse: %w", err)
 	}
 
 	if errs := m.Validate(); len(errs) > 0 {
-		// Return the first validation error for simplicity.
-		return nil, errs[0]
+		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation failed: %w", errors.Join(errs...))
 	}
 
 	return &m, nil
@@ -145,6 +166,9 @@ func (m *Manifest) Validate() []error {
 	if !validExecutionTiers[m.Execution.Tier] {
 		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 			"manifest validation: execution tier must be one of [wasm, process, container], got %q", m.Execution.Tier))
+	}
+	if m.Execution.Tier == TierContainer {
+		errs = append(errs, validateContainerExecution(m.Execution)...)
 	}
 
 	for i, cap := range m.Capabilities {
@@ -186,9 +210,35 @@ func (m *Manifest) Validate() []error {
 		}
 	}
 
-	// TODO(sigil-7ek.3): Add validation for container-tier specific fields when design is finalized.
-	// Fields to track: config_schema, dependencies, storage backends, resource limits, network isolation.
-	// See docs/design/02-plugin-system.md for container execution model.
+	return errs
+}
+
+func validateContainerExecution(execCfg ExecutionConfig) []error {
+	var errs []error
+
+	if execCfg.Image == "" {
+		errs = append(errs, sigilerr.New(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation: execution.image is required for container tier"))
+	} else if err := ValidateImageRef(execCfg.Image); err != nil {
+		errs = append(errs, err)
+	}
+
+	mem := strings.TrimSpace(execCfg.MemoryLimit)
+	if mem == "" {
+		errs = append(errs, sigilerr.New(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation: execution.memory_limit is required for container tier"))
+	} else if _, err := ParseMemoryLimit(mem); err != nil {
+		errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation: execution.memory_limit %q is invalid: %w", execCfg.MemoryLimit, err))
+	}
+
+	network := strings.TrimSpace(execCfg.Network)
+	if network != "" {
+		if err := ValidateContainerNetworkMode(network); err != nil {
+			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+				"manifest validation: execution.network must be one of [none, restricted, host], got %q", execCfg.Network))
+		}
+	}
 
 	return errs
 }
