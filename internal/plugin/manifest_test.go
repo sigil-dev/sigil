@@ -36,8 +36,8 @@ lifecycle:
   hot_reload: true
   graceful_shutdown_timeout: 30s
 `
-	m, err := plugin.ParseManifest([]byte(yaml))
-	require.NoError(t, err)
+	m, errs := plugin.ParseManifest([]byte(yaml))
+	require.Empty(t, errs)
 	assert.Equal(t, "telegram-channel", m.Name)
 	assert.Equal(t, "1.2.0", m.Version)
 	assert.Equal(t, plugin.TypeChannel, m.Type)
@@ -55,10 +55,10 @@ type: invalid
 execution:
   tier: process
 `
-	_, err := plugin.ParseManifest([]byte(yaml))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "type")
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+	_, errs := plugin.ParseManifest([]byte(yaml))
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Error(), "type")
+	assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"manifest type validation error should have CodePluginManifestValidateInvalid")
 }
 
@@ -69,9 +69,9 @@ type: tool
 execution:
   tier: process
 `
-	_, err := plugin.ParseManifest([]byte(yaml))
-	assert.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+	_, errs := plugin.ParseManifest([]byte(yaml))
+	require.NotEmpty(t, errs)
+	assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"missing name error should have CodePluginManifestValidateInvalid")
 }
 
@@ -83,9 +83,9 @@ type: tool
 execution:
   tier: quantum
 `
-	_, err := plugin.ParseManifest([]byte(yaml))
-	assert.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+	_, errs := plugin.ParseManifest([]byte(yaml))
+	require.NotEmpty(t, errs)
+	assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"invalid tier error should have CodePluginManifestValidateInvalid")
 }
 
@@ -102,8 +102,8 @@ execution:
 capabilities:
   - tools.execute
 `
-	m, err := plugin.ParseManifest([]byte(yaml))
-	require.NoError(t, err)
+	m, errs := plugin.ParseManifest([]byte(yaml))
+	require.Empty(t, errs)
 	assert.Equal(t, plugin.TierContainer, m.Execution.Tier)
 	assert.Equal(t, "ghcr.io/org/python-tool:latest", m.Execution.Image)
 	assert.Equal(t, "restricted", m.Execution.Network)
@@ -123,10 +123,10 @@ execution:
 capabilities:
   - tools.execute
 `
-		_, err := plugin.ParseManifest([]byte(yaml))
-		require.Error(t, err)
-		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, err.Error(), "execution.image")
+		_, errs := plugin.ParseManifest([]byte(yaml))
+		require.NotEmpty(t, errs)
+		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
+		assert.Contains(t, errs[0].Error(), "execution.image")
 	})
 
 	t.Run("missing memory limit", func(t *testing.T) {
@@ -141,10 +141,10 @@ execution:
 capabilities:
   - tools.execute
 `
-		_, err := plugin.ParseManifest([]byte(yaml))
-		require.Error(t, err)
-		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, err.Error(), "execution.memory_limit")
+		_, errs := plugin.ParseManifest([]byte(yaml))
+		require.NotEmpty(t, errs)
+		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
+		assert.Contains(t, errs[0].Error(), "execution.memory_limit")
 	})
 
 	t.Run("invalid network mode", func(t *testing.T) {
@@ -160,10 +160,10 @@ execution:
 capabilities:
   - tools.execute
 `
-		_, err := plugin.ParseManifest([]byte(yaml))
-		require.Error(t, err)
-		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, err.Error(), "execution.network")
+		_, errs := plugin.ParseManifest([]byte(yaml))
+		require.NotEmpty(t, errs)
+		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
+		assert.Contains(t, errs[0].Error(), "execution.network")
 	})
 
 	t.Run("image with embedded tab character", func(t *testing.T) {

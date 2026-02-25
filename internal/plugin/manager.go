@@ -65,10 +65,10 @@ func (m *Manager) Discover(ctx context.Context) ([]*Manifest, error) {
 			continue
 		}
 
-		manifest, err := ParseManifest(data)
-		if err != nil {
+		manifest, errs := ParseManifest(data)
+		if len(errs) > 0 {
 			slog.Warn("skipping plugin: invalid manifest",
-				"path", manifestPath, "error", err)
+				"path", manifestPath, "errors", errs)
 			continue
 		}
 
