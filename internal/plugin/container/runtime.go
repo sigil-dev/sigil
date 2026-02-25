@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -30,10 +29,6 @@ const (
 	NetworkNone       NetworkMode = "none"
 	NetworkRestricted NetworkMode = "restricted"
 	NetworkHost       NetworkMode = "host"
-)
-
-var (
-	imagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./:_@-]*$`)
 )
 
 // ContainerConfig captures runtime settings for container-tier plugin execution.
@@ -117,28 +112,9 @@ func ConfigFromManifest(manifest *plugin.Manifest) (*ContainerConfig, error) {
 }
 
 // ValidateImage performs basic validation on OCI image references.
+// It delegates to plugin.ValidateImageRef for canonical validation logic.
 func ValidateImage(image string) error {
-	clean := strings.TrimSpace(image)
-	if clean == "" {
-		return sigilerr.New(sigilerr.CodePluginManifestValidateInvalid, "execution.image must not be empty")
-	}
-	if strings.Contains(clean, "..") {
-		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"execution.image %q must not contain '..'", image)
-	}
-	if strings.ContainsAny(clean, " \t\r\n") {
-		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"execution.image %q must not contain whitespace", image)
-	}
-	if strings.HasPrefix(clean, "/") || strings.HasPrefix(clean, ".") {
-		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"execution.image %q must be an OCI image reference", image)
-	}
-	if !imagePattern.MatchString(clean) {
-		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"execution.image %q contains invalid characters", image)
-	}
-	return nil
+	return plugin.ValidateImageRef(image)
 }
 
 // CreateContainerRequest contains the minimum isolation controls required to start a plugin container.
@@ -212,10 +188,13 @@ func (r *Runtime) Start(ctx context.Context, cfg ContainerConfig) (*ContainerIns
 
 	if err := r.engine.Start(ctx, containerID); err != nil {
 		if removeErr := r.engine.Remove(ctx, containerID); removeErr != nil {
-			slog.Warn("container cleanup after start failure",
+			slog.Error("container cleanup after start failure",
 				"plugin", cfg.PluginName,
 				"container_id", containerID,
 				"error", removeErr)
+			return nil, sigilerr.Errorf(sigilerr.CodePluginRuntimeStartFailure,
+				"starting container %s for plugin %s failed; cleanup also failed (%v): %w",
+				containerID, cfg.PluginName, removeErr, err)
 		}
 		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeStartFailure,
 			"starting container %s for plugin %s", containerID, cfg.PluginName)
@@ -232,6 +211,13 @@ func (r *Runtime) Start(ctx context.Context, cfg ContainerConfig) (*ContainerIns
 }
 
 // Stop gracefully stops and removes a plugin container.
+//
+// If the engine's Remove call fails, the returned error message contains the
+// container ID (e.g. "removing container <id>: ..."). Callers should invoke
+// Remove directly rather than retrying Stop, because the stop-timeout entry
+// for id is deleted unconditionally before Remove is attempted; a subsequent
+// Stop call would fall back to DefaultStopTimeout instead of the originally
+// configured value.
 func (r *Runtime) Stop(ctx context.Context, id string) error {
 	if r.engine == nil {
 		return sigilerr.New(sigilerr.CodePluginRuntimeCallFailure, "container runtime engine is nil")
@@ -252,7 +238,9 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 	}
 
 	// The container is stopped; clean up the timeout entry unconditionally
-	// so it is not leaked if Remove fails below.
+	// so it is not leaked if Remove fails below. Note: if the caller retries
+	// Stop after a Remove failure, DefaultStopTimeout will be used since this
+	// entry is already deleted. Callers should invoke Remove directly instead.
 	r.mu.Lock()
 	delete(r.stopTimeouts, id)
 	r.mu.Unlock()

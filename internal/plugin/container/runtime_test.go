@@ -320,7 +320,7 @@ func TestRuntimeLifecycleStopFailure(t *testing.T) {
 	assert.Equal(t, []string{"stop"}, engine.calls)
 }
 
-func TestRuntimeLifecycleRemoveFailurePreservesTimeout(t *testing.T) {
+func TestRuntimeLifecycleRemoveFailureClearsTimeout(t *testing.T) {
 	engine := &fakeEngine{createID: "ctr-rm", removeErr: errors.New("rm failed")}
 	runtime := container.NewRuntime(engine)
 
@@ -338,15 +338,16 @@ func TestRuntimeLifecycleRemoveFailurePreservesTimeout(t *testing.T) {
 	assert.Contains(t, runtime.StopTimeouts(), inst.ID, "stop timeout should be registered after Start")
 
 	// Stop succeeds for the engine stop call but Remove fails.
+	// The error includes the container ID so the caller can invoke Remove directly.
 	err = runtime.Stop(context.Background(), inst.ID)
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeCallFailure))
 	assert.Contains(t, err.Error(), "removing container")
+	assert.Contains(t, err.Error(), inst.ID, "error must include container ID so caller can invoke Remove directly")
 	assert.Equal(t, []string{"create", "start", "stop", "remove"}, engine.calls)
 
-	// The stopTimeouts entry MUST be cleaned up even though Remove failed.
-	// Without the fix, delete(r.stopTimeouts, id) would have been skipped,
-	// leaking the entry and causing a memory/logic error on future Stop calls.
+	// The stopTimeouts entry is deleted unconditionally before Remove is attempted.
+	// A subsequent Stop call would use DefaultStopTimeout; callers must invoke Remove directly.
 	assert.NotContains(t, runtime.StopTimeouts(), inst.ID, "stop timeout must be deleted after Stop even when Remove fails")
 }
 
@@ -455,6 +456,47 @@ func TestContainerConfigValidateBoundaries(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestRuntimeNilEngineGuard(t *testing.T) {
+	tests := []struct {
+		name     string
+		call     func(r *container.Runtime) error
+		wantCode sigilerr.Code
+	}{
+		{
+			name: "Start returns CodePluginRuntimeStartFailure",
+			call: func(r *container.Runtime) error {
+				cfg := container.ContainerConfig{
+					PluginName:       "test-plugin",
+					Image:            "ghcr.io/org/test:latest",
+					NetworkMode:      container.NetworkRestricted,
+					MemoryLimitBytes: 256 * 1024 * 1024,
+					GRPCPort:         50051,
+					StopTimeout:      5 * time.Second,
+				}
+				_, err := r.Start(context.Background(), cfg)
+				return err
+			},
+			wantCode: sigilerr.CodePluginRuntimeStartFailure,
+		},
+		{
+			name: "Stop returns CodePluginRuntimeCallFailure",
+			call: func(r *container.Runtime) error {
+				return r.Stop(context.Background(), "ctr-1")
+			},
+			wantCode: sigilerr.CodePluginRuntimeCallFailure,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &container.Runtime{}
+			err := tt.call(r)
+			require.Error(t, err)
+			assert.True(t, sigilerr.HasCode(err, tt.wantCode))
 		})
 	}
 }

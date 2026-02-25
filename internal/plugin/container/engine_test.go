@@ -143,6 +143,16 @@ func TestOCIEngineLifecycleCommands(t *testing.T) {
 	assert.Equal(t, commandCall{name: "docker", args: []string{"rm", "--force", "ctr-1"}}, runner.calls[2])
 }
 
+func TestOCIEngineStopClampsSubSecondTimeoutToOneSecond(t *testing.T) {
+	runner := &fakeRunner{}
+	engine := newOCIEngineWithRunner("docker", runner)
+
+	require.NoError(t, engine.Stop(context.Background(), "ctr-1", 500*time.Millisecond))
+
+	require.Len(t, runner.calls, 1)
+	assert.Equal(t, commandCall{name: "docker", args: []string{"stop", "--time", "1", "ctr-1"}}, runner.calls[0])
+}
+
 func TestOCIEngineLifecycleCommandErrors(t *testing.T) {
 	runner := &fakeRunner{
 		errors: []error{

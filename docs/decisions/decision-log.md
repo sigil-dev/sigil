@@ -976,7 +976,6 @@ The threshold value (3) was chosen to tolerate:
 - A single transient regex engine error
 - A pair of rapid consecutive failures from the same edge case
   while catching:
-
 - Persistent scanner misconfiguration
 - Systematic regex compilation failures after a bad rules update
 

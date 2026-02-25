@@ -4,7 +4,6 @@
 package plugin
 
 import (
-	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -30,11 +29,6 @@ var validPluginTypes = map[PluginType]bool{
 	TypeTool:     true,
 	TypeSkill:    true,
 }
-
-// validOCIImagePattern matches valid OCI image references.
-// Mirrors the imagePattern in internal/plugin/container/runtime.go.
-// A direct import is not possible due to a circular dependency (container imports plugin).
-var validOCIImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9./:_@-]*$`)
 
 // ExecutionTier determines the isolation level for a plugin (internal runtime representation).
 type ExecutionTier string
@@ -139,7 +133,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 
 	if errs := m.Validate(); len(errs) > 0 {
 		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"manifest validation failed: %w", errors.Join(errs...))
+			"manifest validation failed: %w", sigilerr.Join(errs...))
 	}
 
 	return &m, nil
@@ -221,22 +215,11 @@ func (m *Manifest) Validate() []error {
 func validateContainerExecution(execCfg ExecutionConfig) []error {
 	var errs []error
 
-	image := strings.TrimSpace(execCfg.Image)
-	if image == "" {
+	if execCfg.Image == "" {
 		errs = append(errs, sigilerr.New(sigilerr.CodePluginManifestValidateInvalid,
 			"manifest validation: execution.image is required for container tier"))
-	} else {
-		if strings.ContainsAny(image, " \t\r\n") {
-			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-				"manifest validation: execution.image %q must not contain whitespace", execCfg.Image))
-		}
-		if strings.HasPrefix(image, "/") || strings.HasPrefix(image, ".") || strings.Contains(image, "..") {
-			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-				"manifest validation: execution.image %q must be an OCI image reference", execCfg.Image))
-		} else if !validOCIImagePattern.MatchString(image) {
-			errs = append(errs, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-				"manifest validation: execution.image %q contains invalid characters", execCfg.Image))
-		}
+	} else if err := ValidateImageRef(execCfg.Image); err != nil {
+		errs = append(errs, err)
 	}
 
 	mem := strings.TrimSpace(execCfg.MemoryLimit)
