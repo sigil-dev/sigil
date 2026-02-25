@@ -8,17 +8,12 @@ import (
 	"time"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/health"
 )
 
-// HealthMetrics exposes the current health state of a provider for
-// monitoring and operator visibility. All fields are point-in-time
-// snapshots safe to serialize to JSON.
-type HealthMetrics struct {
-	FailureCount  int64      `json:"failure_count"`
-	LastFailureAt *time.Time `json:"last_failure_at,omitempty"`
-	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
-	Available     bool       `json:"available"`
-}
+// HealthMetrics is an alias for health.Metrics, preserved for backward
+// compatibility with existing callers in this package and its consumers.
+type HealthMetrics = health.Metrics
 
 // HealthTracker provides simple health state tracking for providers.
 // A provider is considered healthy until RecordFailure is called.
@@ -51,16 +46,21 @@ func NewHealthTracker(cooldown time.Duration) (*HealthTracker, error) {
 	}, nil
 }
 
-// IsHealthy returns true if the provider is healthy or the cooldown has elapsed.
-func (h *HealthTracker) IsHealthy() bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
+// isHealthyLocked reports whether the provider is healthy or the cooldown
+// has elapsed. The caller MUST hold at least h.mu.RLock.
+func (h *HealthTracker) isHealthyLocked() bool {
 	if h.healthy {
 		return true
 	}
 	// Allow retry after cooldown expires.
 	return h.nowFunc().Sub(h.failedAt) >= h.cooldown
+}
+
+// IsHealthy returns true if the provider is healthy or the cooldown has elapsed.
+func (h *HealthTracker) IsHealthy() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.isHealthyLocked()
 }
 
 // RecordSuccess marks the provider as healthy.
@@ -103,15 +103,18 @@ func (h *HealthTracker) HealthMetrics() HealthMetrics {
 		m.LastFailureAt = &t
 	}
 
-	if h.healthy {
-		m.Available = true
-		// No active cooldown when healthy.
-		return m
+	m.Available = h.isHealthyLocked()
+	if !h.healthy {
+		// Provider is marked unhealthy — compute cooldown deadline.
+		cooldownEnd := h.failedAt.Add(h.cooldown)
+		m.CooldownUntil = &cooldownEnd
 	}
-
-	// Provider is marked unhealthy — compute cooldown deadline.
-	cooldownEnd := h.failedAt.Add(h.cooldown)
-	m.CooldownUntil = &cooldownEnd
-	m.Available = h.nowFunc().Sub(h.failedAt) >= h.cooldown
 	return m
+}
+
+// HealthMetricsPtr is a convenience wrapper around HealthMetrics that returns
+// a pointer, avoiding the need for an intermediate variable at call sites.
+func (h *HealthTracker) HealthMetricsPtr() *HealthMetrics {
+	hm := h.HealthMetrics()
+	return &hm
 }

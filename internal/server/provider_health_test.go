@@ -13,6 +13,7 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/server"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/health"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,11 +37,34 @@ func newTestServerWithProviders(t *testing.T, ps server.ProviderService) *server
 		&mockPluginService{},
 		&mockSessionService{},
 		&mockUserService{},
+		ps,
 	)
-	svc.SetProviders(ps)
 	srv, err := server.New(server.Config{
 		ListenAddr: "127.0.0.1:0",
 		Services:   svc,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
+	return srv
+}
+
+func newTestServerWithProvidersAndAuth(t *testing.T, ps server.ProviderService, validator server.TokenValidator) *server.Server {
+	t.Helper()
+	svc := server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+		ps,
+	)
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		Services:       svc,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -55,10 +79,9 @@ func TestRoutes_GetProviderHealth_Healthy(t *testing.T) {
 	ps := &mockProviderService{
 		healthMap: map[string]*server.ProviderHealthDetail{
 			"anthropic": {
-				Provider:     "anthropic",
-				Available:    true,
-				FailureCount: 0,
-				Message:      "ok",
+				Provider: "anthropic",
+				Message:  "ok",
+				Metrics:  health.Metrics{Available: true, FailureCount: 0},
 			},
 		},
 	}
@@ -86,12 +109,14 @@ func TestRoutes_GetProviderHealth_Unhealthy(t *testing.T) {
 	ps := &mockProviderService{
 		healthMap: map[string]*server.ProviderHealthDetail{
 			"openai": {
-				Provider:      "openai",
-				Available:     false,
-				FailureCount:  3,
-				LastFailureAt: &failTime,
-				CooldownUntil: &cooldownEnd,
-				Message:       "ok",
+				Provider: "openai",
+				Message:  "ok",
+				Metrics: health.Metrics{
+					Available:     false,
+					FailureCount:  3,
+					LastFailureAt: &failTime,
+					CooldownUntil: &cooldownEnd,
+				},
 			},
 		},
 	}
@@ -131,7 +156,7 @@ func TestRoutes_GetProviderHealth_NotFound(t *testing.T) {
 func TestRoutes_GetProviderHealth_RequiresAdmin(t *testing.T) {
 	ps := &mockProviderService{
 		healthMap: map[string]*server.ProviderHealthDetail{
-			"anthropic": {Provider: "anthropic", Available: true, Message: "ok"},
+			"anthropic": {Provider: "anthropic", Message: "ok", Metrics: health.Metrics{Available: true}},
 		},
 	}
 
@@ -141,25 +166,7 @@ func TestRoutes_GetProviderHealth_RequiresAdmin(t *testing.T) {
 		},
 	}
 
-	svc := server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	)
-	svc.SetProviders(ps)
-
-	srv, err := server.New(server.Config{
-		ListenAddr:     "127.0.0.1:0",
-		TokenValidator: validator,
-		Services:       svc,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
+	srv := newTestServerWithProvidersAndAuth(t, ps, validator)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
 	req.Header.Set("Authorization", "Bearer user-token")
@@ -173,7 +180,7 @@ func TestRoutes_GetProviderHealth_RequiresAdmin(t *testing.T) {
 func TestRoutes_GetProviderHealth_AdminWildcardSucceeds(t *testing.T) {
 	ps := &mockProviderService{
 		healthMap: map[string]*server.ProviderHealthDetail{
-			"anthropic": {Provider: "anthropic", Available: true, Message: "ok"},
+			"anthropic": {Provider: "anthropic", Message: "ok", Metrics: health.Metrics{Available: true}},
 		},
 	}
 
@@ -183,25 +190,7 @@ func TestRoutes_GetProviderHealth_AdminWildcardSucceeds(t *testing.T) {
 		},
 	}
 
-	svc := server.NewServicesForTest(
-		&mockWorkspaceService{},
-		&mockPluginService{},
-		&mockSessionService{},
-		&mockUserService{},
-	)
-	svc.SetProviders(ps)
-
-	srv, err := server.New(server.Config{
-		ListenAddr:     "127.0.0.1:0",
-		TokenValidator: validator,
-		Services:       svc,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
+	srv := newTestServerWithProvidersAndAuth(t, ps, validator)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
 	req.Header.Set("Authorization", "Bearer admin-token")

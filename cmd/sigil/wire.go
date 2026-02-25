@@ -196,6 +196,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 		&pluginServiceAdapter{mgr: pluginMgr},
 		&sessionServiceAdapter{wsMgr: wsMgr},
 		&userServiceAdapter{store: gs.Users()},
+		&providerServiceAdapter{reg: provReg},
 	)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
@@ -499,6 +500,30 @@ func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, er
 		}
 	}
 	return out, nil
+}
+
+// providerServiceAdapter adapts the provider registry to the server.ProviderService interface.
+type providerServiceAdapter struct {
+	reg *provider.Registry
+}
+
+func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*server.ProviderHealthDetail, error) {
+	p, err := a.reg.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	status, err := p.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	detail := &server.ProviderHealthDetail{
+		Provider: status.Provider,
+		Message:  status.Message,
+	}
+	if status.Health != nil {
+		detail.Metrics = *status.Health
+	}
+	return detail, nil
 }
 
 // configTokenValidator validates bearer tokens against pre-computed SHA256

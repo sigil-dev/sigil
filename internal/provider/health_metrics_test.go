@@ -4,6 +4,7 @@
 package provider_test
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -12,107 +13,125 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHealthTracker_HealthMetrics_ZeroValue(t *testing.T) {
-	h, err := provider.NewHealthTracker(30 * time.Second)
-	require.NoError(t, err)
-
-	m := h.HealthMetrics()
-
-	assert.True(t, m.Available, "new tracker should be available")
-	assert.Equal(t, int64(0), m.FailureCount, "no failures recorded yet")
-	assert.Nil(t, m.LastFailureAt, "no failures means nil last failure time")
-	assert.Nil(t, m.CooldownUntil, "no failures means nil cooldown")
-}
-
-func TestHealthTracker_HealthMetrics_AfterSingleFailure(t *testing.T) {
+func TestHealthTracker_HealthMetrics(t *testing.T) {
 	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
-	h, err := provider.NewHealthTracker(10 * time.Second)
-	require.NoError(t, err)
-	h.SetNowFunc(func() time.Time { return now })
-
-	h.RecordFailure()
-
-	m := h.HealthMetrics()
-	assert.False(t, m.Available, "should be unavailable during cooldown")
-	assert.Equal(t, int64(1), m.FailureCount, "one failure recorded")
-	require.NotNil(t, m.LastFailureAt, "should have a failure timestamp")
-	assert.Equal(t, now, *m.LastFailureAt)
-	require.NotNil(t, m.CooldownUntil, "should have cooldown deadline")
-	assert.Equal(t, now.Add(10*time.Second), *m.CooldownUntil)
-}
-
-func TestHealthTracker_HealthMetrics_AfterMultipleFailures(t *testing.T) {
-	first := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
-	second := first.Add(5 * time.Second)
-	h, err := provider.NewHealthTracker(10 * time.Second)
-	require.NoError(t, err)
-
-	h.SetNowFunc(func() time.Time { return first })
-	h.RecordFailure()
-
-	h.SetNowFunc(func() time.Time { return second })
-	h.RecordFailure()
-
-	m := h.HealthMetrics()
-	assert.False(t, m.Available)
-	assert.Equal(t, int64(2), m.FailureCount, "two failures recorded")
-	require.NotNil(t, m.LastFailureAt)
-	assert.Equal(t, second, *m.LastFailureAt, "should reflect most recent failure time")
-	require.NotNil(t, m.CooldownUntil)
-	assert.Equal(t, second.Add(10*time.Second), *m.CooldownUntil, "cooldown from latest failure")
-}
-
-func TestHealthTracker_HealthMetrics_AfterCooldownExpiry(t *testing.T) {
-	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
-	h, err := provider.NewHealthTracker(10 * time.Second)
-	require.NoError(t, err)
-	h.SetNowFunc(func() time.Time { return now })
-
-	h.RecordFailure()
-
-	// Advance past cooldown
+	second := now.Add(5 * time.Second)
 	later := now.Add(11 * time.Second)
-	h.SetNowFunc(func() time.Time { return later })
 
-	m := h.HealthMetrics()
-	assert.True(t, m.Available, "should be available after cooldown")
-	assert.Equal(t, int64(1), m.FailureCount, "failure count persists after cooldown")
-	require.NotNil(t, m.LastFailureAt, "failure timestamp persists")
-	assert.Equal(t, now, *m.LastFailureAt)
-	// CooldownUntil should be in the past (cooldown expired)
-	require.NotNil(t, m.CooldownUntil)
-	assert.Equal(t, now.Add(10*time.Second), *m.CooldownUntil)
-}
+	cooldownUntilNow := now.Add(10 * time.Second)
+	cooldownUntilSecond := second.Add(10 * time.Second)
 
-func TestHealthTracker_HealthMetrics_AfterRecovery(t *testing.T) {
-	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
-	h, err := provider.NewHealthTracker(10 * time.Second)
-	require.NoError(t, err)
-	h.SetNowFunc(func() time.Time { return now })
+	tests := []struct {
+		name  string
+		setup func(h *provider.HealthTracker)
+		want  provider.HealthMetrics
+	}{
+		{
+			name:  "zero value initial state",
+			setup: func(h *provider.HealthTracker) {},
+			want: provider.HealthMetrics{
+				Available:     true,
+				FailureCount:  0,
+				LastFailureAt: nil,
+				CooldownUntil: nil,
+			},
+		},
+		{
+			name: "single failure",
+			setup: func(h *provider.HealthTracker) {
+				h.SetNowFunc(func() time.Time { return now })
+				h.RecordFailure()
+			},
+			want: provider.HealthMetrics{
+				Available:     false,
+				FailureCount:  1,
+				LastFailureAt: &now,
+				CooldownUntil: &cooldownUntilNow,
+			},
+		},
+		{
+			name: "multiple failures reflect most recent",
+			setup: func(h *provider.HealthTracker) {
+				h.SetNowFunc(func() time.Time { return now })
+				h.RecordFailure()
+				h.SetNowFunc(func() time.Time { return second })
+				h.RecordFailure()
+			},
+			want: provider.HealthMetrics{
+				Available:     false,
+				FailureCount:  2,
+				LastFailureAt: &second,
+				CooldownUntil: &cooldownUntilSecond,
+			},
+		},
+		{
+			name: "cooldown expiry makes available again",
+			setup: func(h *provider.HealthTracker) {
+				h.SetNowFunc(func() time.Time { return now })
+				h.RecordFailure()
+				h.SetNowFunc(func() time.Time { return later })
+			},
+			want: provider.HealthMetrics{
+				Available:     true,
+				FailureCount:  1,
+				LastFailureAt: &now,
+				CooldownUntil: &cooldownUntilNow,
+			},
+		},
+		{
+			name: "recovery after failure clears cooldown",
+			setup: func(h *provider.HealthTracker) {
+				h.SetNowFunc(func() time.Time { return now })
+				h.RecordFailure()
+				h.RecordSuccess()
+			},
+			want: provider.HealthMetrics{
+				Available:     true,
+				FailureCount:  1,
+				LastFailureAt: &now,
+				CooldownUntil: nil,
+			},
+		},
+		{
+			name: "failure count is cumulative and not reset on success",
+			setup: func(h *provider.HealthTracker) {
+				h.SetNowFunc(func() time.Time { return now })
+				h.RecordFailure()
+				h.RecordFailure()
+				h.RecordFailure()
+				h.RecordSuccess()
+			},
+			want: provider.HealthMetrics{
+				Available:     true,
+				FailureCount:  3,
+				LastFailureAt: &now,
+				CooldownUntil: nil,
+			},
+		},
+	}
 
-	h.RecordFailure()
-	h.RecordSuccess()
-
-	m := h.HealthMetrics()
-	assert.True(t, m.Available, "should be available after recovery")
-	assert.Equal(t, int64(1), m.FailureCount, "failure count persists after recovery")
-	require.NotNil(t, m.LastFailureAt, "failure timestamp persists after recovery")
-	assert.Nil(t, m.CooldownUntil, "cooldown cleared on recovery")
-}
-
-func TestHealthTracker_HealthMetrics_SuccessResetsCountOnRecovery(t *testing.T) {
-	// Verify that RecordSuccess does NOT reset failure count —
-	// the count is cumulative for monitoring purposes.
-	h, err := provider.NewHealthTracker(10 * time.Second)
-	require.NoError(t, err)
-
-	h.RecordFailure()
-	h.RecordFailure()
-	h.RecordFailure()
-	h.RecordSuccess()
-
-	m := h.HealthMetrics()
-	assert.Equal(t, int64(3), m.FailureCount, "failure count is cumulative, not reset on success")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, err := provider.NewHealthTracker(10 * time.Second)
+			require.NoError(t, err)
+			tt.setup(h)
+			got := h.HealthMetrics()
+			assert.Equal(t, tt.want.Available, got.Available)
+			assert.Equal(t, tt.want.FailureCount, got.FailureCount)
+			if tt.want.LastFailureAt == nil {
+				assert.Nil(t, got.LastFailureAt)
+			} else {
+				require.NotNil(t, got.LastFailureAt)
+				assert.Equal(t, *tt.want.LastFailureAt, *got.LastFailureAt)
+			}
+			if tt.want.CooldownUntil == nil {
+				assert.Nil(t, got.CooldownUntil)
+			} else {
+				require.NotNil(t, got.CooldownUntil)
+				assert.Equal(t, *tt.want.CooldownUntil, *got.CooldownUntil)
+			}
+		})
+	}
 }
 
 func TestHealthTracker_HealthMetrics_ConcurrentAccess(t *testing.T) {
@@ -122,44 +141,31 @@ func TestHealthTracker_HealthMetrics_ConcurrentAccess(t *testing.T) {
 	const goroutines = 10
 	const iterations = 100
 
-	done := make(chan struct{})
-	defer close(done)
+	var wg sync.WaitGroup
 
 	for i := 0; i < goroutines; i++ {
+		wg.Add(3)
 		go func() {
+			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				select {
-				case <-done:
-					return
-				default:
-					_ = h.HealthMetrics()
-				}
+				_ = h.HealthMetrics()
 			}
 		}()
 		go func() {
+			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				select {
-				case <-done:
-					return
-				default:
-					h.RecordFailure()
-				}
+				h.RecordFailure()
 			}
 		}()
 		go func() {
+			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				select {
-				case <-done:
-					return
-				default:
-					h.RecordSuccess()
-				}
+				h.RecordSuccess()
 			}
 		}()
 	}
 
-	// Wait briefly for goroutines to finish
-	time.Sleep(100 * time.Millisecond)
+	wg.Wait()
 
 	// Should not panic or race — verified with -race flag.
 	m := h.HealthMetrics()

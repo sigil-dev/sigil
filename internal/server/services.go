@@ -5,9 +5,9 @@ package server
 
 import (
 	"context"
-	"time"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/health"
 	"github.com/sigil-dev/sigil/pkg/plugin"
 )
 
@@ -46,7 +46,8 @@ type Services struct {
 
 // NewServices creates a Services instance with validation.
 // Returns an error if any required service is nil.
-func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService) (*Services, error) {
+// The optional providers variadic parameter sets the provider health service.
+func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService, providers ...ProviderService) (*Services, error) {
 	if ws == nil {
 		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "workspace service is required")
 	}
@@ -59,12 +60,16 @@ func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionSer
 	if users == nil {
 		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "user service is required")
 	}
-	return &Services{
+	s := &Services{
 		workspaces: ws,
 		plugins:    plugins,
 		sessions:   sessions,
 		users:      users,
-	}, nil
+	}
+	if len(providers) > 0 && providers[0] != nil {
+		s.providers = providers[0]
+	}
+	return s, nil
 }
 
 // Workspaces returns the workspace service.
@@ -91,12 +96,6 @@ func (s *Services) Users() UserService {
 // Returns nil when provider health endpoints are not configured.
 func (s *Services) Providers() ProviderService {
 	return s.providers
-}
-
-// SetProviders sets the optional provider health service.
-// This allows configuring provider health endpoints after initial Services creation.
-func (s *Services) SetProviders(ps ProviderService) {
-	s.providers = ps
 }
 
 // WorkspaceService provides workspace operations for REST handlers.
@@ -188,20 +187,17 @@ type UserSummary struct {
 
 // ProviderHealthDetail is the REST representation of a provider's health metrics.
 type ProviderHealthDetail struct {
-	Provider      string     `json:"provider" doc:"Provider name"`
-	Available     bool       `json:"available" doc:"Whether the provider is currently available"`
-	FailureCount  int64      `json:"failure_count" doc:"Cumulative number of recorded failures"`
-	LastFailureAt *time.Time `json:"last_failure_at,omitempty" doc:"Time of the most recent failure"`
-	CooldownUntil *time.Time `json:"cooldown_until,omitempty" doc:"Cooldown deadline after failure"`
-	Message       string     `json:"message" doc:"Human-readable status message"`
+	Provider string `json:"provider" doc:"Provider name"`
+	Message  string `json:"message" doc:"Human-readable status message"`
+	health.Metrics
 }
 
 // NewServicesForTest creates a Services instance for testing.
 // It delegates to NewServices to enforce the same validation invariants as production code.
 // This is exported for use in server_test package where unexported fields are inaccessible.
 // Panics if any required service is nil (same validation as NewServices).
-func NewServicesForTest(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService) *Services {
-	svc, err := NewServices(ws, plugins, sessions, users)
+func NewServicesForTest(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService, providers ...ProviderService) *Services {
+	svc, err := NewServices(ws, plugins, sessions, users, providers...)
 	if err != nil {
 		panic(err) // Test setup should provide all required services
 	}

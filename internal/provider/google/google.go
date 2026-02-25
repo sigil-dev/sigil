@@ -130,12 +130,12 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 }
 
 func (p *Provider) Status(ctx context.Context) (provider.ProviderStatus, error) {
-	hm := p.health.HealthMetrics()
+	hm := p.health.HealthMetricsPtr()
 	return provider.ProviderStatus{
-		Available: p.Available(ctx),
+		Available: hm.Available,
 		Provider:  "google",
 		Message:   "ok",
-		Health:    &hm,
+		Health:    hm,
 	}, nil
 }
 
