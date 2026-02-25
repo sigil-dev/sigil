@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +68,12 @@ func TestContainerConfigFromManifest(t *testing.T) {
 }
 
 func TestContainerConfigFromManifestValidation(t *testing.T) {
+	t.Run("nil manifest", func(t *testing.T) {
+		_, err := container.ConfigFromManifest(nil)
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+	})
+
 	t.Run("requires container tier", func(t *testing.T) {
 		manifest := &plugin.Manifest{
 			Name: "bad",
@@ -139,6 +146,7 @@ func TestParseMemoryLimit(t *testing.T) {
 		{name: "mi", input: "256Mi", want: 256 * 1024 * 1024},
 		{name: "gi", input: "1Gi", want: 1024 * 1024 * 1024},
 		{name: "bytes", input: "4096", want: 4096},
+		{name: "MaxInt64 boundary", input: "9223372036854775807", want: math.MaxInt64},
 	}
 
 	for _, tt := range tests {
@@ -161,6 +169,7 @@ func TestParseMemoryLimitInvalid(t *testing.T) {
 		{name: "zero", input: "0"},
 		{name: "non numeric", input: "abc"},
 		{name: "overflow gi", input: "9999999999999Gi"},
+		{name: "overflow MaxInt64+1", input: "9223372036854775808"},
 	}
 
 	for _, tt := range tests {
@@ -367,6 +376,64 @@ func TestRuntimeLifecycleRemoveFailureClearsTimeout(t *testing.T) {
 	// The stopTimeouts entry is deleted unconditionally before Remove is attempted.
 	// A subsequent Stop call would use DefaultStopTimeout; callers must invoke Remove directly.
 	assert.NotContains(t, runtime.StopTimeouts(), inst.ID, "stop timeout must be deleted after Stop even when Remove fails")
+}
+
+func TestRuntimeStopAfterRemoveFailureUsesDefaultTimeout(t *testing.T) {
+	engine := &fakeEngine{createID: "ctr-retry", removeErr: errors.New("rm failed")}
+	runtime := container.NewRuntime(engine)
+
+	const customTimeout = 30 * time.Second
+	cfg := container.ContainerConfig{
+		PluginName:       "retry-tool",
+		Image:            "ghcr.io/org/retry-tool:latest",
+		NetworkMode:      container.NetworkRestricted,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      customTimeout,
+	}
+
+	inst, err := runtime.Start(context.Background(), cfg)
+	require.NoError(t, err)
+
+	// First Stop: engine.Stop succeeds, engine.Remove fails.
+	// The runtime deletes the timeout entry before attempting Remove, so the
+	// custom timeout is gone regardless of the Remove outcome.
+	err = runtime.Stop(context.Background(), inst.ID)
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeCallFailure))
+	assert.NotContains(t, runtime.StopTimeouts(), inst.ID,
+		"timeout entry must be deleted after Stop even when Remove fails")
+
+	// Reset removeErr so the second call can succeed end-to-end.
+	engine.removeErr = nil
+
+	// Second Stop: the timeout entry was deleted on the first call, so the
+	// runtime falls back to DefaultStopTimeout.
+	err = runtime.Stop(context.Background(), inst.ID)
+	require.NoError(t, err)
+
+	// stopTimeouts[0] = first Stop (custom), stopTimeouts[1] = second Stop (default).
+	require.Len(t, engine.stopTimeouts, 2, "engine.Stop must be called exactly twice")
+	assert.Equal(t, customTimeout, engine.stopTimeouts[0],
+		"first Stop must use the registered custom timeout")
+	assert.Equal(t, container.DefaultStopTimeout, engine.stopTimeouts[1],
+		"second Stop must fall back to DefaultStopTimeout after timeout entry was deleted")
+}
+
+func TestContainerConfigValidateRejectsNetworkNone(t *testing.T) {
+	cfg := container.ContainerConfig{
+		PluginName:       "isolated-tool",
+		Image:            "ghcr.io/org/isolated-tool:latest",
+		NetworkMode:      container.NetworkNone,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+		StopTimeout:      5 * time.Second,
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginRuntimeConfigInvalid))
+	assert.Contains(t, err.Error(), "NetworkNone is not supported for gRPC plugins")
 }
 
 func TestRuntimeLifecycleStartRejectsNetworkNone(t *testing.T) {

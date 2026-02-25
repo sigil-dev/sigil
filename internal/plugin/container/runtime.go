@@ -53,6 +53,10 @@ func (c ContainerConfig) Validate() error {
 		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 			"container config: network mode must be one of [none, restricted, host], got %q", c.NetworkMode)
 	}
+	if c.NetworkMode == NetworkNone {
+		return sigilerr.New(sigilerr.CodePluginRuntimeConfigInvalid,
+			"container config: NetworkNone is not supported for gRPC plugins; use NetworkRestricted or NetworkHost")
+	}
 	if c.MemoryLimitBytes <= 0 {
 		return sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
 			"container config: memory_limit must be > 0, got %d", c.MemoryLimitBytes)
@@ -140,6 +144,7 @@ type Runtime struct {
 
 	mu           sync.Mutex
 	stopTimeouts map[string]time.Duration
+	pluginNames  map[string]string
 }
 
 // ContainerInstance is an active plugin container.
@@ -153,6 +158,7 @@ func NewRuntime(engine Engine) *Runtime {
 	return &Runtime{
 		engine:       engine,
 		stopTimeouts: make(map[string]time.Duration),
+		pluginNames:  make(map[string]string),
 	}
 }
 
@@ -169,10 +175,6 @@ func (r *Runtime) Start(ctx context.Context, cfg ContainerConfig) (*ContainerIns
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if cfg.NetworkMode == NetworkNone {
-		return nil, sigilerr.New(sigilerr.CodePluginRuntimeConfigInvalid,
-			"container runtime: NetworkNone is not supported for gRPC plugins; use NetworkRestricted or NetworkHost")
-	}
 
 	containerID, err := r.engine.Create(ctx, CreateContainerRequest{
 		PluginName:       cfg.PluginName,
@@ -187,21 +189,21 @@ func (r *Runtime) Start(ctx context.Context, cfg ContainerConfig) (*ContainerIns
 	}
 
 	if err := r.engine.Start(ctx, containerID); err != nil {
+		startErr := sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeStartFailure,
+			"starting container %s for plugin %s", containerID, cfg.PluginName)
 		if removeErr := r.engine.Remove(ctx, containerID); removeErr != nil {
 			slog.Error("container cleanup after start failure",
 				"plugin", cfg.PluginName,
 				"container_id", containerID,
 				"error", removeErr)
-			return nil, sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeStartFailure,
-				"starting container %s for plugin %s failed; cleanup also failed: %v",
-				containerID, cfg.PluginName, removeErr)
+			return nil, sigilerr.With(startErr, sigilerr.Field("cleanup_error", removeErr))
 		}
-		return nil, sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeStartFailure,
-			"starting container %s for plugin %s", containerID, cfg.PluginName)
+		return nil, startErr
 	}
 
 	r.mu.Lock()
 	r.stopTimeouts[containerID] = cfg.StopTimeout
+	r.pluginNames[containerID] = cfg.PluginName
 	r.mu.Unlock()
 
 	return &ContainerInstance{
@@ -237,16 +239,19 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "stopping container %s", id)
 	}
 
-	// The container is stopped; clean up the timeout entry unconditionally
-	// so it is not leaked if Remove fails below. Note: if the caller retries
+	// The container is stopped; clean up the timeout and name entries unconditionally
+	// so they are not leaked if Remove fails below. Note: if the caller retries
 	// Stop after a Remove failure, DefaultStopTimeout will be used since this
 	// entry is already deleted. Callers should invoke Remove directly instead.
 	r.mu.Lock()
+	pluginName := r.pluginNames[id]
 	delete(r.stopTimeouts, id)
+	delete(r.pluginNames, id)
 	r.mu.Unlock()
 
 	if err := r.engine.Remove(ctx, id); err != nil {
 		slog.Error("container remove after stop failed",
+			"plugin", pluginName,
 			"container_id", id,
 			"error", err)
 		return sigilerr.Wrapf(err, sigilerr.CodePluginRuntimeCallFailure, "removing container %s", id)

@@ -129,7 +129,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	var m Manifest
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"manifest parse: %s", err)
+			"manifest parse: %w", err)
 	}
 
 	if errs := m.Validate(); len(errs) > 0 {

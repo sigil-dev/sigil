@@ -64,7 +64,12 @@ func newOCIEngineWithRunner(runtimeBinary string, runner commandRunner) *OCIEngi
 
 // Create creates a container with baseline isolation flags applied.
 // The caller is responsible for validating the request fields (e.g., via ContainerConfig.Validate).
+// NetworkNone is rejected: a container with no network cannot expose the gRPC endpoint.
 func (e *OCIEngine) Create(ctx context.Context, req CreateContainerRequest) (string, error) {
+	if req.NetworkMode == NetworkNone {
+		return "", sigilerr.New(sigilerr.CodePluginManifestValidateInvalid,
+			"NetworkNone is not supported: container must be reachable via gRPC")
+	}
 	sanitized, err := containerName(req.PluginName)
 	if err != nil {
 		return "", err

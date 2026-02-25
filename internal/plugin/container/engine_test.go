@@ -16,6 +16,7 @@ import (
 
 func TestOCIEngineCreateRestrictedNetworkBuildsIsolationFlags(t *testing.T) {
 	runner := &fakeRunner{
+		t:       t,
 		outputs: []string{"ctr-123"},
 	}
 	engine := newOCIEngineWithRunner("docker", runner)
@@ -47,6 +48,7 @@ func TestOCIEngineCreateRestrictedNetworkBuildsIsolationFlags(t *testing.T) {
 
 func TestOCIEngineCreateHostNetworkSkipsPortPublish(t *testing.T) {
 	runner := &fakeRunner{
+		t:       t,
 		outputs: []string{"ctr-123"},
 	}
 	engine := newOCIEngineWithRunner("docker", runner)
@@ -66,6 +68,7 @@ func TestOCIEngineCreateHostNetworkSkipsPortPublish(t *testing.T) {
 
 func TestOCIEngineCreateDoesNotPassDetachFlag(t *testing.T) {
 	runner := &fakeRunner{
+		t:       t,
 		outputs: []string{"ctr-123"},
 	}
 	engine := newOCIEngineWithRunner("docker", runner)
@@ -82,6 +85,22 @@ func TestOCIEngineCreateDoesNotPassDetachFlag(t *testing.T) {
 	assert.NotContains(t, runner.calls[0].args, "--detach")
 }
 
+func TestOCIEngineCreateRejectsNetworkNone(t *testing.T) {
+	runner := &fakeRunner{t: t}
+	engine := newOCIEngineWithRunner("docker", runner)
+
+	_, err := engine.Create(context.Background(), CreateContainerRequest{
+		PluginName:       "python-tool",
+		Image:            "ghcr.io/org/python-tool:latest",
+		NetworkMode:      NetworkNone,
+		MemoryLimitBytes: 256 * 1024 * 1024,
+		GRPCPort:         50051,
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
+	assert.Empty(t, runner.calls, "runner must not be invoked when NetworkNone is requested")
+}
+
 func TestOCIEngineCreateRejectsInvalidPluginName(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -95,7 +114,7 @@ func TestOCIEngineCreateRejectsInvalidPluginName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runner := &fakeRunner{}
+			runner := &fakeRunner{t: t}
 			engine := newOCIEngineWithRunner("docker", runner)
 
 			_, err := engine.Create(context.Background(), CreateContainerRequest{
@@ -114,6 +133,7 @@ func TestOCIEngineCreateRejectsInvalidPluginName(t *testing.T) {
 
 func TestOCIEngineCreateReturnsErrorOnEmptyContainerID(t *testing.T) {
 	runner := &fakeRunner{
+		t:       t,
 		outputs: []string{""},
 	}
 	engine := newOCIEngineWithRunner("docker", runner)
@@ -130,7 +150,7 @@ func TestOCIEngineCreateReturnsErrorOnEmptyContainerID(t *testing.T) {
 }
 
 func TestOCIEngineLifecycleCommands(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{t: t}
 	engine := newOCIEngineWithRunner("docker", runner)
 
 	require.NoError(t, engine.Start(context.Background(), "ctr-1"))
@@ -144,7 +164,7 @@ func TestOCIEngineLifecycleCommands(t *testing.T) {
 }
 
 func TestOCIEngineStopClampsSubSecondTimeoutToOneSecond(t *testing.T) {
-	runner := &fakeRunner{}
+	runner := &fakeRunner{t: t}
 	engine := newOCIEngineWithRunner("docker", runner)
 
 	require.NoError(t, engine.Stop(context.Background(), "ctr-1", 500*time.Millisecond))
@@ -155,6 +175,7 @@ func TestOCIEngineStopClampsSubSecondTimeoutToOneSecond(t *testing.T) {
 
 func TestOCIEngineLifecycleCommandErrors(t *testing.T) {
 	runner := &fakeRunner{
+		t: t,
 		errors: []error{
 			errors.New("start failed"),
 			errors.New("stop failed"),
@@ -178,6 +199,7 @@ func TestOCIEngineLifecycleCommandErrors(t *testing.T) {
 
 func TestRuntimeLifecycleWithOCIEngineSuccess(t *testing.T) {
 	runner := &fakeRunner{
+		t: t,
 		outputs: []string{
 			"ctr-123", // create
 			"",        // start
@@ -207,6 +229,7 @@ func TestRuntimeLifecycleWithOCIEngineSuccess(t *testing.T) {
 
 func TestRuntimeLifecycleWithOCIEngineStartFailure(t *testing.T) {
 	runner := &fakeRunner{
+		t: t,
 		outputs: []string{
 			"ctr-123", // create
 			"",        // start
@@ -249,7 +272,7 @@ func TestNewOCIEngineWithRunnerDefaultsToDocker(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runner := &fakeRunner{outputs: []string{"ctr-1"}}
+			runner := &fakeRunner{t: t, outputs: []string{"ctr-1"}}
 			engine := newOCIEngineWithRunner(tt.runtimeBinary, runner)
 
 			_, err := engine.Create(context.Background(), CreateContainerRequest{
@@ -309,6 +332,7 @@ type commandCall struct {
 }
 
 type fakeRunner struct {
+	t       *testing.T
 	calls   []commandCall
 	outputs []string
 	errors  []error
@@ -317,6 +341,13 @@ type fakeRunner struct {
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string, error) {
 	f.calls = append(f.calls, commandCall{name: name, args: args})
 	idx := len(f.calls) - 1
+
+	if len(f.outputs) > 0 && idx >= len(f.outputs) {
+		f.t.Fatalf("fakeRunner: unexpected call %d (only %d outputs configured)", idx, len(f.outputs))
+	}
+	if len(f.errors) > 0 && idx >= len(f.errors) {
+		f.t.Fatalf("fakeRunner: unexpected call %d (only %d errors configured)", idx, len(f.errors))
+	}
 
 	var out string
 	if idx < len(f.outputs) {
