@@ -89,4 +89,22 @@ describe("validateApiUrl", () => {
       "API URL must use HTTPS for non-localhost endpoints",
     );
   });
+
+  // --- malformed URL inputs: descriptive error instead of raw TypeError ---
+
+  it("throws descriptive error for empty string", () => {
+    expect(() => validateApiUrl("")).toThrow("API URL is not a valid URL: ");
+  });
+
+  it("throws descriptive error for relative path", () => {
+    expect(() => validateApiUrl("/api/v1")).toThrow(
+      "API URL is not a valid URL: /api/v1",
+    );
+  });
+
+  it("throws for bare hostname parsed as non-http scheme", () => {
+    expect(() => validateApiUrl("localhost:18789")).toThrow(
+      "API URL must use HTTPS for non-localhost endpoints",
+    );
+  });
 });

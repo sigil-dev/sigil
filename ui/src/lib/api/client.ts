@@ -21,7 +21,12 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
  * @throws {Error} if a non-localhost URL is configured without HTTPS.
  */
 export function validateApiUrl(url: string): void {
-  const parsed = new URL(url);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`API URL is not a valid URL: ${url}`);
+  }
   const isHttps = parsed.protocol === "https:";
   const isLoopback = LOOPBACK_HOSTS.has(parsed.hostname);
 

@@ -22,6 +22,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/health"
 	"github.com/sigil-dev/sigil/pkg/types"
 )
 
@@ -996,6 +997,92 @@ func TestWireGateway_InvalidDataDir(t *testing.T) {
 	require.Error(t, err, "WireGateway must return an error when the data directory cannot be created")
 	assert.Nil(t, gw, "Gateway must be nil when WireGateway fails")
 }
+
+// TestProviderServiceAdapter_GetHealth tests the three code paths in
+// providerServiceAdapter.GetHealth:
+//  1. CodeProviderNotFound from the registry is translated to CodeServerEntityNotFound
+//  2. Status() returning Health == nil leaves Metrics as zero-value health.Metrics
+//  3. Status() returning populated Health copies the metrics into the detail
+func TestProviderServiceAdapter_GetHealth(t *testing.T) {
+	t.Run("unknown provider returns CodeServerEntityNotFound", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		adapter := &providerServiceAdapter{reg: reg}
+
+		_, err := adapter.GetHealth(context.Background(), "nonexistent")
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound),
+			"expected CodeServerEntityNotFound, got: %v", err)
+	})
+
+	t.Run("nil Health returns zero-value Metrics", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		p := &statusStubProvider{
+			name: "stub",
+			status: provider.ProviderStatus{
+				Provider: "stub",
+				Available: true,
+				Message:  "ok",
+				Health:   nil, // no health field set
+			},
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		detail, err := adapter.GetHealth(context.Background(), "stub")
+		require.NoError(t, err)
+		require.NotNil(t, detail)
+		assert.Equal(t, "stub", detail.Provider)
+		assert.Equal(t, health.Metrics{}, detail.Metrics,
+			"Metrics should be zero-value when Health is nil")
+	})
+
+	t.Run("populated Health is copied into Metrics", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		wantMetrics := health.Metrics{
+			FailureCount: 3,
+			Available:    false,
+		}
+		p := &statusStubProvider{
+			name: "stub",
+			status: provider.ProviderStatus{
+				Provider:  "stub",
+				Available: false,
+				Message:   "degraded",
+				Health:    &wantMetrics,
+			},
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		detail, err := adapter.GetHealth(context.Background(), "stub")
+		require.NoError(t, err)
+		require.NotNil(t, detail)
+		assert.Equal(t, "stub", detail.Provider)
+		assert.Equal(t, "degraded", detail.Message)
+		assert.Equal(t, wantMetrics, detail.Metrics,
+			"Metrics should be copied from Health when Health is non-nil")
+	})
+}
+
+// statusStubProvider is a Provider stub that returns a configurable ProviderStatus.
+// Unlike stubProvider (which always returns available=true with no Health),
+// this variant allows tests to inject specific Status() return values.
+type statusStubProvider struct {
+	name       string
+	status     provider.ProviderStatus
+	statusErr  error
+}
+
+func (s *statusStubProvider) Name() string                                               { return s.name }
+func (s *statusStubProvider) Available(_ context.Context) bool                           { return s.status.Available }
+func (s *statusStubProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) { return nil, nil }
+func (s *statusStubProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	return nil, nil
+}
+func (s *statusStubProvider) Status(_ context.Context) (provider.ProviderStatus, error) {
+	return s.status, s.statusErr
+}
+func (s *statusStubProvider) Close() error { return nil }
 
 // stubProvider is a minimal Provider implementation for negative test cases.
 type stubProvider struct {

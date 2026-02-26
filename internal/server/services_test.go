@@ -46,28 +46,58 @@ type stubUserService struct{}
 
 func (s *stubUserService) List(context.Context) ([]UserSummary, error) { return nil, nil }
 
+type stubProviderService struct{}
+
+func (s *stubProviderService) GetHealth(context.Context, string) (*ProviderHealthDetail, error) {
+	return nil, nil
+}
+
 func TestNewServices(t *testing.T) {
 	ws := &stubWorkspaceService{}
 	ps := &stubPluginService{}
 	ss := &stubSessionService{}
 	us := &stubUserService{}
+	prov := &stubProviderService{}
 
 	tests := []struct {
-		name       string
-		ws         WorkspaceService
-		plugins    PluginService
-		sessions   SessionService
-		users      UserService
-		wantErr    bool
-		errContain string
+		name            string
+		ws              WorkspaceService
+		plugins         PluginService
+		sessions        SessionService
+		users           UserService
+		providers       []ProviderService
+		wantErr         bool
+		errContain      string
+		wantProviders   ProviderService
 	}{
 		{
-			name:     "all valid",
-			ws:       ws,
-			plugins:  ps,
-			sessions: ss,
-			users:    us,
-			wantErr:  false,
+			name:          "all valid no providers",
+			ws:            ws,
+			plugins:       ps,
+			sessions:      ss,
+			users:         us,
+			wantErr:       false,
+			wantProviders: nil,
+		},
+		{
+			name:          "all valid with provider service",
+			ws:            ws,
+			plugins:       ps,
+			sessions:      ss,
+			users:         us,
+			providers:     []ProviderService{prov},
+			wantErr:       false,
+			wantProviders: prov,
+		},
+		{
+			name:          "all valid with nil provider service",
+			ws:            ws,
+			plugins:       ps,
+			sessions:      ss,
+			users:         us,
+			providers:     []ProviderService{nil},
+			wantErr:       false,
+			wantProviders: nil,
 		},
 		{
 			name:       "nil workspace service",
@@ -109,7 +139,7 @@ func TestNewServices(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, err := NewServices(tt.ws, tt.plugins, tt.sessions, tt.users)
+			svc, err := NewServices(tt.ws, tt.plugins, tt.sessions, tt.users, tt.providers...)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -124,6 +154,7 @@ func TestNewServices(t *testing.T) {
 				assert.Equal(t, tt.plugins, svc.Plugins())
 				assert.Equal(t, tt.sessions, svc.Sessions())
 				assert.Equal(t, tt.users, svc.Users())
+				assert.Equal(t, tt.wantProviders, svc.Providers())
 			}
 		})
 	}
