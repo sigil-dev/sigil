@@ -192,7 +192,7 @@ type UserSummary struct {
 type ProviderHealthDetail struct {
 	Provider         string `json:"provider" doc:"Provider name"`
 	Message          string `json:"message" doc:"Human-readable status message"`
-	MetricsAvailable bool   `json:"metricsAvailable" doc:"Whether the provider reported health metrics"`
+	MetricsAvailable bool   `json:"metrics_available" doc:"Whether the provider reported health metrics"`
 	health.Metrics
 }
 

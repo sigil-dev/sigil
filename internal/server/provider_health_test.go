@@ -281,6 +281,53 @@ func TestRoutes_GetProviderHealth_SigilerrUpstreamError(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "internal server error")
 }
 
+// TestRoutes_GetProviderHealth_JSONKeyNames validates the raw JSON key names emitted by the
+// provider health endpoint. This guards against JSON tag renames or serialization regressions
+// on embedded struct fields that would silently break API consumers.
+func TestRoutes_GetProviderHealth_JSONKeyNames(t *testing.T) {
+	failTime := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	cooldownEnd := failTime.Add(30 * time.Second)
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {
+				Provider:         "anthropic",
+				Message:          "ok",
+				MetricsAvailable: true,
+				Metrics: health.Metrics{
+					Available:     true,
+					FailureCount:  2,
+					LastFailureAt: &failTime,
+					CooldownUntil: &cooldownEnd,
+				},
+			},
+		},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err, "response body must be valid JSON")
+
+	// Assert top-level ProviderHealthDetail fields.
+	assert.Equal(t, "anthropic", raw["provider"], "key 'provider' must be present with correct value")
+	assert.Equal(t, true, raw["metrics_available"], "key 'metrics_available' must use snake_case tag")
+
+	// Assert embedded health.Metrics fields are promoted to the top level.
+	assert.Equal(t, true, raw["available"], "key 'available' must be present from embedded health.Metrics")
+	_, hasFailureCount := raw["failure_count"]
+	assert.True(t, hasFailureCount, "key 'failure_count' must be present from embedded health.Metrics")
+	_, hasLastFailureAt := raw["last_failure_at"]
+	assert.True(t, hasLastFailureAt, "key 'last_failure_at' must be present from embedded health.Metrics")
+	_, hasCooldownUntil := raw["cooldown_until"]
+	assert.True(t, hasCooldownUntil, "key 'cooldown_until' must be present from embedded health.Metrics")
+}
+
 // nilDetailProviderService is a ProviderService stub that returns (nil, nil) from GetHealth,
 // simulating a contract-violating implementation to exercise the defensive 500 guard.
 type nilDetailProviderService struct{}

@@ -998,13 +998,14 @@ func TestWireGateway_InvalidDataDir(t *testing.T) {
 	assert.Nil(t, gw, "Gateway must be nil when WireGateway fails")
 }
 
-// TestProviderServiceAdapter_GetHealth tests the five code paths in
+// TestProviderServiceAdapter_GetHealth tests the six code paths in
 // providerServiceAdapter.GetHealth:
 //  1. CodeProviderNotFound from the registry is translated to CodeServerEntityNotFound
 //  2. Non-NotFound registry error is wrapped as CodeProviderUpstreamFailure
-//  3. Status() returning Health == nil populates Metrics.Available from status.Available
-//  4. Status() returning populated Health copies the metrics into the detail
-//  5. Status() returning an error wraps it as CodeProviderUpstreamFailure
+//  3. Status() returning Health == nil with Available=true: detail.Available is true
+//  4. Status() returning Health == nil with Available=false: detail.Available is false
+//  5. Status() returning populated Health copies the metrics into the detail
+//  6. Status() returning an error wraps it as CodeProviderUpstreamFailure
 func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 	t.Run("unknown provider returns CodeServerEntityNotFound", func(t *testing.T) {
 		reg := provider.NewRegistry()
@@ -1055,6 +1056,32 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 		assert.Nil(t, detail.CooldownUntil,
 			"CooldownUntil should be nil when Health is nil")
 		assert.Equal(t, "ok", detail.Message,
+			"Message should match status.Message")
+	})
+
+	t.Run("nil Health with Available=false reports unavailable", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		p := &statusStubProvider{
+			name: "stub",
+			status: provider.ProviderStatus{
+				Provider:  "stub",
+				Available: false,
+				Message:   "down",
+				Health:    nil, // no health field set
+			},
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		detail, err := adapter.GetHealth(context.Background(), "stub")
+		require.NoError(t, err)
+		require.NotNil(t, detail)
+		assert.Equal(t, "stub", detail.Provider)
+		assert.False(t, detail.Available,
+			"Available should be false when status.Available is false and Health is nil")
+		assert.False(t, detail.MetricsAvailable,
+			"MetricsAvailable should be false when Health is nil")
+		assert.Equal(t, "down", detail.Message,
 			"Message should match status.Message")
 	})
 
