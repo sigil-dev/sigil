@@ -1062,6 +1062,21 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 		assert.Equal(t, wantMetrics, detail.Metrics,
 			"Metrics should be copied from Health when Health is non-nil")
 	})
+
+	t.Run("Status error returns wrapped upstream failure", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		p := &statusStubProvider{
+			name:      "stub",
+			statusErr: fmt.Errorf("upstream timeout"),
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		_, err := adapter.GetHealth(context.Background(), "stub")
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+			"expected CodeProviderUpstreamFailure, got: %v", err)
+	})
 }
 
 // statusStubProvider is a Provider stub that returns a configurable ProviderStatus.

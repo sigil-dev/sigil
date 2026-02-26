@@ -513,7 +513,7 @@ func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*s
 		if sigilerr.HasCode(err, sigilerr.CodeProviderNotFound) {
 			return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "provider %q not found", name)
 		}
-		return nil, err
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "looking up provider %q", name)
 	}
 	status, err := p.Status(ctx)
 	if err != nil {
