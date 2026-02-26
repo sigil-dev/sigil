@@ -75,7 +75,7 @@ func TestHealthTracker_HealthMetrics(t *testing.T) {
 				Available:     true,
 				FailureCount:  1,
 				LastFailureAt: &now,
-				CooldownUntil: &cooldownUntilNow,
+				CooldownUntil: nil,
 			},
 		},
 		{

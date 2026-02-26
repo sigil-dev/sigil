@@ -104,8 +104,8 @@ func (h *HealthTracker) HealthMetrics() HealthMetrics {
 	}
 
 	m.Available = h.isHealthyLocked()
-	if !h.healthy {
-		// Provider is marked unhealthy — compute cooldown deadline.
+	if !m.Available {
+		// Provider is currently unavailable — compute cooldown deadline.
 		cooldownEnd := h.failedAt.Add(h.cooldown)
 		m.CooldownUntil = &cooldownEnd
 	}
