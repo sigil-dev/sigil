@@ -267,6 +267,20 @@ func TestRoutes_GetProviderHealth_UpstreamError(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "internal server error")
 }
 
+func TestRoutes_GetProviderHealth_SigilerrUpstreamError(t *testing.T) {
+	ps := &errProviderService{
+		err: sigilerr.New(sigilerr.CodeProviderUpstreamFailure, "provider timeout"),
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "internal server error")
+}
+
 // nilDetailProviderService is a ProviderService stub that returns (nil, nil) from GetHealth,
 // simulating a contract-violating implementation to exercise the defensive 500 guard.
 type nilDetailProviderService struct{}

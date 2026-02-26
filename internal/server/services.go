@@ -190,8 +190,9 @@ type UserSummary struct {
 
 // ProviderHealthDetail is the REST representation of a provider's health metrics.
 type ProviderHealthDetail struct {
-	Provider string `json:"provider" doc:"Provider name"`
-	Message  string `json:"message" doc:"Human-readable status message"`
+	Provider         string `json:"provider" doc:"Provider name"`
+	Message          string `json:"message" doc:"Human-readable status message"`
+	MetricsAvailable bool   `json:"metricsAvailable" doc:"Whether the provider reported health metrics"`
 	health.Metrics
 }
 

@@ -46,7 +46,7 @@
    - commit message: `feat(plugin): ...` (Task 3 scope)
    - `git pull --rebase origin feat/phase6-sigil-7ek-2`
    - `bd close sigil-7ek.3 --reason "..."`
-   - `bd sync`
+   - `bd dolt push`
    - `git push -u origin feat/phase6-sigil-7ek-3`
 8. Open PR with correct base:
    - base: `feat/phase6-sigil-7ek-2`

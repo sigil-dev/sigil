@@ -84,6 +84,12 @@ describe("validateApiUrl", () => {
     );
   });
 
+  it("rejects http://localhost.attacker.com (subdomain bypass attempt)", () => {
+    expect(() => validateApiUrl("http://localhost.attacker.com")).toThrow(
+      "API URL must use HTTPS for non-localhost endpoints",
+    );
+  });
+
   it("rejects http://127.0.0.2 (not loopback alias in our allowlist)", () => {
     expect(() => validateApiUrl("http://127.0.0.2")).toThrow(
       "API URL must use HTTPS for non-localhost endpoints",

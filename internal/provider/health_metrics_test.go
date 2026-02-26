@@ -170,6 +170,45 @@ func TestHealthTracker_HealthMetrics_ConcurrentAccess(t *testing.T) {
 
 	// Should not panic or race — verified with -race flag.
 	m := h.HealthMetrics()
-	// Non-deterministic but failure count should be non-negative
-	assert.GreaterOrEqual(t, m.FailureCount, int64(0))
+	// FailureCount cannot exceed total RecordFailure calls.
+	assert.LessOrEqual(t, m.FailureCount, int64(goroutines*iterations),
+		"FailureCount should not exceed total RecordFailure calls")
+	// FailureCount should be non-negative (sanity).
+	assert.GreaterOrEqual(t, m.FailureCount, int64(0),
+		"FailureCount should be non-negative")
+}
+
+func TestHealthTracker_HealthMetrics_ConcurrentSetNowFunc(t *testing.T) {
+	h, err := provider.NewHealthTracker(10 * time.Second)
+	require.NoError(t, err)
+
+	const goroutines = 5
+	const iterations = 100
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = h.HealthMetrics()
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				h.SetNowFunc(func() time.Time { return time.Now() })
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Should not panic or race — verified with -race flag.
+	// This test validates lock ordering between SetNowFunc (write lock)
+	// and HealthMetrics (read lock). No failures recorded, so count must be 0.
+	m := h.HealthMetrics()
+	assert.Equal(t, int64(0), m.FailureCount,
+		"FailureCount should be zero when no failures were recorded")
 }

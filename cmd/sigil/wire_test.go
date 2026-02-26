@@ -1046,6 +1046,16 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 		assert.Equal(t, "stub", detail.Provider)
 		assert.True(t, detail.Available,
 			"Available should match status.Available when Health is nil")
+		assert.False(t, detail.MetricsAvailable,
+			"MetricsAvailable should be false when Health is nil")
+		assert.Equal(t, int64(0), detail.FailureCount,
+			"FailureCount should be zero when Health is nil")
+		assert.Nil(t, detail.LastFailureAt,
+			"LastFailureAt should be nil when Health is nil")
+		assert.Nil(t, detail.CooldownUntil,
+			"CooldownUntil should be nil when Health is nil")
+		assert.Equal(t, "ok", detail.Message,
+			"Message should match status.Message")
 	})
 
 	t.Run("populated Health is copied into Metrics", func(t *testing.T) {
@@ -1073,6 +1083,8 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 		assert.Equal(t, "degraded", detail.Message)
 		assert.Equal(t, wantMetrics, detail.Metrics,
 			"Metrics should be copied from Health when Health is non-nil")
+		assert.True(t, detail.MetricsAvailable,
+			"MetricsAvailable should be true when Health is non-nil")
 	})
 
 	t.Run("Status error returns wrapped upstream failure", func(t *testing.T) {
