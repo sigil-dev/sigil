@@ -111,4 +111,3 @@ func (h *HealthTracker) HealthMetrics() HealthMetrics {
 	}
 	return m
 }
-

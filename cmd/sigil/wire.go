@@ -517,7 +517,7 @@ func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*s
 	}
 	status, err := p.Status(ctx)
 	if err != nil {
-		return nil, err
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "getting status for provider %q", name)
 	}
 	detail := &server.ProviderHealthDetail{
 		Provider: status.Provider,

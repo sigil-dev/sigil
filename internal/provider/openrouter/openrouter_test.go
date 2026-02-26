@@ -102,6 +102,11 @@ func TestOpenRouterProvider_Status(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "openrouter", status.Provider)
 	assert.True(t, status.Available)
+	require.NotNil(t, status.Health)
+	assert.True(t, status.Health.Available)
+	assert.Equal(t, int64(0), status.Health.FailureCount)
+	assert.Nil(t, status.Health.LastFailureAt)
+	assert.Nil(t, status.Health.CooldownUntil)
 }
 
 func TestOpenRouterProvider_Available(t *testing.T) {
