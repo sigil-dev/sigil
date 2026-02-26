@@ -27,6 +27,13 @@ export function validateApiUrl(url: string): void {
   } catch {
     throw new Error(`API URL is not a valid URL: ${url}`);
   }
+  const isHttp = parsed.protocol === "http:" || parsed.protocol === "https:";
+  if (!isHttp) {
+    throw new Error(
+      `API URL must use http: or https: scheme (got: ${url})`,
+    );
+  }
+
   const isHttps = parsed.protocol === "https:";
   const isLoopback = LOOPBACK_HOSTS.has(parsed.hostname);
 
@@ -49,7 +56,12 @@ export function validateApiUrl(url: string): void {
 export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:18789";
 
 // Validate at module load time so mis-configured deployments fail fast.
-validateApiUrl(API_BASE);
+try {
+  validateApiUrl(API_BASE);
+} catch (e) {
+  console.error("Sigil UI misconfigured:", (e as Error).message);
+  throw e;
+}
 
 export const api = createClient<paths>({
   baseUrl: API_BASE,

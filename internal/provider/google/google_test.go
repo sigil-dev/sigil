@@ -106,6 +106,23 @@ func TestGoogleProvider_Status(t *testing.T) {
 	assert.Nil(t, status.Health.CooldownUntil)
 }
 
+func TestGoogleProvider_Status_AfterFailure(t *testing.T) {
+	p := mustNewProvider(t)
+	ctx := context.Background()
+
+	p.RecordFailure()
+
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "google", status.Provider)
+	assert.False(t, status.Available)
+	assert.Contains(t, status.Message, "cooldown")
+	require.NotNil(t, status.Health)
+	assert.False(t, status.Health.Available)
+	assert.Equal(t, int64(1), status.Health.FailureCount)
+	assert.NotNil(t, status.Health.CooldownUntil)
+}
+
 func TestGoogleProvider_Available(t *testing.T) {
 	p := mustNewProvider(t)
 	assert.True(t, p.Available(context.Background()))

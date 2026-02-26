@@ -90,6 +90,26 @@ describe("validateApiUrl", () => {
     );
   });
 
+  // --- non-HTTP/HTTPS schemes on loopback hosts: must be rejected ---
+
+  it("rejects ftp://localhost", () => {
+    expect(() => validateApiUrl("ftp://localhost")).toThrow(
+      "must use http: or https: scheme",
+    );
+  });
+
+  it("rejects ws://localhost with port", () => {
+    expect(() => validateApiUrl("ws://localhost:18789")).toThrow(
+      "must use http: or https: scheme",
+    );
+  });
+
+  it("rejects file://localhost", () => {
+    expect(() => validateApiUrl("file://localhost")).toThrow(
+      "must use http: or https: scheme",
+    );
+  });
+
   // --- malformed URL inputs: descriptive error instead of raw TypeError ---
 
   it("throws descriptive error for empty string", () => {
@@ -104,7 +124,7 @@ describe("validateApiUrl", () => {
 
   it("throws for bare hostname parsed as non-http scheme", () => {
     expect(() => validateApiUrl("localhost:18789")).toThrow(
-      "API URL must use HTTPS for non-localhost endpoints",
+      "must use http: or https: scheme",
     );
   });
 });

@@ -60,6 +60,9 @@ func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionSer
 	if users == nil {
 		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "user service is required")
 	}
+	if len(providers) > 1 {
+		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "at most one provider service may be supplied")
+	}
 	s := &Services{
 		workspaces: ws,
 		plugins:    plugins,

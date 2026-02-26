@@ -6,6 +6,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -134,6 +135,29 @@ func TestRoutes_GetProviderHealth_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+func TestRoutes_GetProviderHealth_Unauthenticated(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {Provider: "anthropic", Message: "ok", Metrics: health.Metrics{Available: true}},
+		},
+	}
+
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:*"}),
+		},
+	}
+
+	srv := newTestServerWithProviders(t, ps, validator)
+
+	// No Authorization header — auth is enabled, so 401 is expected.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
 func TestRoutes_GetProviderHealth_RequiresAdmin(t *testing.T) {
 	ps := &mockProviderService{
 		healthMap: map[string]*server.ProviderHealthDetail{
@@ -192,4 +216,27 @@ func TestRoutes_GetProviderHealth_NotRegistered_NoProviderService(t *testing.T) 
 	srv.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// errProviderService is a ProviderService stub that always returns the given error from GetHealth.
+type errProviderService struct {
+	err error
+}
+
+func (e *errProviderService) GetHealth(_ context.Context, _ string) (*server.ProviderHealthDetail, error) {
+	return nil, e.err
+}
+
+func TestRoutes_GetProviderHealth_UpstreamError(t *testing.T) {
+	ps := &errProviderService{
+		err: fmt.Errorf("timeout"),
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "internal server error")
 }

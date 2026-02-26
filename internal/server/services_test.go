@@ -49,7 +49,7 @@ func (s *stubUserService) List(context.Context) ([]UserSummary, error) { return 
 type stubProviderService struct{}
 
 func (s *stubProviderService) GetHealth(context.Context, string) (*ProviderHealthDetail, error) {
-	return nil, nil
+	return &ProviderHealthDetail{Provider: "stub", Message: "ok"}, nil
 }
 
 func TestNewServices(t *testing.T) {
@@ -158,4 +158,21 @@ func TestNewServices(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewServices_RejectsMultipleProviders(t *testing.T) {
+	ws := &stubWorkspaceService{}
+	ps := &stubPluginService{}
+	ss := &stubSessionService{}
+	us := &stubUserService{}
+	prov1 := &stubProviderService{}
+	prov2 := &stubProviderService{}
+
+	svc, err := NewServices(ws, ps, ss, us, prov1, prov2)
+
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerConfigInvalid),
+		"expected error code %s, got: %v", sigilerr.CodeServerConfigInvalid, err)
+	assert.Contains(t, err.Error(), "at most one provider service may be supplied")
 }
