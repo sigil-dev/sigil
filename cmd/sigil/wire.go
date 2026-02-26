@@ -525,6 +525,10 @@ func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*s
 	}
 	if status.Health != nil {
 		detail.Metrics = *status.Health
+	} else {
+		// Fallback: populate Available from the top-level status field so
+		// providers that don't populate Health still report correctly.
+		detail.Available = status.Available
 	}
 	return detail, nil
 }

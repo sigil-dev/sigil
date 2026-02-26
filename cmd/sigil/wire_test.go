@@ -998,11 +998,12 @@ func TestWireGateway_InvalidDataDir(t *testing.T) {
 	assert.Nil(t, gw, "Gateway must be nil when WireGateway fails")
 }
 
-// TestProviderServiceAdapter_GetHealth tests the three code paths in
+// TestProviderServiceAdapter_GetHealth tests the four code paths in
 // providerServiceAdapter.GetHealth:
 //  1. CodeProviderNotFound from the registry is translated to CodeServerEntityNotFound
-//  2. Status() returning Health == nil leaves Metrics as zero-value health.Metrics
+//  2. Status() returning Health == nil populates Metrics.Available from status.Available
 //  3. Status() returning populated Health copies the metrics into the detail
+//  4. Status() returning an error wraps it as CodeProviderUpstreamFailure
 func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 	t.Run("unknown provider returns CodeServerEntityNotFound", func(t *testing.T) {
 		reg := provider.NewRegistry()
@@ -1014,15 +1015,15 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 			"expected CodeServerEntityNotFound, got: %v", err)
 	})
 
-	t.Run("nil Health returns zero-value Metrics", func(t *testing.T) {
+	t.Run("nil Health populates Available from status", func(t *testing.T) {
 		reg := provider.NewRegistry()
 		p := &statusStubProvider{
 			name: "stub",
 			status: provider.ProviderStatus{
-				Provider: "stub",
+				Provider:  "stub",
 				Available: true,
-				Message:  "ok",
-				Health:   nil, // no health field set
+				Message:   "ok",
+				Health:    nil, // no health field set
 			},
 		}
 		reg.Register("stub", p)
@@ -1032,8 +1033,8 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, detail)
 		assert.Equal(t, "stub", detail.Provider)
-		assert.Equal(t, health.Metrics{}, detail.Metrics,
-			"Metrics should be zero-value when Health is nil")
+		assert.True(t, detail.Available,
+			"Available should match status.Available when Health is nil")
 	})
 
 	t.Run("populated Health is copied into Metrics", func(t *testing.T) {

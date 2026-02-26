@@ -65,6 +65,20 @@ func TestHealthTracker_HealthMetrics(t *testing.T) {
 			},
 		},
 		{
+			name: "cooldown expiry at exact boundary is available",
+			setup: func(h *provider.HealthTracker) {
+				h.SetNowFunc(func() time.Time { return now })
+				h.RecordFailure()
+				h.SetNowFunc(func() time.Time { return now.Add(10 * time.Second) })
+			},
+			want: provider.HealthMetrics{
+				Available:     true,
+				FailureCount:  1,
+				LastFailureAt: &now,
+				CooldownUntil: nil,
+			},
+		},
+		{
 			name: "cooldown expiry makes available again",
 			setup: func(h *provider.HealthTracker) {
 				h.SetNowFunc(func() time.Time { return now })
