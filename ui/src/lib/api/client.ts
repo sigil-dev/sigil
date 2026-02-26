@@ -13,6 +13,13 @@ import type { paths } from "./generated/schema";
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
+ * Addresses that bind to all network interfaces rather than a specific host.
+ * These MUST never be used as an API endpoint: they are not loopback-only and
+ * could expose the API on external interfaces.
+ */
+const NON_ROUTABLE_HOSTS = new Set(["0.0.0.0", "[::0]", "[::]"]);
+
+/**
  * Validates that the given API base URL is safe to use.
  *
  * Security invariant: plain HTTP is permitted ONLY for loopback addresses
@@ -31,6 +38,12 @@ export function validateApiUrl(url: string): void {
   if (!isHttp) {
     throw new Error(
       `API URL must use http: or https: scheme (got: ${url})`,
+    );
+  }
+
+  if (NON_ROUTABLE_HOSTS.has(parsed.hostname)) {
+    throw new Error(
+      `API URL must not use an all-interfaces address (${parsed.hostname}); use 127.0.0.1 or localhost instead (got: ${url})`,
     );
   }
 
@@ -59,7 +72,7 @@ export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:18789"
 try {
   validateApiUrl(API_BASE);
 } catch (e) {
-  console.error("Sigil UI misconfigured:", (e as Error).message);
+  console.error("Sigil UI misconfigured:", e);
   throw e;
 }
 

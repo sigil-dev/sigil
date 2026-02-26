@@ -529,6 +529,12 @@ func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*s
 		// Fallback: populate Available from the top-level status field so
 		// providers that don't populate Health still report correctly.
 		detail.Available = status.Available
+		if !status.Available {
+			slog.Warn("provider health metrics unavailable",
+				"provider", name,
+				"available", status.Available,
+				"hint", "provider plugin did not populate Health struct")
+		}
 	}
 	return detail, nil
 }

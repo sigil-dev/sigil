@@ -90,6 +90,32 @@ describe("validateApiUrl", () => {
     );
   });
 
+  // --- all-interfaces addresses: must always be rejected regardless of scheme ---
+
+  it("rejects http://0.0.0.0 (all-interfaces binding address)", () => {
+    expect(() => validateApiUrl("http://0.0.0.0:18789")).toThrow(
+      "must not use an all-interfaces address",
+    );
+  });
+
+  it("rejects https://0.0.0.0 (all-interfaces binding address, even over HTTPS)", () => {
+    expect(() => validateApiUrl("https://0.0.0.0:18789")).toThrow(
+      "must not use an all-interfaces address",
+    );
+  });
+
+  it("rejects http://[::0] (IPv6 all-interfaces binding address)", () => {
+    expect(() => validateApiUrl("http://[::0]:18789")).toThrow(
+      "must not use an all-interfaces address",
+    );
+  });
+
+  it("rejects http://[::] (IPv6 all-interfaces binding address)", () => {
+    expect(() => validateApiUrl("http://[::]:18789")).toThrow(
+      "must not use an all-interfaces address",
+    );
+  });
+
   // --- non-HTTP/HTTPS schemes on loopback hosts: must be rejected ---
 
   it("rejects ftp://localhost", () => {
