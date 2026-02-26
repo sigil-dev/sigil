@@ -998,12 +998,13 @@ func TestWireGateway_InvalidDataDir(t *testing.T) {
 	assert.Nil(t, gw, "Gateway must be nil when WireGateway fails")
 }
 
-// TestProviderServiceAdapter_GetHealth tests the four code paths in
+// TestProviderServiceAdapter_GetHealth tests the five code paths in
 // providerServiceAdapter.GetHealth:
 //  1. CodeProviderNotFound from the registry is translated to CodeServerEntityNotFound
-//  2. Status() returning Health == nil populates Metrics.Available from status.Available
-//  3. Status() returning populated Health copies the metrics into the detail
-//  4. Status() returning an error wraps it as CodeProviderUpstreamFailure
+//  2. Non-NotFound registry error is wrapped as CodeProviderUpstreamFailure
+//  3. Status() returning Health == nil populates Metrics.Available from status.Available
+//  4. Status() returning populated Health copies the metrics into the detail
+//  5. Status() returning an error wraps it as CodeProviderUpstreamFailure
 func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 	t.Run("unknown provider returns CodeServerEntityNotFound", func(t *testing.T) {
 		reg := provider.NewRegistry()
@@ -1013,6 +1014,16 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound),
 			"expected CodeServerEntityNotFound, got: %v", err)
+	})
+
+	t.Run("non-NotFound registry error returns CodeProviderUpstreamFailure", func(t *testing.T) {
+		stub := &registryGetStub{err: fmt.Errorf("internal registry corruption")}
+		adapter := &providerServiceAdapter{reg: stub}
+
+		_, err := adapter.GetHealth(context.Background(), "any")
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+			"expected CodeProviderUpstreamFailure, got: %v", err)
 	})
 
 	t.Run("nil Health populates Available from status", func(t *testing.T) {
@@ -1079,6 +1090,14 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 			"expected CodeProviderUpstreamFailure, got: %v", err)
 	})
 }
+
+// registryGetStub implements providerLookup for testing the non-NotFound error path.
+type registryGetStub struct {
+	p   provider.Provider
+	err error
+}
+
+func (s *registryGetStub) Get(_ string) (provider.Provider, error) { return s.p, s.err }
 
 // statusStubProvider is a Provider stub that returns a configurable ProviderStatus.
 // Unlike stubProvider (which always returns available=true with no Health),

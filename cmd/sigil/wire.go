@@ -502,9 +502,14 @@ func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, er
 	return out, nil
 }
 
+// providerLookup is the subset of provider.Registry that providerServiceAdapter needs.
+type providerLookup interface {
+	Get(name string) (provider.Provider, error)
+}
+
 // providerServiceAdapter adapts the provider registry to the server.ProviderService interface.
 type providerServiceAdapter struct {
-	reg *provider.Registry
+	reg providerLookup
 }
 
 func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*server.ProviderHealthDetail, error) {
