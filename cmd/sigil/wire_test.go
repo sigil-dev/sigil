@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1174,6 +1175,50 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 		require.Error(t, err, "cancelled context must produce an error")
 		assert.Nil(t, detail, "detail must be nil when context is cancelled")
 	})
+}
+
+// TestWireGateway_ProviderHealthEndpointRegistered verifies that when WireGateway is
+// called with providers configured, the providerServiceAdapter is passed to NewServices
+// and the /api/v1/providers/{name}/health route is actually registered and returns a
+// valid 200 health response — not a 404 from an unregistered route.
+//
+// A regression where providerServiceAdapter is not passed to NewServices (wire.go)
+// would cause the route to never be registered, returning 404 silently. This test
+// closes that gap by exercising the full HTTP path from WireGateway → Server.Handler().
+func TestWireGateway_ProviderHealthEndpointRegistered(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {APIKey: "test-key-anthropic"},
+	}
+	// No auth tokens configured — auth is disabled so the admin:providers check passes.
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	gw.Server().Handler().ServeHTTP(w, req)
+
+	// The route must be registered — 404 indicates providerServiceAdapter was not wired.
+	require.Equal(t, http.StatusOK, w.Code,
+		"provider health endpoint must return 200 when route is registered; got %d (body: %s)",
+		w.Code, w.Body.String())
+
+	// Verify the JSON response shape: provider, available, message, metrics_available.
+	var raw map[string]any
+	err = json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err, "response body must be valid JSON")
+
+	assert.Equal(t, "anthropic", raw["provider"],
+		"response must include 'provider' field with correct value")
+	_, hasAvailable := raw["available"]
+	assert.True(t, hasAvailable, "response must include 'available' field from health.Metrics")
+	_, hasMessage := raw["message"]
+	assert.True(t, hasMessage, "response must include 'message' field")
+	_, hasMetricsAvailable := raw["metrics_available"]
+	assert.True(t, hasMetricsAvailable, "response must include 'metrics_available' field")
 }
 
 // registryGetStub implements providerLookup for testing the non-NotFound error path.

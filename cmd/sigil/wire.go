@@ -512,6 +512,12 @@ type providerServiceAdapter struct {
 	reg providerLookup
 }
 
+// GetHealth returns health detail for the named provider. When the provider
+// plugin does not populate the Health field in its Status response (i.e.
+// status.Health == nil), MetricsAvailable is set to false and the counters
+// FailureCount, LastFailureAt, and CooldownUntil will be zero/nil. This is
+// expected for external plugin providers that predate the Health struct or
+// choose not to report fine-grained metrics.
 func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*server.ProviderHealthDetail, error) {
 	p, err := a.reg.Get(name)
 	if err != nil {

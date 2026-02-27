@@ -135,6 +135,30 @@ func TestHealthTracker_HealthMetrics(t *testing.T) {
 	}
 }
 
+// TestHealthTracker_HealthMetrics_CooldownUntilUsesTrackerCooldown verifies that
+// CooldownUntil is computed as failedAt + h.cooldown, not a hardcoded constant.
+// It uses a 30s cooldown (distinct from the 10s default in the table-driven test)
+// so that any regression where the snapshot calculation uses a hardcoded value
+// would produce an incorrect CooldownUntil and fail the assertion.
+func TestHealthTracker_HealthMetrics_CooldownUntilUsesTrackerCooldown(t *testing.T) {
+	const cooldown = 30 * time.Second
+	failedAt := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	wantCooldownUntil := failedAt.Add(cooldown)
+
+	h, err := provider.NewHealthTracker(cooldown)
+	require.NoError(t, err)
+	h.SetNowFunc(func() time.Time { return failedAt })
+	h.RecordFailure()
+
+	got := h.HealthMetrics()
+
+	require.NotNil(t, got.CooldownUntil, "CooldownUntil must be non-nil after failure")
+	assert.Equal(t, wantCooldownUntil, *got.CooldownUntil,
+		"CooldownUntil must equal failedAt + cooldown duration")
+	assert.Equal(t, &failedAt, got.LastFailureAt)
+	assert.False(t, got.Available)
+}
+
 func TestHealthTracker_HealthMetrics_ConcurrentAccess(t *testing.T) {
 	h, err := provider.NewHealthTracker(10 * time.Second)
 	require.NoError(t, err)

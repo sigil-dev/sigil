@@ -530,6 +530,11 @@ func (s *Server) handleGetProviderHealth(ctx context.Context, input *providerNam
 		return nil, err
 	}
 
+	if s.services.Providers() == nil {
+		internalErr := sigilerr.New(sigilerr.CodeServerInternalFailure, "provider service not configured")
+		return nil, notFoundOr500(internalErr, "", "get provider health")
+	}
+
 	detail, err := s.services.Providers().GetHealth(ctx, input.Name)
 	if err != nil {
 		return nil, notFoundOr500(err,
@@ -538,6 +543,7 @@ func (s *Server) handleGetProviderHealth(ctx context.Context, input *providerNam
 	}
 	if detail == nil {
 		internalErr := sigilerr.New(sigilerr.CodeServerInternalFailure, "GetHealth contract violation: nil detail with nil error")
+		// notFoundMsg is unused here — CodeServerInternalFailure always routes to the 500 path.
 		return nil, notFoundOr500(internalErr, "", fmt.Sprintf("getting provider health %q", input.Name))
 	}
 	return &getProviderHealthOutput{Body: *detail}, nil

@@ -61,9 +61,10 @@ func TestRoutes_GetProviderHealth_Healthy(t *testing.T) {
 	ps := &mockProviderService{
 		healthMap: map[string]*server.ProviderHealthDetail{
 			"anthropic": {
-				Provider: "anthropic",
-				Message:  "ok",
-				Metrics:  health.Metrics{Available: true, FailureCount: 0},
+				Provider:         "anthropic",
+				Message:          "ok",
+				MetricsAvailable: true,
+				Metrics:          health.Metrics{Available: true, FailureCount: 0},
 			},
 		},
 	}
@@ -79,6 +80,7 @@ func TestRoutes_GetProviderHealth_Healthy(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.True(t, resp.Available)
+	assert.True(t, resp.MetricsAvailable)
 	assert.Equal(t, "anthropic", resp.Provider)
 	assert.Equal(t, "ok", resp.Message)
 	assert.Equal(t, int64(0), resp.FailureCount)

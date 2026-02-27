@@ -130,6 +130,10 @@ type UserService interface {
 
 // ProviderService provides provider health operations for REST handlers.
 // This is optional — when nil, provider health endpoints are not registered.
+//
+// GetHealth implementations MUST set MetricsAvailable=false when the provider
+// plugin does not supply a Health snapshot. In that case FailureCount,
+// LastFailureAt, and CooldownUntil will be zero/nil in the returned detail.
 type ProviderService interface {
 	GetHealth(ctx context.Context, name string) (*ProviderHealthDetail, error)
 }

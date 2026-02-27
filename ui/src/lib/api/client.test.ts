@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Sigil Contributors
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateApiUrl } from "./client";
 
 describe("validateApiUrl", () => {
@@ -158,5 +158,34 @@ describe("validateApiUrl", () => {
     expect(() => validateApiUrl("localhost:18789")).toThrow(
       "must use http: or https: scheme",
     );
+  });
+});
+
+describe("module-load validation guard", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("throws at module load when VITE_API_URL is a non-localhost HTTP URL", async () => {
+    vi.stubEnv("VITE_API_URL", "http://evil.example.com");
+    vi.resetModules();
+    await expect(import("./client")).rejects.toThrow(
+      "API URL must use HTTPS for non-localhost endpoints",
+    );
+  });
+
+  it("throws at module load when VITE_API_URL uses an all-interfaces address", async () => {
+    vi.stubEnv("VITE_API_URL", "http://0.0.0.0:18789");
+    vi.resetModules();
+    await expect(import("./client")).rejects.toThrow(
+      "must not use an all-interfaces address",
+    );
+  });
+
+  it("does not throw at module load when VITE_API_URL is a valid localhost URL", async () => {
+    vi.stubEnv("VITE_API_URL", "http://localhost:18789");
+    vi.resetModules();
+    await expect(import("./client")).resolves.toBeDefined();
   });
 });
