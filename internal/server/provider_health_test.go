@@ -394,11 +394,10 @@ func TestRoutes_GetProviderHealth_HealthyWithMetrics(t *testing.T) {
 	assert.Equal(t, true, raw["available"], "key 'available' must be true for healthy provider")
 	assert.Equal(t, "anthropic", raw["provider"], "key 'provider' must be present")
 
-	// Verify FailureCount is zero.
-	fc, hasFC := raw["failure_count"]
-	if hasFC {
-		assert.Equal(t, float64(0), fc, "failure_count must be 0 for healthy provider")
-	}
+	// Verify FailureCount is zero and always present (no omitempty on health.Metrics.FailureCount).
+	_, hasFailureCount := raw["failure_count"]
+	assert.True(t, hasFailureCount, "failure_count must always be present (no omitempty)")
+	assert.Equal(t, float64(0), raw["failure_count"], "failure_count must be 0 for healthy provider")
 
 	// omitempty on nil time pointers means these keys must be absent.
 	_, hasLastFailureAt := raw["last_failure_at"]
