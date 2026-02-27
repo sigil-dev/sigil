@@ -73,6 +73,12 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 7)
 
+	// Capture expected batch timestamps before compaction deletes the messages.
+	// appendMessages creates messages in order: CreatedAt = now + i*minute for i in [0,n).
+	// The batch size is 5, so msgs[0] and msgs[4] bound the compacted range.
+	expectedFromTime := mem.messages.msgs[0].CreatedAt
+	expectedToTime := mem.messages.msgs[4].CreatedAt
+
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
@@ -102,6 +108,12 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 	assert.Len(t, summary.MessageIDs, 5)
 	assert.Equal(t, "msg-0", summary.MessageIDs[0])
 	assert.Equal(t, "msg-4", summary.MessageIDs[4])
+	assert.Equal(t, expectedFromTime, summary.FromTime,
+		"summary.FromTime must equal the CreatedAt of the first compacted message")
+	assert.Equal(t, expectedToTime, summary.ToTime,
+		"summary.ToTime must equal the CreatedAt of the last compacted message")
+	assert.True(t, summary.FromTime.Before(summary.ToTime),
+		"summary.FromTime must be strictly before summary.ToTime")
 
 	require.Len(t, mem.knowledge.facts, 2)
 	assert.Equal(t, "ws-1", mem.knowledge.facts[0].WorkspaceID)

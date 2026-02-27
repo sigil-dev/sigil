@@ -7610,6 +7610,79 @@ func TestLoop_ProcessMessage_Compaction(t *testing.T) {
 	}
 }
 
+// TestLoop_ProcessMessage_Compaction_PartialCommit verifies that when Compact
+// returns both a non-nil CompactionResult with PartialCommit=true and an error,
+// the warning log includes the partial_commit, summary_id, message_ids_count,
+// and message_ids fields so operators can recover the orphaned messages.
+func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
+	logHandler := &testLogHandler{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(logHandler))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-compact-partial", "user-1")
+	require.NoError(t, err)
+
+	partialResult := &agent.CompactionResult{
+		PartialCommit: true,
+		SummaryID:     "sum-partial",
+		MessageIDs:    []string{"m-1", "m-2"},
+	}
+	mc := &mockCompactor{
+		compactErr:    fmt.Errorf("delete failed"),
+		compactResult: partialResult,
+	}
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Compactor = mc
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-compact-partial",
+		UserID:      "user-1",
+		Content:     "trigger partial commit test",
+	})
+
+	// Compaction failure is best-effort: response is still returned.
+	require.NoError(t, procErr)
+	require.NotNil(t, out)
+	assert.Equal(t, 1, mc.compactCalls, "Compact must be called exactly once")
+
+	// Find the compaction warning log and verify all partial-commit fields are present.
+	var warnRec *slog.Record
+	for _, rec := range logHandler.Records() {
+		if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "compaction trigger failed") {
+			r := rec
+			warnRec = &r
+			break
+		}
+	}
+	require.NotNil(t, warnRec, "expected a slog.LevelWarn record for compaction trigger failed")
+
+	attrMap := make(map[string]any)
+	warnRec.Attrs(func(a slog.Attr) bool {
+		attrMap[a.Key] = a.Value.Any()
+		return true
+	})
+
+	v, ok := attrMap["partial_commit"]
+	assert.True(t, ok, "log record must contain partial_commit field")
+	assert.Equal(t, true, v, "partial_commit must be true")
+
+	assert.Equal(t, "sum-partial", attrMap["summary_id"], "log record must contain summary_id")
+	assert.Equal(t, int64(2), attrMap["message_ids_count"], "log record must contain message_ids_count=2")
+
+	msgIDs, ok := attrMap["message_ids"]
+	assert.True(t, ok, "log record must contain message_ids field")
+	assert.Equal(t, []string{"m-1", "m-2"}, msgIDs, "message_ids must match the partial commit IDs")
+}
+
 // ---------------------------------------------------------------------------
 // testLogHandler — slog.Handler that captures log records for assertions
 // ---------------------------------------------------------------------------

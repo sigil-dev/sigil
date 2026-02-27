@@ -1414,15 +1414,18 @@ func (p *mockProviderBatchToolCall) Chat(_ context.Context, _ provider.ChatReque
 
 // mockCompactor implements the compactorRunner interface for testing.
 // Configure compactErr to simulate a Compact failure; leave nil for success.
+// Set compactResult to control the returned *CompactionResult (used to test
+// partial-commit paths where both a result and an error are returned).
 type mockCompactor struct {
-	compactErr   error
-	compactCalls int
+	compactErr    error
+	compactResult *agent.CompactionResult
+	compactCalls  int
 }
 
 func (m *mockCompactor) Compact(_ context.Context, _ string) (*agent.CompactionResult, error) {
 	m.compactCalls++
 	if m.compactErr != nil {
-		return nil, m.compactErr
+		return m.compactResult, m.compactErr
 	}
 	return &agent.CompactionResult{}, nil
 }

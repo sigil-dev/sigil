@@ -77,6 +77,37 @@ func TestSummaryStore_StoreWithMessageIDs(t *testing.T) {
 	assert.Equal(t, []string{"msg-1", "msg-2", "msg-3"}, results[0].MessageIDs)
 }
 
+func TestSummaryStore_Store_EmptyStatusDefaultsToCommitted(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "summaries-empty-status-default")
+	ss, err := sqlite.NewSummaryStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ss.Close() }()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Store a summary with Status="" (zero value) — should default to committed.
+	summary := &store.Summary{
+		ID:          "sum-default",
+		WorkspaceID: "ws-1",
+		FromTime:    base,
+		ToTime:      base.Add(1 * time.Hour),
+		Content:     "Default status summary",
+		CreatedAt:   base.Add(1 * time.Hour),
+		// Status intentionally left as zero value ""
+	}
+	err = ss.Store(ctx, "ws-1", summary)
+	require.NoError(t, err)
+
+	// GetLatest filters WHERE status = 'committed'; the summary must be returned,
+	// confirming the empty-status default was applied.
+	results, err := ss.GetLatest(ctx, "ws-1", 10)
+	require.NoError(t, err)
+	require.Len(t, results, 1, "summary with empty Status should be stored as committed and visible")
+	assert.Equal(t, "sum-default", results[0].ID)
+	assert.Equal(t, store.SummaryStatusCommitted, results[0].Status)
+}
+
 func TestSummaryStore_GetByRangeEmpty(t *testing.T) {
 	ctx := context.Background()
 	db := testDBPath(t, "summaries-empty")
