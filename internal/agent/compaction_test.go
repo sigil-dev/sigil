@@ -35,18 +35,58 @@ func TestCompaction_ShouldTrigger(t *testing.T) {
 	}
 }
 
+func TestNewCompactor_Validation(t *testing.T) {
+	ms := newMockMemoryStore()
+	vs := newMockVectorStore()
+
+	tests := []struct {
+		name    string
+		cfg     agent.CompactorConfig
+		wantErr string
+	}{
+		{
+			name:    "nil MemoryStore",
+			cfg:     agent.CompactorConfig{VectorStore: vs, BatchSize: 5},
+			wantErr: "MemoryStore must not be nil",
+		},
+		{
+			name:    "nil VectorStore",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, BatchSize: 5},
+			wantErr: "VectorStore must not be nil",
+		},
+		{
+			name:    "zero BatchSize",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, BatchSize: 0},
+			wantErr: "BatchSize must be positive",
+		},
+		{
+			name:    "negative BatchSize",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, BatchSize: -1},
+			wantErr: "BatchSize must be positive",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := agent.NewCompactor(tt.cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestCompaction_RollMessage(t *testing.T) {
 	ms := newMockMemoryStore()
 	vs := newMockVectorStore()
 	ss := newMockSessionStore()
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, err := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:  ms,
 		VectorStore:  vs,
 		SessionStore: ss,
 		BatchSize:    50,
-		WindowSize:   20,
 	})
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	msg := &store.Message{
@@ -55,7 +95,7 @@ func TestCompaction_RollMessage(t *testing.T) {
 		Content: "Hello, world",
 	}
 
-	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
+	err = c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.NoError(t, err)
 
 	count, err := ms.Messages().Count(ctx, "ws-1")
@@ -74,13 +114,13 @@ func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
 	vs := newMockVectorStore()
 	ss := newMockSessionStore()
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, err := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:  memStoreErr,
 		VectorStore:  vs,
 		SessionStore: ss,
 		BatchSize:    50,
-		WindowSize:   20,
 	})
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	msg := &store.Message{
@@ -89,7 +129,7 @@ func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
 		Content: "Test message",
 	}
 
-	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
+	err = c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 
@@ -106,13 +146,13 @@ func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
 	}
 	ss := newMockSessionStore()
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, err := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:  ms,
 		VectorStore:  vs,
 		SessionStore: ss,
 		BatchSize:    50,
-		WindowSize:   20,
 	})
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	msg := &store.Message{
@@ -121,7 +161,7 @@ func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
 		Content: "Test message",
 	}
 
-	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
+	err = c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 

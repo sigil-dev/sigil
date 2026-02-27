@@ -126,7 +126,11 @@ capabilities:
 		_, errs := plugin.ParseManifest([]byte(yaml))
 		require.NotEmpty(t, errs)
 		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, errs[0].Error(), "execution.image")
+		combined := ""
+		for _, e := range errs {
+			combined += e.Error()
+		}
+		assert.Contains(t, combined, "execution.image")
 	})
 
 	t.Run("missing memory limit", func(t *testing.T) {
@@ -144,7 +148,11 @@ capabilities:
 		_, errs := plugin.ParseManifest([]byte(yaml))
 		require.NotEmpty(t, errs)
 		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, errs[0].Error(), "execution.memory_limit")
+		combined := ""
+		for _, e := range errs {
+			combined += e.Error()
+		}
+		assert.Contains(t, combined, "execution.memory_limit")
 	})
 
 	t.Run("invalid network mode", func(t *testing.T) {
@@ -163,7 +171,11 @@ capabilities:
 		_, errs := plugin.ParseManifest([]byte(yaml))
 		require.NotEmpty(t, errs)
 		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, errs[0].Error(), "execution.network")
+		combined := ""
+		for _, e := range errs {
+			combined += e.Error()
+		}
+		assert.Contains(t, combined, "execution.network")
 	})
 
 	t.Run("image with embedded tab character", func(t *testing.T) {
@@ -226,10 +238,14 @@ execution:
 capabilities:
   - tools.execute
 `
-		_, err := plugin.ParseManifest([]byte(yaml))
-		require.Error(t, err)
-		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, err.Error(), "execution.image")
+		_, errs := plugin.ParseManifest([]byte(yaml))
+		require.NotEmpty(t, errs)
+		assert.True(t, sigilerr.HasCode(errs[0], sigilerr.CodePluginManifestValidateInvalid))
+		combined := ""
+		for _, e := range errs {
+			combined += e.Error()
+		}
+		assert.Contains(t, combined, "execution.image")
 	})
 }
 

@@ -227,28 +227,47 @@ func (m *MessageStore) Count(ctx context.Context, workspaceID string) (int64, er
 }
 
 // DeleteByIDs deletes specific messages by ID within the workspace.
-// Returns the number of deleted messages.
+// Batches deletions to stay within SQLite's variable limit (999).
+// Returns the total number of deleted messages.
 func (m *MessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 
-	placeholders := make([]string, len(ids))
-	args := make([]any, 0, len(ids)+1)
-	args = append(args, workspaceID)
+	// SQLite has a 999-variable limit per statement; reserve 1 for workspaceID.
+	const batchLimit = 998
+	var totalDeleted int64
 
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args = append(args, id)
+	for start := 0; start < len(ids); start += batchLimit {
+		end := start + batchLimit
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch := ids[start:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, workspaceID)
+
+		for i, id := range batch {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+
+		q := `DELETE FROM memory_messages WHERE workspace_id = ? AND id IN (` + strings.Join(placeholders, ",") + `)`
+		result, err := m.db.ExecContext(ctx, q, args...)
+		if err != nil {
+			return totalDeleted, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting messages by ids: %w", err)
+		}
+
+		n, err := result.RowsAffected()
+		if err != nil {
+			return totalDeleted, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting rows affected: %w", err)
+		}
+		totalDeleted += n
 	}
 
-	q := `DELETE FROM memory_messages WHERE workspace_id = ? AND id IN (` + strings.Join(placeholders, ",") + `)`
-	result, err := m.db.ExecContext(ctx, q, args...)
-	if err != nil {
-		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting messages by ids: %w", err)
-	}
-
-	return result.RowsAffected()
+	return totalDeleted, nil
 }
 
 // Trim keeps only the keepLast most recent messages per workspace and

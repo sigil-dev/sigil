@@ -28,14 +28,16 @@ func TestCompaction_Compact_NoOpBelowThreshold(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 4)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          true,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.NoError(t, err)
@@ -68,14 +70,16 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 7)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          true,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.NoError(t, err)
@@ -124,14 +128,16 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsDisabled(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          false,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.NoError(t, err)
@@ -158,14 +164,16 @@ func TestCompaction_Compact_SummarizeProviderFailure(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          true,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
@@ -188,14 +196,16 @@ func TestCompaction_Compact_SummaryStoreFailure(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          true,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
@@ -217,14 +227,16 @@ func TestCompaction_Compact_FactExtractionProviderFailure(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          true,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
@@ -250,14 +262,16 @@ func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          true,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
@@ -278,14 +292,16 @@ func TestCompaction_Compact_EmbeddingProviderFailure(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          false,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
@@ -306,14 +322,16 @@ func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          false,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
@@ -336,14 +354,16 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          false,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
@@ -371,14 +391,16 @@ func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.
 
 	appendMessages(t, mem.messages, "ws-1", 5)
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          false,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.NoError(t, err)
@@ -420,14 +442,16 @@ func TestCompaction_Compact_PreservesMessageAppendedAfterCountBeforeDelete(t *te
 		})
 	}
 
-	c := agent.NewCompactor(agent.CompactorConfig{
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
 		SessionStore:          ss,
-		SummarizationProvider: p,
+		Summarizer:   p,
+		Embedder:     p,
 		BatchSize:             5,
 		ExtractFacts:          false,
 	})
+	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.NoError(t, err)

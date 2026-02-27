@@ -4,7 +4,6 @@
 package plugin
 
 import (
-	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -125,16 +124,16 @@ type LifecycleConfig struct {
 }
 
 // ParseManifest parses YAML data into a Manifest and validates it.
-func ParseManifest(data []byte) (*Manifest, error) {
+// It returns all validation errors found rather than stopping at the first one.
+func ParseManifest(data []byte) (*Manifest, []error) {
 	var m Manifest
 	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"manifest parse: %w", err)
+		return nil, []error{sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest parse: %w", err)}
 	}
 
 	if errs := m.Validate(); len(errs) > 0 {
-		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
-			"manifest validation failed: %w", errors.Join(errs...))
+		return nil, errs
 	}
 
 	return &m, nil
