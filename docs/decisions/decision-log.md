@@ -1381,7 +1381,9 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 
 **Decision:** Option 2. `DeleteByIDs` was added to the `store.MessageStore` interface. The compaction method `Compact()` collects batch message IDs during `loadBatch()`, then passes those exact IDs to `DeleteByIDs` after summarization. This also addresses the interface cohesion concern — `DeleteByIDs` serves a distinct purpose (targeted deletion of known IDs) vs `Trim` (retain last N).
 
-**Rationale:** Correctness over spec adherence. The race condition is a real data-loss risk in production where messages can arrive while compaction runs. The ID-based approach is deterministic and auditable (the exact IDs deleted are logged).
+Two additional `MessageStore` methods were added alongside `DeleteByIDs`. `GetOldest(ctx, workspaceID, limit)` enables ordered batch loading for the compaction `loadBatch` path — it returns the oldest N messages by created-at, providing the compaction window without requiring callers to manage cursor state. `GetRange` had its signature extended from `GetRange(ctx, workspaceID, from, to time.Time)` to `GetRange(ctx, workspaceID, from, to time.Time, limit ...int)`, adding a variadic limit parameter to enable pagination without introducing a separate method; all existing callers remain source-compatible since the variadic argument is optional.
+
+**Rationale:** Correctness over spec adherence. The race condition is a real data-loss risk in production where messages can arrive while compaction runs. The ID-based approach is deterministic and auditable (the exact IDs deleted are logged). `GetOldest` and the `GetRange` variadic limit are minor supporting additions that complete the compaction interface without requiring a separate decision record.
 
 **Ref:** PR #29, `internal/agent/compaction.go`, `internal/store/memory.go`
 

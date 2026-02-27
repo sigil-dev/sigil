@@ -156,7 +156,13 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	confirmed := false
 	defer func() {
 		if !confirmed {
-			_ = c.cfg.MemoryStore.Summaries().Delete(ctx, workspaceID, summary.ID)
+			if delErr := c.cfg.MemoryStore.Summaries().Delete(ctx, workspaceID, summary.ID); delErr != nil {
+				slog.WarnContext(ctx, "compaction: failed to clean up pending summary",
+					"workspace_id", workspaceID,
+					"summary_id", summary.ID,
+					"error", delErr,
+				)
+			}
 		}
 	}()
 

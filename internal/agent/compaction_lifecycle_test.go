@@ -134,6 +134,12 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 		assert.Equal(t, "ws-1", v.metadata["workspace_id"])
 		assert.Equal(t, "summary", v.metadata["kind"])
 	}
+
+	// Verify two-phase commit: summary stored as pending, then confirmed.
+	require.Len(t, mem.summaries.summaries, 1)
+	assert.Equal(t, "pending", mem.summaries.summaries[0].Status,
+		"Compact() must store summary as pending before Confirm")
+	assert.True(t, mem.summaries.confirmCalled, "Confirm must be called after successful compaction")
 }
 
 func TestCompaction_Compact_FullLifecycle_ExtractFactsDisabled(t *testing.T) {
@@ -757,11 +763,12 @@ func (m *lifecycleMessageStore) DeleteByIDs(_ context.Context, _ string, ids []s
 func (m *lifecycleMessageStore) Close() error { return nil }
 
 type lifecycleSummaryStore struct {
-	summaries  []*store.Summary
-	storeErr   error
-	confirmErr error
-	deleteErr  error
-	deletedIDs []string
+	summaries     []*store.Summary
+	storeErr      error
+	confirmErr    error
+	deleteErr     error
+	deletedIDs    []string
+	confirmCalled bool
 }
 
 func (s *lifecycleSummaryStore) Store(_ context.Context, _ string, summary *store.Summary) error {
@@ -798,6 +805,7 @@ func (s *lifecycleSummaryStore) GetLatest(_ context.Context, _ string, n int) ([
 }
 
 func (s *lifecycleSummaryStore) Confirm(_ context.Context, _ string, _ string) error {
+	s.confirmCalled = true
 	return s.confirmErr
 }
 
