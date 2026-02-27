@@ -190,17 +190,20 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "deleting compacted message vectors for workspace %s", workspaceID)
 	}
 
+	// Promote summary from pending to committed before deleting messages.
+	// If Confirm fails here, no messages have been deleted yet — fully reversible.
+	// If DeleteByIDs fails after Confirm, messages still exist and summary is committed
+	// (duplicate, recoverable), which is preferable to permanent data loss.
+	if err := c.cfg.MemoryStore.Summaries().Confirm(ctx, workspaceID, summary.ID); err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "confirming compaction summary for workspace %s", workspaceID)
+	}
+	confirmed = true
+
 	trimmed, err := c.cfg.MemoryStore.Messages().DeleteByIDs(ctx, workspaceID, batchIDs)
 	if err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "deleting compacted messages for workspace %s", workspaceID)
 	}
 	result.MessagesTrimmed = int(trimmed)
-
-	// Promote summary from pending to committed now that all post-operations succeeded.
-	if err := c.cfg.MemoryStore.Summaries().Confirm(ctx, workspaceID, summary.ID); err != nil {
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "confirming compaction summary for workspace %s", workspaceID)
-	}
-	confirmed = true
 
 	return result, nil
 }

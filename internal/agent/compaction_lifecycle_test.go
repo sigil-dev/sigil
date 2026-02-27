@@ -265,6 +265,7 @@ func TestCompaction_Compact_FactExtractionProviderFailure(t *testing.T) {
 	assert.Len(t, mem.summaries.summaries, 1, "summary is stored before extraction stage")
 	assert.Len(t, mem.knowledge.facts, 0)
 	assert.Len(t, vec.vectors, 0)
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
 }
 
 func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
@@ -299,6 +300,7 @@ func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
 	assert.Len(t, mem.summaries.summaries, 1)
 	assert.Len(t, mem.knowledge.facts, 0)
 	assert.Len(t, vec.vectors, 0)
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
 }
 
 func TestCompaction_Compact_EmbeddingProviderFailure(t *testing.T) {
@@ -328,6 +330,7 @@ func TestCompaction_Compact_EmbeddingProviderFailure(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Len(t, mem.summaries.summaries, 1)
 	assert.Len(t, vec.vectors, 0)
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
 }
 
 func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
@@ -360,6 +363,7 @@ func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, countErr)
 	assert.Equal(t, int64(5), count, "messages should not trim when vector storage fails")
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
 }
 
 func TestCompaction_Compact_VectorDeleteFailure(t *testing.T) {
@@ -405,9 +409,46 @@ func TestCompaction_Compact_VectorDeleteFailure(t *testing.T) {
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, countErr)
 	assert.Equal(t, int64(5), count, "messages should not be trimmed when vector Delete fails")
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
+}
+
+func TestCompaction_Compact_DeleteCleanupFailure(t *testing.T) {
+	// When the deferred Delete() call to clean up the pending summary itself fails,
+	// the primary error from the failing step must still be returned — the cleanup
+	// error must not be swallowed or replace the original error.
+	mem := newLifecycleMemoryStore()
+	mem.summaries.deleteErr = fmt.Errorf("delete cleanup failed")
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:  "summary",
+		embedErr: fmt.Errorf("embed failed"),
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+
+		Summarizer: p,
+		Embedder:   p,
+		BatchSize:  5,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "embed failed", "primary error must be returned even when cleanup Delete fails")
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to attempt cleanup")
 }
 
 func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
+	// In the new order, Confirm runs before DeleteByIDs. Confirm succeeds here,
+	// so the summary is committed (confirmed=true) and the defer does NOT clean
+	// it up. Messages still exist because DeleteByIDs failed — duplicate but
+	// recoverable (summary committed, messages not yet trimmed).
 	mem := newLifecycleMemoryStore()
 	mem.messages.deleteErr = fmt.Errorf("delete failed")
 	vec := newLifecycleVectorStore()
@@ -420,29 +461,27 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	appendMessages(t, mem.messages, "ws-1", 5)
 
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
-		MemoryStore:           mem,
-		VectorStore:           vec,
+		MemoryStore: mem,
+		VectorStore: vec,
 
-		Summarizer:   p,
-		Embedder:     p,
-		BatchSize:             5,
-
+		Summarizer: p,
+		Embedder:   p,
+		BatchSize:  5,
 	})
 	require.NoError(t, newErr)
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
 	assert.Nil(t, result)
+	// Summary is committed (Confirm succeeded before DeleteByIDs was reached).
 	assert.Len(t, mem.summaries.summaries, 1)
 	assert.Len(t, vec.vectors, 1)
 }
 
 func TestCompaction_Compact_ConfirmFailure(t *testing.T) {
-	// This test documents a data-loss scenario: if Confirm() fails, the
-	// compacted messages have already been deleted from Tier 1 (DeleteByIDs
-	// ran successfully before Confirm). The summary remains as pending
-	// (invisible to GetByRange/GetLatest which filter WHERE status='committed'),
-	// so the compacted messages are permanently lost.
+	// Confirm is now called before DeleteByIDs. If Confirm fails, no messages
+	// have been deleted yet — the failure is fully reversible. The pending
+	// summary is cleaned up by the defer block (confirmed remains false).
 	mem := newLifecycleMemoryStore()
 	mem.summaries.confirmErr = fmt.Errorf("confirm failed")
 	vec := newLifecycleVectorStore()
@@ -474,10 +513,10 @@ func TestCompaction_Compact_ConfirmFailure(t *testing.T) {
 	// Vector embedding was stored before Confirm was called.
 	assert.Len(t, vec.vectors, 1, "summary embedding should be stored before Confirm is called")
 
-	// Messages were already deleted before Confirm was called — this is the data-loss point.
+	// Messages were NOT deleted — Confirm failed before DeleteByIDs was reached.
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, countErr)
-	assert.Equal(t, int64(0), count, "messages are already deleted when Confirm fails — data-loss scenario")
+	assert.Equal(t, int64(5), count, "messages are preserved when Confirm fails — no data loss")
 }
 
 func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.T) {
@@ -721,6 +760,8 @@ type lifecycleSummaryStore struct {
 	summaries  []*store.Summary
 	storeErr   error
 	confirmErr error
+	deleteErr  error
+	deletedIDs []string
 }
 
 func (s *lifecycleSummaryStore) Store(_ context.Context, _ string, summary *store.Summary) error {
@@ -760,8 +801,9 @@ func (s *lifecycleSummaryStore) Confirm(_ context.Context, _ string, _ string) e
 	return s.confirmErr
 }
 
-func (s *lifecycleSummaryStore) Delete(_ context.Context, _ string, _ string) error {
-	return nil
+func (s *lifecycleSummaryStore) Delete(_ context.Context, _ string, id string) error {
+	s.deletedIDs = append(s.deletedIDs, id)
+	return s.deleteErr
 }
 
 func (s *lifecycleSummaryStore) Close() error { return nil }
