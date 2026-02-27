@@ -350,7 +350,7 @@ There are TWO separate SQLite message stores with independent schemas:
 
 ### Summary Store Two-Phase Commit
 
-Summaries use a two-phase commit pattern: stored as `status='pending'`, promoted to `'committed'` via `SummaryStore.Confirm()` after all post-operations (embedding, vector store, message deletion) succeed. `GetByRange`/`GetLatest` filter `WHERE status = 'committed'` so incomplete compactions are invisible.
+Summaries use a two-phase commit pattern: stored as `status='pending'`, promoted to `'committed'` via `SummaryStore.Confirm()` **before** message deletion (`DeleteByIDs`). This ordering ensures Confirm failure is reversible (no messages deleted yet) while DeleteByIDs failure after Confirm produces recoverable duplicate data. `GetByRange`/`GetLatest` filter `WHERE status = 'committed'` so incomplete compactions are invisible. The defer block cleans up both orphaned pending summaries and vector embeddings using a background context with 5s timeout.
 
 ### Transactional Fact Persistence
 
