@@ -25,6 +25,7 @@
       }
     ],
     "security": {
+      "//": "connect-src allows http://localhost:18789 intentionally — the sidecar gateway only listens on loopback; HTTP is safe here and traffic never leaves the machine.",
       "csp": "default-src 'self'; script-src 'self'; connect-src 'self' http://localhost:18789; style-src 'self'; img-src 'self' asset: https://asset.localhost; frame-ancestors 'none'",
       "assetProtocol": {
         "enable": true,

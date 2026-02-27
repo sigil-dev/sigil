@@ -269,8 +269,8 @@ func TestApplyMode_RedactByteOffsets(t *testing.T) {
 			name:    "three matches two overlapping one separate",
 			content: "aabbccddee",
 			matches: []scanner.Match{
-				mustMatch("rule-a", 0, 4, scanner.SeverityHigh),  // "aabb"
-				mustMatch("rule-b", 2, 4, scanner.SeverityHigh),  // "bbcc" (overlaps rule-a)
+				mustMatch("rule-a", 0, 4, scanner.SeverityHigh),   // "aabb"
+				mustMatch("rule-b", 2, 4, scanner.SeverityHigh),   // "bbcc" (overlaps rule-a)
 				mustMatch("rule-c", 8, 2, scanner.SeverityMedium), // "ee"
 			},
 			// Merged spans: [0,6) → "aabbcc", [8,10) → "ee"; "dd" is preserved.

@@ -151,10 +151,16 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan p
 }
 
 func (p *Provider) Status(ctx context.Context) (provider.ProviderStatus, error) {
+	m := p.health.HealthMetrics()
+	msg := "ok"
+	if !m.Available {
+		msg = "provider unavailable (in cooldown)"
+	}
 	return provider.ProviderStatus{
-		Available: p.Available(ctx),
+		Available: m.Available,
 		Provider:  "openai",
-		Message:   "ok",
+		Message:   msg,
+		Health:    &m,
 	}, nil
 }
 

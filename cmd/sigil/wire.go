@@ -196,6 +196,7 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 		&pluginServiceAdapter{mgr: pluginMgr},
 		&sessionServiceAdapter{wsMgr: wsMgr},
 		&userServiceAdapter{store: gs.Users()},
+		&providerServiceAdapter{reg: provReg},
 	)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
@@ -448,7 +449,7 @@ func (a *pluginServiceAdapter) Get(_ context.Context, name string) (*server.Plug
 		if sigilerr.HasCode(err, sigilerr.CodePluginNotFound) {
 			return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "plugin %q not found", name)
 		}
-		return nil, err
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeServerInternalFailure, "getting plugin %q", name)
 	}
 	caps := inst.Capabilities()
 	if caps == nil {
@@ -489,7 +490,7 @@ type userServiceAdapter struct {
 func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, error) {
 	users, err := a.store.List(ctx, store.ListOpts{Limit: 100})
 	if err != nil {
-		return nil, err
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeServerInternalFailure, "listing users")
 	}
 	out := make([]server.UserSummary, len(users))
 	for i, u := range users {
@@ -499,6 +500,59 @@ func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, er
 		}
 	}
 	return out, nil
+}
+
+// providerLookup is the subset of provider.Registry that providerServiceAdapter needs.
+type providerLookup interface {
+	Get(name string) (provider.Provider, error)
+}
+
+// providerServiceAdapter adapts the provider registry to the server.ProviderService interface.
+type providerServiceAdapter struct {
+	reg providerLookup
+}
+
+// GetHealth returns health detail for the named provider. When the provider
+// plugin does not populate the Health field in its Status response (i.e.
+// status.Health == nil), MetricsAvailable is set to false and the counters
+// FailureCount, LastFailureAt, and CooldownUntil will be zero/nil. This is
+// expected for external plugin providers that predate the Health struct or
+// choose not to report fine-grained metrics.
+func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*server.ProviderHealthDetail, error) {
+	p, err := a.reg.Get(name)
+	if err != nil {
+		if sigilerr.HasCode(err, sigilerr.CodeProviderNotFound) {
+			return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "provider %q not found", name)
+		}
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "looking up provider %q", name)
+	}
+	status, err := p.Status(ctx)
+	if err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeProviderUpstreamFailure, "getting status for provider %q", name)
+	}
+	detail := &server.ProviderHealthDetail{
+		Provider: status.Provider,
+		Message:  status.Message,
+	}
+	if status.Health != nil {
+		detail.Metrics = *status.Health
+		detail.MetricsAvailable = true
+	} else {
+		// Fallback: populate Available from the top-level status field so
+		// providers that don't populate Health still report correctly.
+		detail.Available = status.Available
+		if !status.Available {
+			slog.Warn("provider health metrics unavailable",
+				"provider", name,
+				"available", status.Available,
+				"hint", "provider plugin did not populate Health struct")
+		} else {
+			slog.Debug("provider health metrics not populated",
+				"provider", name,
+				"hint", "provider plugin did not populate Health struct")
+		}
+	}
+	return detail, nil
 }
 
 // configTokenValidator validates bearer tokens against pre-computed SHA256

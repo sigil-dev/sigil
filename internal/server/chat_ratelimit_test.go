@@ -249,16 +249,16 @@ func TestChatRateLimiter_CleanupDoesNotEvictActiveStreams(t *testing.T) {
 	// Entry A: has an active stream — must NOT be evicted.
 	keyA := "ip:192.0.2.1"
 	limiter.visitors[keyA] = &chatVisitorEntry{
-		lastSeen:     old,
-		lastRefill:   old,
+		lastSeen:      old,
+		lastRefill:    old,
 		activeStreams: 1,
 	}
 
 	// Entry B: no active stream, old lastSeen — eligible for eviction.
 	keyB := "ip:192.0.2.2"
 	limiter.visitors[keyB] = &chatVisitorEntry{
-		lastSeen:     old,
-		lastRefill:   old,
+		lastSeen:      old,
+		lastRefill:    old,
 		activeStreams: 0,
 	}
 
@@ -295,16 +295,16 @@ func TestChatRateLimiter_LRUEvictionProtectsActiveStreams(t *testing.T) {
 	// Entry A: has an active stream, newer lastSeen — must NOT be evicted.
 	keyA := "ip:192.0.2.1"
 	limiter.visitors[keyA] = &chatVisitorEntry{
-		lastSeen:     recentA,
-		lastRefill:   recentA,
+		lastSeen:      recentA,
+		lastRefill:    recentA,
 		activeStreams: 1,
 	}
 
 	// Entry B: no active stream, older lastSeen — LRU sorts it first, eligible for eviction.
 	keyB := "ip:192.0.2.2"
 	limiter.visitors[keyB] = &chatVisitorEntry{
-		lastSeen:     recentB,
-		lastRefill:   recentB,
+		lastSeen:      recentB,
+		lastRefill:    recentB,
 		activeStreams: 0,
 	}
 

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ import (
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/health"
 	"github.com/sigil-dev/sigil/pkg/types"
 )
 
@@ -996,6 +998,264 @@ func TestWireGateway_InvalidDataDir(t *testing.T) {
 	require.Error(t, err, "WireGateway must return an error when the data directory cannot be created")
 	assert.Nil(t, gw, "Gateway must be nil when WireGateway fails")
 }
+
+// TestProviderServiceAdapter_GetHealth tests the eight code paths in
+// providerServiceAdapter.GetHealth:
+//  1. CodeProviderNotFound from the registry is translated to CodeServerEntityNotFound
+//  2. Non-NotFound registry error is wrapped as CodeProviderUpstreamFailure
+//  3. Status() returning Health == nil with Available=true: detail.Available is true
+//  4. Status() returning Health == nil with Available=false: detail.Available is false
+//  5. Status() returning populated Health copies the metrics into the detail
+//  6. Status() returning populated Health with Available=true propagates Available from Health
+//  7. Status() returning an error wraps it as CodeProviderUpstreamFailure
+//  8. Context cancellation before Status() is called propagates the error
+func TestProviderServiceAdapter_GetHealth(t *testing.T) {
+	t.Run("unknown provider returns CodeServerEntityNotFound", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		adapter := &providerServiceAdapter{reg: reg}
+
+		_, err := adapter.GetHealth(context.Background(), "nonexistent")
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerEntityNotFound),
+			"expected CodeServerEntityNotFound, got: %v", err)
+	})
+
+	t.Run("non-NotFound registry error returns CodeProviderUpstreamFailure", func(t *testing.T) {
+		stub := &registryGetStub{err: fmt.Errorf("internal registry corruption")}
+		adapter := &providerServiceAdapter{reg: stub}
+
+		_, err := adapter.GetHealth(context.Background(), "any")
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+			"expected CodeProviderUpstreamFailure, got: %v", err)
+	})
+
+	t.Run("nil Health populates Available from status", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		p := &statusStubProvider{
+			name: "stub",
+			status: provider.ProviderStatus{
+				Provider:  "stub",
+				Available: true,
+				Message:   "ok",
+				Health:    nil, // no health field set
+			},
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		detail, err := adapter.GetHealth(context.Background(), "stub")
+		require.NoError(t, err)
+		require.NotNil(t, detail)
+		assert.Equal(t, "stub", detail.Provider)
+		assert.True(t, detail.Available,
+			"Available should match status.Available when Health is nil")
+		assert.False(t, detail.MetricsAvailable,
+			"MetricsAvailable should be false when Health is nil")
+		assert.Equal(t, int64(0), detail.FailureCount,
+			"FailureCount should be zero when Health is nil")
+		assert.Nil(t, detail.LastFailureAt,
+			"LastFailureAt should be nil when Health is nil")
+		assert.Nil(t, detail.CooldownUntil,
+			"CooldownUntil should be nil when Health is nil")
+		assert.Equal(t, "ok", detail.Message,
+			"Message should match status.Message")
+	})
+
+	t.Run("nil Health with Available=false reports unavailable", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		p := &statusStubProvider{
+			name: "stub",
+			status: provider.ProviderStatus{
+				Provider:  "stub",
+				Available: false,
+				Message:   "down",
+				Health:    nil, // no health field set
+			},
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		detail, err := adapter.GetHealth(context.Background(), "stub")
+		require.NoError(t, err)
+		require.NotNil(t, detail)
+		assert.Equal(t, "stub", detail.Provider)
+		assert.False(t, detail.Available,
+			"Available should be false when status.Available is false and Health is nil")
+		assert.False(t, detail.MetricsAvailable,
+			"MetricsAvailable should be false when Health is nil")
+		assert.Equal(t, "down", detail.Message,
+			"Message should match status.Message")
+	})
+
+	t.Run("populated Health is copied into Metrics", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		wantMetrics := health.Metrics{
+			FailureCount: 3,
+			Available:    false,
+		}
+		p := &statusStubProvider{
+			name: "stub",
+			status: provider.ProviderStatus{
+				Provider:  "stub",
+				Available: false,
+				Message:   "degraded",
+				Health:    &wantMetrics,
+			},
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		detail, err := adapter.GetHealth(context.Background(), "stub")
+		require.NoError(t, err)
+		require.NotNil(t, detail)
+		assert.Equal(t, "stub", detail.Provider)
+		assert.Equal(t, "degraded", detail.Message)
+		assert.Equal(t, wantMetrics, detail.Metrics,
+			"Metrics should be copied from Health when Health is non-nil")
+		assert.True(t, detail.MetricsAvailable,
+			"MetricsAvailable should be true when Health is non-nil")
+	})
+
+	t.Run("populated Health with Available=true reports available", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		wantMetrics := health.Metrics{
+			FailureCount: 0,
+			Available:    true, // Health says available
+		}
+		p := &statusStubProvider{
+			name: "stub",
+			status: provider.ProviderStatus{
+				Provider:  "stub",
+				Available: false, // status.Available diverges from Health.Available
+				Message:   "recovering",
+				Health:    &wantMetrics,
+			},
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		detail, err := adapter.GetHealth(context.Background(), "stub")
+		require.NoError(t, err)
+		require.NotNil(t, detail)
+		assert.True(t, detail.Available,
+			"Available should come from Health.Available when Health is non-nil")
+		assert.True(t, detail.MetricsAvailable,
+			"MetricsAvailable should be true when Health is non-nil")
+	})
+
+	t.Run("Status error returns wrapped upstream failure", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		p := &statusStubProvider{
+			name:      "stub",
+			statusErr: fmt.Errorf("upstream timeout"),
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		_, err := adapter.GetHealth(context.Background(), "stub")
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
+			"expected CodeProviderUpstreamFailure, got: %v", err)
+	})
+
+	t.Run("context cancellation propagates error", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		p := &statusStubProvider{
+			name:     "stub",
+			ctxAware: true,
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // cancel immediately before calling GetHealth
+
+		detail, err := adapter.GetHealth(ctx, "stub")
+		require.Error(t, err, "cancelled context must produce an error")
+		assert.Nil(t, detail, "detail must be nil when context is cancelled")
+	})
+}
+
+// TestWireGateway_ProviderHealthEndpointRegistered verifies that when WireGateway is
+// called with providers configured, the providerServiceAdapter is passed to NewServices
+// and the /api/v1/providers/{name}/health route is actually registered and returns a
+// valid 200 health response — not a 404 from an unregistered route.
+//
+// A regression where providerServiceAdapter is not passed to NewServices (wire.go)
+// would cause the route to never be registered, returning 404 silently. This test
+// closes that gap by exercising the full HTTP path from WireGateway → Server.Handler().
+func TestWireGateway_ProviderHealthEndpointRegistered(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testGatewayConfig()
+	cfg.Providers = map[string]config.ProviderConfig{
+		"anthropic": {APIKey: "test-key-anthropic"},
+	}
+	// No auth tokens configured — auth is disabled so the admin:providers check passes.
+
+	gw, err := WireGateway(context.Background(), cfg, dir)
+	require.NoError(t, err)
+	defer func() { _ = gw.Close() }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	gw.Server().Handler().ServeHTTP(w, req)
+
+	// The route must be registered — 404 indicates providerServiceAdapter was not wired.
+	require.Equal(t, http.StatusOK, w.Code,
+		"provider health endpoint must return 200 when route is registered; got %d (body: %s)",
+		w.Code, w.Body.String())
+
+	// Verify the JSON response shape: provider, available, message, metrics_available.
+	var raw map[string]any
+	err = json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err, "response body must be valid JSON")
+
+	assert.Equal(t, "anthropic", raw["provider"],
+		"response must include 'provider' field with correct value")
+	_, hasAvailable := raw["available"]
+	assert.True(t, hasAvailable, "response must include 'available' field from health.Metrics")
+	_, hasMessage := raw["message"]
+	assert.True(t, hasMessage, "response must include 'message' field")
+	_, hasMetricsAvailable := raw["metrics_available"]
+	assert.True(t, hasMetricsAvailable, "response must include 'metrics_available' field")
+}
+
+// registryGetStub implements providerLookup for testing the non-NotFound error path.
+type registryGetStub struct {
+	p   provider.Provider
+	err error
+}
+
+func (s *registryGetStub) Get(_ string) (provider.Provider, error) { return s.p, s.err }
+
+// statusStubProvider is a Provider stub that returns a configurable ProviderStatus.
+// Unlike stubProvider (which always returns available=true with no Health),
+// this variant allows tests to inject specific Status() return values.
+// When ctxAware is true, Status() returns ctx.Err() if the context is already
+// cancelled, simulating a blocking RPC that respects context cancellation.
+type statusStubProvider struct {
+	name      string
+	status    provider.ProviderStatus
+	statusErr error
+	ctxAware  bool
+}
+
+func (s *statusStubProvider) Name() string                                               { return s.name }
+func (s *statusStubProvider) Available(_ context.Context) bool                           { return s.status.Available }
+func (s *statusStubProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) { return nil, nil }
+func (s *statusStubProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	return nil, nil
+}
+func (s *statusStubProvider) Status(ctx context.Context) (provider.ProviderStatus, error) {
+	if s.ctxAware {
+		if err := ctx.Err(); err != nil {
+			return provider.ProviderStatus{}, err
+		}
+	}
+	return s.status, s.statusErr
+}
+func (s *statusStubProvider) Close() error { return nil }
 
 // stubProvider is a minimal Provider implementation for negative test cases.
 type stubProvider struct {

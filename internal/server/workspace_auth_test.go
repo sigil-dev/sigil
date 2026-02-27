@@ -199,10 +199,10 @@ func TestCheckWorkspaceMembership(t *testing.T) {
 			})
 			require.NoError(t, err)
 			t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
+				if err := srv.Close(); err != nil {
+					t.Logf("srv.Close() in cleanup: %v", err)
+				}
+			})
 
 			ctx := context.Background()
 			if tt.user != nil {

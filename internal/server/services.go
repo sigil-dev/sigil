@@ -7,6 +7,7 @@ import (
 	"context"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/health"
 	"github.com/sigil-dev/sigil/pkg/plugin"
 )
 
@@ -40,11 +41,13 @@ type Services struct {
 	plugins    PluginService
 	sessions   SessionService
 	users      UserService
+	providers  ProviderService // optional; nil = provider health endpoints unavailable
 }
 
 // NewServices creates a Services instance with validation.
 // Returns an error if any required service is nil.
-func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService) (*Services, error) {
+// The optional providers variadic parameter sets the provider health service.
+func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService, providers ...ProviderService) (*Services, error) {
 	if ws == nil {
 		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "workspace service is required")
 	}
@@ -57,12 +60,19 @@ func NewServices(ws WorkspaceService, plugins PluginService, sessions SessionSer
 	if users == nil {
 		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "user service is required")
 	}
-	return &Services{
+	if len(providers) > 1 {
+		return nil, sigilerr.New(sigilerr.CodeServerConfigInvalid, "at most one provider service may be supplied")
+	}
+	s := &Services{
 		workspaces: ws,
 		plugins:    plugins,
 		sessions:   sessions,
 		users:      users,
-	}, nil
+	}
+	if len(providers) > 0 && providers[0] != nil {
+		s.providers = providers[0]
+	}
+	return s, nil
 }
 
 // Workspaces returns the workspace service.
@@ -83,6 +93,12 @@ func (s *Services) Sessions() SessionService {
 // Users returns the user service.
 func (s *Services) Users() UserService {
 	return s.users
+}
+
+// Providers returns the optional provider health service.
+// Returns nil when provider health endpoints are not configured.
+func (s *Services) Providers() ProviderService {
+	return s.providers
 }
 
 // WorkspaceService provides workspace operations for REST handlers.
@@ -110,6 +126,16 @@ type SessionService interface {
 // UserService provides user operations for REST handlers.
 type UserService interface {
 	List(ctx context.Context) ([]UserSummary, error)
+}
+
+// ProviderService provides provider health operations for REST handlers.
+// This is optional — when nil, provider health endpoints are not registered.
+//
+// GetHealth implementations MUST set MetricsAvailable=false when the provider
+// plugin does not supply a Health snapshot. In that case FailureCount,
+// LastFailureAt, and CooldownUntil will be zero/nil in the returned detail.
+type ProviderService interface {
+	GetHealth(ctx context.Context, name string) (*ProviderHealthDetail, error)
 }
 
 // WorkspaceSummary is the REST representation of a workspace in list results.
@@ -166,12 +192,20 @@ type UserSummary struct {
 	Name string `json:"name" doc:"Display name"`
 }
 
+// ProviderHealthDetail is the REST representation of a provider's health metrics.
+type ProviderHealthDetail struct {
+	Provider         string `json:"provider" doc:"Provider name"`
+	Message          string `json:"message" doc:"Human-readable status message"`
+	MetricsAvailable bool   `json:"metrics_available" doc:"Whether the provider reported health metrics"`
+	health.Metrics
+}
+
 // NewServicesForTest creates a Services instance for testing.
 // It delegates to NewServices to enforce the same validation invariants as production code.
 // This is exported for use in server_test package where unexported fields are inaccessible.
 // Panics if any required service is nil (same validation as NewServices).
-func NewServicesForTest(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService) *Services {
-	svc, err := NewServices(ws, plugins, sessions, users)
+func NewServicesForTest(ws WorkspaceService, plugins PluginService, sessions SessionService, users UserService, providers ...ProviderService) *Services {
+	svc, err := NewServices(ws, plugins, sessions, users, providers...)
 	if err != nil {
 		panic(err) // Test setup should provide all required services
 	}

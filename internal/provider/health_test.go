@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/provider"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +34,8 @@ func TestHealthTracker_InvalidCooldown(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, h)
 			assert.Contains(t, err.Error(), "health tracker cooldown must be positive")
+			assert.True(t, sigilerr.HasCode(err, sigilerr.CodeConfigValidateInvalidValue),
+				"invalid cooldown should carry CodeConfigValidateInvalidValue")
 		})
 	}
 }

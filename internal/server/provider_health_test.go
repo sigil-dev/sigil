@@ -1,0 +1,426 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Sigil Contributors
+
+package server_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/sigil-dev/sigil/internal/server"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+	"github.com/sigil-dev/sigil/pkg/health"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// mockProviderService implements server.ProviderService for testing.
+type mockProviderService struct {
+	healthMap map[string]*server.ProviderHealthDetail
+}
+
+func (m *mockProviderService) GetHealth(_ context.Context, name string) (*server.ProviderHealthDetail, error) {
+	if detail, ok := m.healthMap[name]; ok {
+		return detail, nil
+	}
+	return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "provider %q not found", name)
+}
+
+func newTestServerWithProviders(t *testing.T, ps server.ProviderService, validator ...server.TokenValidator) *server.Server {
+	t.Helper()
+	svc := server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+		ps,
+	)
+	cfg := server.Config{
+		ListenAddr: "127.0.0.1:0",
+		Services:   svc,
+	}
+	if len(validator) > 0 {
+		cfg.TokenValidator = validator[0]
+	}
+	srv, err := server.New(cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
+	return srv
+}
+
+func TestRoutes_GetProviderHealth_Healthy(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {
+				Provider:         "anthropic",
+				Message:          "ok",
+				MetricsAvailable: true,
+				Metrics:          health.Metrics{Available: true, FailureCount: 0},
+			},
+		},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp server.ProviderHealthDetail
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.True(t, resp.Available)
+	assert.True(t, resp.MetricsAvailable)
+	assert.Equal(t, "anthropic", resp.Provider)
+	assert.Equal(t, "ok", resp.Message)
+	assert.Equal(t, int64(0), resp.FailureCount)
+	assert.Nil(t, resp.LastFailureAt)
+	assert.Nil(t, resp.CooldownUntil)
+}
+
+func TestRoutes_GetProviderHealth_Unhealthy(t *testing.T) {
+	failTime := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	cooldownEnd := failTime.Add(30 * time.Second)
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"openai": {
+				Provider: "openai",
+				Message:  "ok",
+				Metrics: health.Metrics{
+					Available:     false,
+					FailureCount:  3,
+					LastFailureAt: &failTime,
+					CooldownUntil: &cooldownEnd,
+				},
+			},
+		},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/openai/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp server.ProviderHealthDetail
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.False(t, resp.Available)
+	assert.Equal(t, "openai", resp.Provider)
+	assert.Equal(t, "ok", resp.Message)
+	assert.Equal(t, int64(3), resp.FailureCount)
+	require.NotNil(t, resp.LastFailureAt)
+	assert.Equal(t, failTime.UTC(), resp.LastFailureAt.UTC())
+	require.NotNil(t, resp.CooldownUntil)
+	assert.Equal(t, cooldownEnd.UTC(), resp.CooldownUntil.UTC())
+}
+
+func TestRoutes_GetProviderHealth_NotFound(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/nonexistent/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestRoutes_GetProviderHealth_Unauthenticated(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {Provider: "anthropic", Message: "ok", Metrics: health.Metrics{Available: true}},
+		},
+	}
+
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:*"}),
+		},
+	}
+
+	srv := newTestServerWithProviders(t, ps, validator)
+
+	// No Authorization header — auth is enabled, so 401 is expected.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestRoutes_GetProviderHealth_RequiresAdmin(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {Provider: "anthropic", Message: "ok", Metrics: health.Metrics{Available: true}},
+		},
+	}
+
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": mustNewAuthenticatedUser("user-1", "Regular User", []string{"workspace:read"}),
+		},
+	}
+
+	srv := newTestServerWithProviders(t, ps, validator)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "insufficient permissions")
+}
+
+func TestRoutes_GetProviderHealth_AdminWildcardSucceeds(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {Provider: "anthropic", Message: "ok", Metrics: health.Metrics{Available: true}},
+		},
+	}
+
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:*"}),
+		},
+	}
+
+	srv := newTestServerWithProviders(t, ps, validator)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "anthropic")
+}
+
+func TestRoutes_GetProviderHealth_AdminProvidersCapabilitySucceeds(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {Provider: "anthropic", Message: "ok", Metrics: health.Metrics{Available: true}},
+		},
+	}
+
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"providers-token": mustNewAuthenticatedUser("admin-2", "ProviderAdmin", []string{"admin:providers"}),
+		},
+	}
+
+	srv := newTestServerWithProviders(t, ps, validator)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	req.Header.Set("Authorization", "Bearer providers-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "anthropic")
+}
+
+func TestRoutes_GetProviderHealth_NotRegistered_NoProviderService(t *testing.T) {
+	// When no ProviderService is configured, the endpoint should not be
+	// registered, resulting in a 404 from the router.
+	srv := newTestServerWithData(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// errProviderService is a ProviderService stub that always returns the given error from GetHealth.
+type errProviderService struct {
+	err error
+}
+
+func (e *errProviderService) GetHealth(_ context.Context, _ string) (*server.ProviderHealthDetail, error) {
+	return nil, e.err
+}
+
+func TestRoutes_GetProviderHealth_UpstreamError(t *testing.T) {
+	ps := &errProviderService{
+		err: fmt.Errorf("timeout"),
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "internal server error")
+}
+
+func TestRoutes_GetProviderHealth_SigilerrUpstreamError(t *testing.T) {
+	ps := &errProviderService{
+		err: sigilerr.New(sigilerr.CodeProviderUpstreamFailure, "provider timeout"),
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "internal server error")
+}
+
+// TestRoutes_GetProviderHealth_JSONKeyNames validates the raw JSON key names emitted by the
+// provider health endpoint. This guards against JSON tag renames or serialization regressions
+// on embedded struct fields that would silently break API consumers.
+func TestRoutes_GetProviderHealth_JSONKeyNames(t *testing.T) {
+	failTime := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	cooldownEnd := failTime.Add(30 * time.Second)
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {
+				Provider:         "anthropic",
+				Message:          "ok",
+				MetricsAvailable: true,
+				Metrics: health.Metrics{
+					Available:     true,
+					FailureCount:  2,
+					LastFailureAt: &failTime,
+					CooldownUntil: &cooldownEnd,
+				},
+			},
+		},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err, "response body must be valid JSON")
+
+	// Assert top-level ProviderHealthDetail fields.
+	assert.Equal(t, "anthropic", raw["provider"], "key 'provider' must be present with correct value")
+	assert.Equal(t, true, raw["metrics_available"], "key 'metrics_available' must use snake_case tag")
+
+	// Assert embedded health.Metrics fields are promoted to the top level.
+	assert.Equal(t, true, raw["available"], "key 'available' must be present from embedded health.Metrics")
+	_, hasFailureCount := raw["failure_count"]
+	assert.True(t, hasFailureCount, "key 'failure_count' must be present from embedded health.Metrics")
+	_, hasLastFailureAt := raw["last_failure_at"]
+	assert.True(t, hasLastFailureAt, "key 'last_failure_at' must be present from embedded health.Metrics")
+	_, hasCooldownUntil := raw["cooldown_until"]
+	assert.True(t, hasCooldownUntil, "key 'cooldown_until' must be present from embedded health.Metrics")
+}
+
+// TestRoutes_GetProviderHealth_MetricsUnavailable verifies that the HTTP response correctly
+// reflects MetricsAvailable=false and Available=false when the mock returns that fallback path.
+// This guards against regressions where the handler silently overwrites or ignores these fields.
+func TestRoutes_GetProviderHealth_MetricsUnavailable(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"openai": {
+				Provider:         "openai",
+				Message:          "no metrics",
+				MetricsAvailable: false,
+				Metrics:          health.Metrics{Available: false},
+			},
+		},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/openai/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err, "response body must be valid JSON")
+
+	assert.Equal(t, false, raw["metrics_available"], "key 'metrics_available' must be false")
+	assert.Equal(t, false, raw["available"], "key 'available' must be false")
+	assert.Equal(t, "openai", raw["provider"], "key 'provider' must be present")
+}
+
+// TestRoutes_GetProviderHealth_HealthyWithMetrics verifies the canonical healthy state where
+// MetricsAvailable=true, Available=true, FailureCount=0, and no LastFailureAt/CooldownUntil are set.
+// This guards against regressions where the handler zeroes MetricsAvailable on success responses.
+func TestRoutes_GetProviderHealth_HealthyWithMetrics(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {
+				Provider:         "anthropic",
+				Message:          "ok",
+				MetricsAvailable: true,
+				Metrics: health.Metrics{
+					Available:    true,
+					FailureCount: 0,
+				},
+			},
+		},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err, "response body must be valid JSON")
+
+	assert.Equal(t, true, raw["metrics_available"], "key 'metrics_available' must be true for healthy provider")
+	assert.Equal(t, true, raw["available"], "key 'available' must be true for healthy provider")
+	assert.Equal(t, "anthropic", raw["provider"], "key 'provider' must be present")
+
+	// Verify FailureCount is zero and always present (no omitempty on health.Metrics.FailureCount).
+	_, hasFailureCount := raw["failure_count"]
+	assert.True(t, hasFailureCount, "failure_count must always be present (no omitempty)")
+	assert.Equal(t, float64(0), raw["failure_count"], "failure_count must be 0 for healthy provider")
+
+	// omitempty on nil time pointers means these keys must be absent.
+	_, hasLastFailureAt := raw["last_failure_at"]
+	assert.False(t, hasLastFailureAt, "last_failure_at must be absent (omitempty) for healthy provider")
+	_, hasCooldownUntil := raw["cooldown_until"]
+	assert.False(t, hasCooldownUntil, "cooldown_until must be absent (omitempty) for healthy provider")
+}
+
+// nilDetailProviderService is a ProviderService stub that returns (nil, nil) from GetHealth,
+// simulating a contract-violating implementation to exercise the defensive 500 guard.
+type nilDetailProviderService struct{}
+
+func (n *nilDetailProviderService) GetHealth(_ context.Context, _ string) (*server.ProviderHealthDetail, error) {
+	return nil, nil
+}
+
+func TestRoutes_GetProviderHealth_NilDetailNilError(t *testing.T) {
+	srv := newTestServerWithProviders(t, &nilDetailProviderService{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "internal server error")
+}

@@ -30,4 +30,3 @@ var ExportBuildBlockedAuditEntry = buildBlockedAuditEntry
 
 // AuditLogEscalationThreshold re-exports security.AuditLogEscalationThreshold for test compatibility.
 const AuditLogEscalationThreshold = security.AuditLogEscalationThreshold
-

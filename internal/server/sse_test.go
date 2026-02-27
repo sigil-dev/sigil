@@ -707,10 +707,10 @@ func TestSSE_DrainRaceCondition(t *testing.T) {
 			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 			require.NoError(t, err)
 			t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
+				if err := srv.Close(); err != nil {
+					t.Logf("srv.Close() in cleanup: %v", err)
+				}
+			})
 
 			body := `{"content":"race","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -970,10 +970,10 @@ func TestSSE_DrainRaceCondition_ComprehensiveStressTest(t *testing.T) {
 			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 			require.NoError(t, err)
 			t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
+				if err := srv.Close(); err != nil {
+					t.Logf("srv.Close() in cleanup: %v", err)
+				}
+			})
 
 			body := `{"content":"race stress test","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))
@@ -1009,10 +1009,10 @@ func TestSSE_DrainRaceCondition_MultipleConsumers(t *testing.T) {
 			srv, err := server.New(server.Config{ListenAddr: "127.0.0.1:0", StreamHandler: handler})
 			require.NoError(t, err)
 			t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Logf("srv.Close() in cleanup: %v", err)
-		}
-	})
+				if err := srv.Close(); err != nil {
+					t.Logf("srv.Close() in cleanup: %v", err)
+				}
+			})
 
 			body := `{"content":"multi-consumer race","workspace_id":"test"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/stream", strings.NewReader(body))

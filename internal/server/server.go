@@ -23,23 +23,23 @@ import (
 
 // Config holds HTTP server configuration.
 type Config struct {
-	ListenAddr              string
-	CORSOrigins             []string
-	ReadTimeout             time.Duration
-	WriteTimeout            time.Duration
-	TokenValidator          TokenValidator  // nil = auth disabled (dev mode)
-	EnableHSTS              bool
-	RateLimit               RateLimitConfig // per-IP rate limiting
-	ChatRateLimitEnabled    bool
-	ChatRateLimitRPM        int
-	ChatRateLimitBurst      int
+	ListenAddr               string
+	CORSOrigins              []string
+	ReadTimeout              time.Duration
+	WriteTimeout             time.Duration
+	TokenValidator           TokenValidator // nil = auth disabled (dev mode)
+	EnableHSTS               bool
+	RateLimit                RateLimitConfig // per-IP rate limiting
+	ChatRateLimitEnabled     bool
+	ChatRateLimitRPM         int
+	ChatRateLimitBurst       int
 	ChatMaxConcurrentStreams int
-	BehindProxy             bool            // true if behind a reverse proxy (enables RealIP middleware)
-	TrustedProxies          []string        // CIDR ranges of trusted proxies (required when BehindProxy=true)
-	StreamHandler           StreamHandler   // nil = SSE routes return 503 until handler is set
-	Services                *Services       // nil = service-dependent routes fail closed
-	ConfigDeps              *ConfigDeps     // nil = config routes return 503 until deps are set
-	DevCSPConnectSrc        string          // additional connect-src origin for dev (e.g. Tauri WebSocket); empty in production
+	BehindProxy              bool          // true if behind a reverse proxy (enables RealIP middleware)
+	TrustedProxies           []string      // CIDR ranges of trusted proxies (required when BehindProxy=true)
+	StreamHandler            StreamHandler // nil = SSE routes return 503 until handler is set
+	Services                 *Services     // nil = service-dependent routes fail closed
+	ConfigDeps               *ConfigDeps   // nil = config routes return 503 until deps are set
+	DevCSPConnectSrc         string        // additional connect-src origin for dev (e.g. Tauri WebSocket); empty in production
 }
 
 // ApplyDefaults sets default values for zero-valued fields.
@@ -228,11 +228,11 @@ func (s *Server) authDisabled() bool {
 
 // ChatRateLimitValues holds the effective chat rate limit configuration values for inspection.
 type ChatRateLimitValues struct {
-	RateLimitRPS            float64
-	RateLimitBurst          int
-	ChatRateLimitEnabled    bool
-	ChatRateLimitRPM        int
-	ChatRateLimitBurst      int
+	RateLimitRPS             float64
+	RateLimitBurst           int
+	ChatRateLimitEnabled     bool
+	ChatRateLimitRPM         int
+	ChatRateLimitBurst       int
 	ChatMaxConcurrentStreams int
 }
 
@@ -240,11 +240,11 @@ type ChatRateLimitValues struct {
 // This is provided for integration testing and introspection; do not use for policy enforcement.
 func (s *Server) ChatRateLimitConfig() ChatRateLimitValues {
 	return ChatRateLimitValues{
-		RateLimitRPS:            s.cfg.RateLimit.RequestsPerSecond,
-		RateLimitBurst:          s.cfg.RateLimit.Burst,
-		ChatRateLimitEnabled:    s.cfg.ChatRateLimitEnabled,
-		ChatRateLimitRPM:        s.cfg.ChatRateLimitRPM,
-		ChatRateLimitBurst:      s.cfg.ChatRateLimitBurst,
+		RateLimitRPS:             s.cfg.RateLimit.RequestsPerSecond,
+		RateLimitBurst:           s.cfg.RateLimit.Burst,
+		ChatRateLimitEnabled:     s.cfg.ChatRateLimitEnabled,
+		ChatRateLimitRPM:         s.cfg.ChatRateLimitRPM,
+		ChatRateLimitBurst:       s.cfg.ChatRateLimitBurst,
 		ChatMaxConcurrentStreams: s.cfg.ChatMaxConcurrentStreams,
 	}
 }
