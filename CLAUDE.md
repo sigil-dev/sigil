@@ -348,6 +348,14 @@ There are TWO separate SQLite message stores with independent schemas:
 
 **MUST** update BOTH when adding/removing columns from message schema.
 
+### Summary Store Two-Phase Commit
+
+Summaries use a two-phase commit pattern: stored as `status='pending'`, promoted to `'committed'` via `SummaryStore.Confirm()` after all post-operations (embedding, vector store, message deletion) succeed. `GetByRange`/`GetLatest` filter `WHERE status = 'committed'` so incomplete compactions are invisible.
+
+### Transactional Fact Persistence
+
+`KnowledgeStore.PutFacts()` wraps all fact inserts in a single SQLite transaction for all-or-nothing semantics. The `storeFacts` method separates sanitization (first pass) from persistence (single `PutFacts` call) so no partial writes occur on validation failure.
+
 ### Shared Health Package
 
 `pkg/health` defines `health.Metrics` — the canonical health snapshot struct used by both `internal/provider` and `internal/server`. The `internal/provider` package re-exports it via type alias: `type HealthMetrics = health.Metrics`. Do NOT add health-related fields to `server.ProviderHealthDetail` directly — embed `health.Metrics` instead.
