@@ -449,7 +449,7 @@ func (a *pluginServiceAdapter) Get(_ context.Context, name string) (*server.Plug
 		if sigilerr.HasCode(err, sigilerr.CodePluginNotFound) {
 			return nil, sigilerr.Errorf(sigilerr.CodeServerEntityNotFound, "plugin %q not found", name)
 		}
-		return nil, err
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeServerInternalFailure, "getting plugin %q", name)
 	}
 	caps := inst.Capabilities()
 	if caps == nil {
@@ -490,7 +490,7 @@ type userServiceAdapter struct {
 func (a *userServiceAdapter) List(ctx context.Context) ([]server.UserSummary, error) {
 	users, err := a.store.List(ctx, store.ListOpts{Limit: 100})
 	if err != nil {
-		return nil, err
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeServerInternalFailure, "listing users")
 	}
 	out := make([]server.UserSummary, len(users))
 	for i, u := range users {
