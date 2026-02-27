@@ -537,10 +537,11 @@ func (s *Server) handleGetProviderHealth(ctx context.Context, input *providerNam
 			fmt.Sprintf("getting provider health %q", input.Name))
 	}
 	if detail == nil {
+		internalErr := sigilerr.New(sigilerr.CodeServerInternalFailure, "GetHealth contract violation: nil detail with nil error")
 		slog.Error("internal error",
 			"context", fmt.Sprintf("getting provider health %q", input.Name),
-			"error", sigilerr.New(sigilerr.CodeServerInternalFailure, "GetHealth contract violation: nil detail with nil error"))
-		return nil, huma.Error500InternalServerError("internal server error")
+			"error", internalErr)
+		return nil, notFoundOr500(internalErr, "", fmt.Sprintf("getting provider health %q", input.Name))
 	}
 	return &getProviderHealthOutput{Body: *detail}, nil
 }
