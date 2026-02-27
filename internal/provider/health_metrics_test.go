@@ -173,9 +173,9 @@ func TestHealthTracker_HealthMetrics_ConcurrentAccess(t *testing.T) {
 	// FailureCount cannot exceed total RecordFailure calls.
 	assert.LessOrEqual(t, m.FailureCount, int64(goroutines*iterations),
 		"FailureCount should not exceed total RecordFailure calls")
-	// FailureCount should be non-negative (sanity).
-	assert.GreaterOrEqual(t, m.FailureCount, int64(0),
-		"FailureCount should be non-negative")
+	// FailureCount must be > 0 after 1000 RecordFailure calls.
+	assert.Greater(t, m.FailureCount, int64(0),
+		"FailureCount should be positive after concurrent RecordFailure calls")
 }
 
 func TestHealthTracker_HealthMetrics_ConcurrentSetNowFunc(t *testing.T) {
