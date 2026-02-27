@@ -152,10 +152,20 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing compaction summary for workspace %s", workspaceID)
 	}
 
-	// Clean up the pending summary if any subsequent step fails.
+	// Clean up the pending summary and any stored embedding if any subsequent step fails.
 	confirmed := false
+	embeddingStored := false
 	defer func() {
 		if !confirmed {
+			if embeddingStored {
+				if vecErr := c.cfg.VectorStore.Delete(ctx, []string{summary.ID}); vecErr != nil {
+					slog.WarnContext(ctx, "compaction: failed to clean up summary vector embedding",
+						"workspace_id", workspaceID,
+						"summary_id", summary.ID,
+						"error", vecErr,
+					)
+				}
+			}
 			if delErr := c.cfg.MemoryStore.Summaries().Delete(ctx, workspaceID, summary.ID); delErr != nil {
 				slog.WarnContext(ctx, "compaction: failed to clean up pending summary",
 					"workspace_id", workspaceID,
@@ -190,6 +200,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	}); err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing summary embedding for workspace %s", workspaceID)
 	}
+	embeddingStored = true
 
 	// Clean up per-message placeholder vectors from RollMessage.
 	if err := c.cfg.VectorStore.Delete(ctx, batchIDs); err != nil {

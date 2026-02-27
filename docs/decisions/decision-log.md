@@ -1467,7 +1467,7 @@ Two additional `MessageStore` methods were added alongside `DeleteByIDs`. `GetOl
 1. Extend D085 to cover all interface additions — Groups all store changes together but makes D085 too broad.
 2. Separate decision record — Clear documentation per interface boundary.
 
-**Decision:** Option 2. `SummaryStore.Confirm(ctx, workspaceID, summaryID)` promotes a pending summary to committed status as the final step of the two-phase compaction commit. `KnowledgeStore.PutFacts(ctx, workspaceID, facts)` wraps all fact inserts in a single SQLite transaction for all-or-nothing batch semantics. Both follow the project's existing interface extension pattern.
+**Decision:** Option 2. `SummaryStore.Confirm(ctx, workspaceID, summaryID)` promotes a pending summary to committed status as the final step of the two-phase compaction commit. `KnowledgeStore.PutFacts(ctx, workspaceID, facts)` wraps all fact inserts in a single SQLite transaction for all-or-nothing batch semantics. Both follow the project's existing interface extension pattern. `SummaryStore.Delete(ctx, workspaceID, summaryID)` was also added as the rollback path in the two-phase compaction commit: when compaction fails after `Store()` but before `Confirm()`, the deferred `Delete` call removes the orphaned pending summary to prevent stale data accumulation.
 
 **Rationale:** Each method serves a distinct correctness guarantee — Confirm prevents partial compactions from leaking, PutFacts prevents partial fact batches. Documenting separately from D085 keeps each decision focused.
 

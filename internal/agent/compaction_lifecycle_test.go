@@ -1083,6 +1083,18 @@ func TestCompaction_storeFacts_Sanitization(t *testing.T) {
 				assert.Equal(t, 0.0, facts[0].Confidence)
 			},
 		},
+		{
+			name: "Confidence -Inf stored as 0.0",
+			inputFacts: []*store.Fact{
+				{EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: math.Inf(-1)},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				assert.Equal(t, 0.0, facts[0].Confidence)
+			},
+		},
 	}
 
 	for _, tt := range tests {
