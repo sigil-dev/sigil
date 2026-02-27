@@ -5,11 +5,14 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/sigil-dev/sigil/internal/store"
 	"github.com/sigil-dev/sigil/internal/store/sqlite"
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -130,7 +133,7 @@ func TestSummaryStore_Confirm_PromotesPendingToCommitted(t *testing.T) {
 		ToTime:      base.Add(1 * time.Hour),
 		Content:     "Pending compaction",
 		CreatedAt:   base.Add(1 * time.Hour),
-		Status:      "pending",
+		Status:      store.SummaryStatusPending,
 	}
 	err = ss.Store(ctx, "ws-1", pending)
 	require.NoError(t, err)
@@ -149,7 +152,7 @@ func TestSummaryStore_Confirm_PromotesPendingToCommitted(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "sum-pending", results[0].ID)
-	assert.Equal(t, "committed", results[0].Status)
+	assert.Equal(t, store.SummaryStatusCommitted, results[0].Status)
 }
 
 func TestSummaryStore_Confirm_NotFound_ReturnsError(t *testing.T) {
@@ -161,6 +164,38 @@ func TestSummaryStore_Confirm_NotFound_ReturnsError(t *testing.T) {
 
 	err = ss.Confirm(ctx, "ws-1", "nonexistent-id")
 	assert.Error(t, err, "Confirm with non-existent summaryID should return error")
+}
+
+func TestSummaryStore_Confirm_WrongWorkspace_ReturnsNotFound(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "summaries-confirm-wrongws")
+	ss, err := sqlite.NewSummaryStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ss.Close() }()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	pending := &store.Summary{
+		ID:          "sum-pending",
+		WorkspaceID: "ws-1",
+		FromTime:    base,
+		ToTime:      base.Add(1 * time.Hour),
+		Content:     "Pending compaction",
+		CreatedAt:   base.Add(1 * time.Hour),
+		Status:      store.SummaryStatusPending,
+	}
+	err = ss.Store(ctx, "ws-1", pending)
+	require.NoError(t, err)
+
+	// Confirm using a different workspace — should return not-found error.
+	err = ss.Confirm(ctx, "ws-2", "sum-pending")
+	require.Error(t, err, "Confirm with wrong workspace should return error")
+	assert.True(t, sigilerr.IsNotFound(err), "expected CodeStoreEntityNotFound, got: %v", err)
+
+	// Summary in ws-1 should still be pending (not visible to committed queries).
+	results, err := ss.GetLatest(ctx, "ws-1", 10)
+	require.NoError(t, err)
+	assert.Empty(t, results, "summary in ws-1 should still be pending after failed Confirm")
 }
 
 func TestSummaryStore_GetByRange_ExcludesPendingSummaries(t *testing.T) {
@@ -187,7 +222,7 @@ func TestSummaryStore_GetByRange_ExcludesPendingSummaries(t *testing.T) {
 		ToTime:      base.Add(2 * time.Hour),
 		Content:     "Pending summary",
 		CreatedAt:   base.Add(2 * time.Hour),
-		Status:      "pending",
+		Status:      store.SummaryStatusPending,
 	}
 
 	err = ss.Store(ctx, "ws-1", committed)
@@ -225,7 +260,7 @@ func TestSummaryStore_GetLatest_ExcludesPendingSummaries(t *testing.T) {
 		ToTime:      base.Add(2 * time.Hour),
 		Content:     "Pending summary",
 		CreatedAt:   base.Add(2 * time.Hour),
-		Status:      "pending",
+		Status:      store.SummaryStatusPending,
 	}
 
 	err = ss.Store(ctx, "ws-1", committed)
@@ -351,7 +386,7 @@ func TestSummaryStore_Delete_PendingSummary(t *testing.T) {
 		ToTime:      base.Add(1 * time.Hour),
 		Content:     "Orphaned pending compaction",
 		CreatedAt:   base.Add(1 * time.Hour),
-		Status:      "pending",
+		Status:      store.SummaryStatusPending,
 	}
 	err = ss.Store(ctx, "ws-1", pending)
 	require.NoError(t, err)
@@ -363,4 +398,100 @@ func TestSummaryStore_Delete_PendingSummary(t *testing.T) {
 	// cause errors and the record is truly gone (Confirm should now fail).
 	err = ss.Confirm(ctx, "ws-1", "sum-pending")
 	assert.Error(t, err, "Confirm should fail after Delete removes the pending summary")
+}
+
+// TestSummaryStore_Migration_AddsStatusColumn verifies that migrateSummaries adds the
+// status column to a pre-existing summaries table that was created without it,
+// and that existing rows receive the default 'committed' value.
+func TestSummaryStore_Migration_AddsStatusColumn(t *testing.T) {
+	ctx := context.Background()
+	dbPath := testDBPath(t, "summaries-migrate-status")
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Bootstrap a database with the old schema — summaries table without the status column.
+	{
+		db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+		require.NoError(t, err)
+
+		_, err = db.Exec(`
+CREATE TABLE IF NOT EXISTS summaries (
+	id           TEXT PRIMARY KEY,
+	workspace_id TEXT NOT NULL,
+	from_time    TEXT NOT NULL,
+	to_time      TEXT NOT NULL,
+	content      TEXT NOT NULL DEFAULT '',
+	message_ids  TEXT NOT NULL DEFAULT '[]',
+	created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_summaries_workspace ON summaries(workspace_id);
+`)
+		require.NoError(t, err, "setting up old schema without status column")
+
+		// Verify status column is absent in the baseline schema.
+		rows, err := db.Query("PRAGMA table_info(summaries)")
+		require.NoError(t, err)
+		found := false
+		for rows.Next() {
+			var cid int
+			var name, colType string
+			var notNull int
+			var dfltValue sql.NullString
+			var pk int
+			require.NoError(t, rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk))
+			if name == "status" {
+				found = true
+			}
+		}
+		require.NoError(t, rows.Err())
+		_ = rows.Close()
+		require.False(t, found, "status column should not exist in the old schema")
+
+		// Insert a row using the old schema (no status column).
+		_, err = db.Exec(`INSERT INTO summaries (id, workspace_id, from_time, to_time, content, message_ids, created_at)
+VALUES ('pre-migration-sum', 'ws-1', ?, ?, 'Pre-migration content', '[]', ?)`,
+			base.Format(time.RFC3339), base.Add(1*time.Hour).Format(time.RFC3339), base.Add(1*time.Hour).Format(time.RFC3339),
+		)
+		require.NoError(t, err, "inserting row into old-schema table")
+
+		_ = db.Close()
+	}
+
+	// Open via NewSummaryStore — this runs migrateSummaries which must add the status column.
+	ss, err := sqlite.NewSummaryStore(dbPath)
+	require.NoError(t, err, "NewSummaryStore should succeed and run migration")
+	defer func() { _ = ss.Close() }()
+
+	// Verify the pre-migration row received the DEFAULT 'committed' value.
+	results, err := ss.GetLatest(ctx, "ws-1", 10)
+	require.NoError(t, err)
+	require.Len(t, results, 1, "pre-migration row should be visible as committed")
+	assert.Equal(t, "pre-migration-sum", results[0].ID)
+	assert.Equal(t, store.SummaryStatusCommitted, results[0].Status, "existing row should default to committed after migration")
+
+	// Verify new pending summaries can be stored and confirmed.
+	pending := &store.Summary{
+		ID:          "post-migration-pending",
+		WorkspaceID: "ws-1",
+		FromTime:    base.Add(1 * time.Hour),
+		ToTime:      base.Add(2 * time.Hour),
+		Content:     "Post-migration pending",
+		CreatedAt:   base.Add(2 * time.Hour),
+		Status:      store.SummaryStatusPending,
+	}
+	err = ss.Store(ctx, "ws-1", pending)
+	require.NoError(t, err, "should be able to store pending summary after migration")
+
+	// Pending summary should not appear in queries before Confirm.
+	results, err = ss.GetLatest(ctx, "ws-1", 10)
+	require.NoError(t, err)
+	require.Len(t, results, 1, "only committed summaries should be visible before Confirm")
+
+	err = ss.Confirm(ctx, "ws-1", "post-migration-pending")
+	require.NoError(t, err, "Confirm should succeed after migration")
+
+	// After Confirm both summaries should be visible.
+	results, err = ss.GetLatest(ctx, "ws-1", 10)
+	require.NoError(t, err)
+	assert.Len(t, results, 2, "both summaries should be visible after Confirm")
 }

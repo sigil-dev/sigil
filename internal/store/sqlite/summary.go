@@ -101,7 +101,7 @@ func (s *SummaryStore) Close() error {
 
 // Store inserts a summary into the store for the given workspace.
 // The summary's Status field is persisted as-is; callers should set it
-// to "pending" for two-phase compaction or "committed" for immediate use.
+// to SummaryStatusPending for two-phase compaction or SummaryStatusCommitted for immediate use.
 func (s *SummaryStore) Store(ctx context.Context, workspaceID string, summary *store.Summary) error {
 	msgIDs, err := json.Marshal(summary.MessageIDs)
 	if err != nil {
@@ -110,7 +110,7 @@ func (s *SummaryStore) Store(ctx context.Context, workspaceID string, summary *s
 
 	status := summary.Status
 	if status == "" {
-		status = "committed"
+		status = store.SummaryStatusCommitted
 	}
 
 	const q = `INSERT INTO summaries (id, workspace_id, from_time, to_time, content, message_ids, created_at, status)
@@ -134,7 +134,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 // Confirm promotes a pending summary to committed status.
 func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryID string) error {
-	const q = `UPDATE summaries SET status = 'committed' WHERE id = ? AND workspace_id = ?`
+	const q = `UPDATE summaries SET status = 'committed' WHERE id = ? AND workspace_id = ? AND status = 'pending'`
 	res, err := s.db.ExecContext(ctx, q, summaryID, workspaceID)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: %w", summaryID, err)
@@ -151,6 +151,9 @@ func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryI
 
 // Delete removes a summary by ID within the workspace. Used to clean up
 // orphaned pending summaries when compaction fails after Store.
+// Not-found is intentionally treated as success for idempotent cleanup:
+// if the summary was already removed (concurrent cleanup, crash recovery),
+// the operation succeeds silently rather than returning an error.
 func (s *SummaryStore) Delete(ctx context.Context, workspaceID string, summaryID string) error {
 	const q = `DELETE FROM summaries WHERE id = ? AND workspace_id = ?`
 	_, err := s.db.ExecContext(ctx, q, summaryID, workspaceID)

@@ -135,10 +135,10 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 		assert.Equal(t, "summary", v.metadata["kind"])
 	}
 
-	// Verify two-phase commit: summary stored as pending, then confirmed.
+	// Verify two-phase commit: summary stored as pending, then confirmed to committed.
 	require.Len(t, mem.summaries.summaries, 1)
-	assert.Equal(t, "pending", mem.summaries.summaries[0].Status,
-		"Compact() must store summary as pending before Confirm")
+	assert.Equal(t, store.SummaryStatusCommitted, mem.summaries.summaries[0].Status,
+		"Compact() must promote summary to committed after Confirm")
 	assert.True(t, mem.summaries.confirmCalled, "Confirm must be called after successful compaction")
 }
 
@@ -478,7 +478,11 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
-	assert.Nil(t, result)
+	// DeleteByIDs failed after Confirm — partial commit with recovery data.
+	require.NotNil(t, result)
+	assert.True(t, result.PartialCommit)
+	assert.NotEmpty(t, result.SummaryID)
+	assert.Len(t, result.MessageIDs, 5)
 	// Summary is committed (Confirm succeeded before DeleteByIDs was reached).
 	assert.Len(t, mem.summaries.summaries, 1)
 	assert.Len(t, vec.vectors, 1)
@@ -513,11 +517,15 @@ func TestCompaction_Compact_ConfirmFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 
-	// Summary was stored (as pending) before Confirm was called.
+	// Summary was stored (as pending) before Confirm was called, but the
+	// pending record remains (SummaryStore.Delete tracks the ID, not removal from slice).
 	assert.Len(t, mem.summaries.summaries, 1, "summary should be stored before Confirm is called")
 
-	// Vector embedding was stored before Confirm was called.
-	assert.Len(t, vec.vectors, 1, "summary embedding should be stored before Confirm is called")
+	// Defer cleanup called SummaryStore.Delete to remove the orphaned pending summary.
+	assert.Len(t, mem.summaries.deletedIDs, 1, "defer should delete orphaned pending summary")
+
+	// Defer cleanup called VectorStore.Delete — embedding removed from store.
+	assert.Len(t, vec.vectors, 0, "defer should remove orphaned vector embedding")
 
 	// Messages were NOT deleted — Confirm failed before DeleteByIDs was reached.
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
@@ -782,6 +790,9 @@ func (s *lifecycleSummaryStore) Store(_ context.Context, _ string, summary *stor
 func (s *lifecycleSummaryStore) GetByRange(_ context.Context, _ string, from, to time.Time) ([]*store.Summary, error) {
 	var out []*store.Summary
 	for _, summary := range s.summaries {
+		if summary.Status != store.SummaryStatusCommitted {
+			continue
+		}
 		if !summary.FromTime.Before(from) && !summary.ToTime.After(to) {
 			out = append(out, summary)
 		}
@@ -794,7 +805,17 @@ func (s *lifecycleSummaryStore) GetLatest(_ context.Context, _ string, n int) ([
 		return nil, nil
 	}
 
-	sorted := append([]*store.Summary(nil), s.summaries...)
+	var committed []*store.Summary
+	for _, summary := range s.summaries {
+		if summary.Status == store.SummaryStatusCommitted {
+			committed = append(committed, summary)
+		}
+	}
+	if len(committed) == 0 {
+		return nil, nil
+	}
+
+	sorted := append([]*store.Summary(nil), committed...)
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].CreatedAt.After(sorted[j].CreatedAt)
 	})
@@ -804,9 +825,18 @@ func (s *lifecycleSummaryStore) GetLatest(_ context.Context, _ string, n int) ([
 	return sorted[:n], nil
 }
 
-func (s *lifecycleSummaryStore) Confirm(_ context.Context, _ string, _ string) error {
+func (s *lifecycleSummaryStore) Confirm(_ context.Context, _ string, summaryID string) error {
 	s.confirmCalled = true
-	return s.confirmErr
+	if s.confirmErr != nil {
+		return s.confirmErr
+	}
+	for _, summary := range s.summaries {
+		if summary.ID == summaryID {
+			summary.Status = store.SummaryStatusCommitted
+			break
+		}
+	}
+	return nil
 }
 
 func (s *lifecycleSummaryStore) Delete(_ context.Context, _ string, id string) error {

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -53,14 +54,77 @@ type CompactorConfig struct {
 // long-term storage and (in Phase 6) summarising and extracting facts.
 type Compactor struct {
 	cfg CompactorConfig
+
+	// mu guards pendingOrphans for concurrent access.
+	mu sync.Mutex
+	// pendingOrphans tracks vector embedding IDs that failed cleanup in a
+	// previous Compact defer block. Retried at the start of the next Compact call.
+	// In-process only (not durable across restarts).
+	pendingOrphans []string
+}
+
+// PendingOrphanCount returns the number of orphaned vector IDs awaiting cleanup.
+func (c *Compactor) PendingOrphanCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.pendingOrphans)
+}
+
+// drainOrphans attempts to delete any previously orphaned vector embeddings.
+// Successful deletes are removed; failures are re-queued for the next pass.
+func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
+	c.mu.Lock()
+	orphans := c.pendingOrphans
+	c.pendingOrphans = nil
+	c.mu.Unlock()
+
+	if len(orphans) == 0 {
+		return
+	}
+
+	var remaining []string
+	for _, id := range orphans {
+		if err := c.cfg.VectorStore.Delete(ctx, []string{id}); err != nil {
+			slog.ErrorContext(ctx, "compaction: orphan vector cleanup retry failed",
+				"workspace_id", workspaceID,
+				"embedding_id", id,
+				"error", err,
+			)
+			remaining = append(remaining, id)
+		} else {
+			slog.InfoContext(ctx, "compaction: cleaned up orphaned vector embedding",
+				"workspace_id", workspaceID,
+				"embedding_id", id,
+			)
+		}
+	}
+
+	if len(remaining) > 0 {
+		c.mu.Lock()
+		c.pendingOrphans = append(c.pendingOrphans, remaining...)
+		c.mu.Unlock()
+	}
 }
 
 // CompactionResult reports the work completed by one Compact pass.
+// When PartialCommit is true, the summary was committed but the source
+// messages were not deleted — callers can retry DeleteByIDs using
+// the SummaryID and MessageIDs fields.
 type CompactionResult struct {
 	SummariesCreated  int
 	FactsExtracted    int
 	MessagesProcessed int
 	MessagesTrimmed   int
+
+	// PartialCommit indicates the summary was committed but source
+	// messages were not deleted. The caller should retry the deletion
+	// or schedule reconciliation.
+	PartialCommit bool
+	// SummaryID is the committed summary's ID (set when PartialCommit is true).
+	SummaryID string
+	// MessageIDs lists the source message IDs that should have been deleted
+	// (set when PartialCommit is true).
+	MessageIDs []string
 }
 
 // NewCompactor creates a Compactor with the given configuration.
@@ -110,6 +174,9 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "workspaceID must not be empty")
 	}
 
+	// Best-effort cleanup of any orphaned vector embeddings from prior failures.
+	c.drainOrphans(ctx, workspaceID)
+
 	count, err := c.cfg.MemoryStore.Messages().Count(ctx, workspaceID)
 	if err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "counting messages for workspace %s", workspaceID)
@@ -146,7 +213,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		Content:     summaryText,
 		MessageIDs:  batchIDs,
 		CreatedAt:   now,
-		Status:      "pending",
+		Status:      store.SummaryStatusPending,
 	}
 	if err := c.cfg.MemoryStore.Summaries().Store(ctx, workspaceID, summary); err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing compaction summary for workspace %s", workspaceID)
@@ -161,15 +228,18 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 			defer cancel()
 			if embeddingStored {
 				if vecErr := c.cfg.VectorStore.Delete(cleanupCtx, []string{summary.ID}); vecErr != nil {
-					slog.WarnContext(cleanupCtx, "compaction: failed to clean up summary vector embedding",
+					slog.ErrorContext(cleanupCtx, "compaction: failed to clean up summary vector embedding, queuing for retry",
 						"workspace_id", workspaceID,
-						"summary_id", summary.ID,
+						"embedding_id", summary.ID,
 						"error", vecErr,
 					)
+					c.mu.Lock()
+					c.pendingOrphans = append(c.pendingOrphans, summary.ID)
+					c.mu.Unlock()
 				}
 			}
 			if delErr := c.cfg.MemoryStore.Summaries().Delete(cleanupCtx, workspaceID, summary.ID); delErr != nil {
-				slog.WarnContext(cleanupCtx, "compaction: failed to clean up pending summary",
+				slog.ErrorContext(cleanupCtx, "compaction: failed to clean up pending summary",
 					"workspace_id", workspaceID,
 					"summary_id", summary.ID,
 					"error", delErr,
@@ -220,7 +290,12 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 
 	trimmed, err := c.cfg.MemoryStore.Messages().DeleteByIDs(ctx, workspaceID, batchIDs)
 	if err != nil {
-		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "deleting compacted messages for workspace %s", workspaceID)
+		// Summary is committed but messages were not deleted — partial commit.
+		// Return the result with PartialCommit=true so callers can retry.
+		result.PartialCommit = true
+		result.SummaryID = summary.ID
+		result.MessageIDs = batchIDs
+		return result, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "deleting compacted messages for workspace %s (summary %s committed, messages retained)", workspaceID, summary.ID)
 	}
 	result.MessagesTrimmed = int(trimmed)
 
@@ -266,13 +341,8 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 		if fact == nil {
 			continue
 		}
-		// Always override identity and scoping — do not trust provider-returned values.
-		fact.ID = fmt.Sprintf("%s-fact-%d", summaryID, i)
-		fact.WorkspaceID = workspaceID
-		fact.CreatedAt = now
-		fact.Source = "compaction"
 
-		// Validate and truncate untrusted text fields.
+		// Validate untrusted text fields before building the sanitized fact.
 		if fact.EntityID == "" {
 			slog.WarnContext(ctx, "compaction: skipping fact with empty entity ID",
 				"workspace_id", workspaceID,
@@ -281,18 +351,27 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 			)
 			continue
 		}
-		fact.EntityID = truncateField(fact.EntityID, maxFactFieldLen)
-		fact.Predicate = truncateField(fact.Predicate, maxFactFieldLen)
-		fact.Value = truncateField(fact.Value, maxFactFieldLen)
 
 		// Clamp confidence to valid range.
-		if math.IsNaN(fact.Confidence) || math.IsInf(fact.Confidence, 0) || fact.Confidence < 0 {
-			fact.Confidence = 0
-		} else if fact.Confidence > 1 {
-			fact.Confidence = 1
+		clampedConfidence := fact.Confidence
+		if math.IsNaN(clampedConfidence) || math.IsInf(clampedConfidence, 0) || clampedConfidence < 0 {
+			clampedConfidence = 0
+		} else if clampedConfidence > 1 {
+			clampedConfidence = 1
 		}
 
-		sanitized = append(sanitized, fact)
+		// Build a new struct with sanitized values — do not mutate FactExtractor-owned objects.
+		// Always override identity and scoping — do not trust provider-returned values.
+		sanitized = append(sanitized, &store.Fact{
+			ID:          fmt.Sprintf("%s-fact-%d", summaryID, i),
+			WorkspaceID: workspaceID,
+			CreatedAt:   now,
+			Source:      "compaction",
+			EntityID:    truncateField(fact.EntityID, maxFactFieldLen),
+			Predicate:   truncateField(fact.Predicate, maxFactFieldLen),
+			Value:       truncateField(fact.Value, maxFactFieldLen),
+			Confidence:  clampedConfidence,
+		})
 	}
 
 	// Second pass: persist all sanitized facts atomically.

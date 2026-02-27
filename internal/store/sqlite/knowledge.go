@@ -472,6 +472,9 @@ ON CONFLICT(workspace, subject, predicate, object) DO UPDATE SET
 // PutFacts inserts multiple facts atomically using a database transaction.
 // If any insert fails, all prior inserts in the batch are rolled back.
 func (k *KnowledgeStore) PutFacts(ctx context.Context, workspaceID string, facts []*store.Fact) error {
+	if len(facts) == 0 {
+		return nil
+	}
 	tx, err := k.db.BeginTx(ctx, nil)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning fact transaction: %w", err)

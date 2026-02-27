@@ -167,8 +167,16 @@ type Summary struct {
 	Content     string
 	MessageIDs  []string
 	CreatedAt   time.Time
-	Status      string // "pending" or "committed"
+	Status SummaryStatus
 }
+
+// SummaryStatus represents the two-phase commit state of a compaction summary.
+type SummaryStatus string
+
+const (
+	SummaryStatusPending   SummaryStatus = "pending"
+	SummaryStatusCommitted SummaryStatus = "committed"
+)
 
 // Entity represents a named entity extracted from conversations.
 type Entity struct {

@@ -129,6 +129,51 @@ func TestKnowledgeStore_Traverse(t *testing.T) {
 	assert.Len(t, graph.Relationships, 2)
 }
 
+// TestKnowledgeStore_PutFact_UpsertBehavior verifies that inserting a fact with the same
+// (workspaceID, entityID, predicate, value) triple updates the existing row rather than
+// creating a duplicate — exercising the ON CONFLICT upsert in the triples table.
+func TestKnowledgeStore_PutFact_UpsertBehavior(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "knowledge-upsert")
+	ks, err := sqlite.NewKnowledgeStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ks.Close() }()
+
+	err = ks.PutEntity(ctx, "ws-1", &store.Entity{
+		ID: "alice", WorkspaceID: "ws-1", Type: "person", Name: "Alice", CreatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+
+	// Insert fact F1 with confidence 0.9.
+	err = ks.PutFact(ctx, "ws-1", &store.Fact{
+		ID:          "fact-upsert-1",
+		WorkspaceID: "ws-1",
+		EntityID:    "alice",
+		Predicate:   "occupation",
+		Value:       "engineer",
+		Confidence:  0.9,
+		CreatedAt:   time.Now(),
+	})
+	require.NoError(t, err)
+
+	// Insert F2 — same triple, updated confidence 1.0.
+	err = ks.PutFact(ctx, "ws-1", &store.Fact{
+		ID:          "fact-upsert-2",
+		WorkspaceID: "ws-1",
+		EntityID:    "alice",
+		Predicate:   "occupation",
+		Value:       "engineer",
+		Confidence:  1.0,
+		CreatedAt:   time.Now(),
+	})
+	require.NoError(t, err)
+
+	facts, err := ks.FindFacts(ctx, "ws-1", store.FactQuery{EntityID: "alice"})
+	require.NoError(t, err)
+	assert.Len(t, facts, 1, "upsert should produce exactly one fact, not two")
+	assert.Equal(t, 1.0, facts[0].Confidence, "confidence should reflect the updated value")
+}
+
 // TestKnowledgeStore_PutFacts_BatchInsert verifies that PutFacts stores all facts
 // from a batch correctly and they are all retrievable afterwards.
 func TestKnowledgeStore_PutFacts_BatchInsert(t *testing.T) {

@@ -146,6 +146,10 @@ type LoopConfig struct {
 	// MaxToolContentScanSize is the truncation target for oversized tool results
 	// before re-scanning. When <= 0, defaults to 512KB.
 	MaxToolContentScanSize int
+	// Compactor is an optional memory compactor. When non-nil, the loop triggers
+	// best-effort compaction after persisting assistant responses (design doc 08,
+	// RESPOND step: "trigger compaction if needed").
+	Compactor *Compactor
 }
 
 // Validate checks that all required fields in LoopConfig are set.
@@ -197,6 +201,8 @@ type Loop struct {
 	// audit-write failures across the lifetime of this Loop. Unlike auditSecurityFailCount,
 	// it is not reset on success, so intermittent failure patterns remain visible to operators.
 	auditSecurityFailTotal atomic.Int64
+	// compactor is an optional memory compactor wired into the RESPOND step.
+	compactor *Compactor
 }
 
 // NewLoop creates a Loop with the given dependencies.
@@ -235,6 +241,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		hooks:                  orDefaultHooks(cfg.Hooks),
 		scanner:                cfg.Scanner,
 		scannerModes:           cfg.ScannerModes,
+		compactor:              cfg.Compactor,
 	}, nil
 }
 
@@ -332,6 +339,18 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "respond: session %s", msg.SessionID)
 	}
 	l.fireHook(l.hooks.OnRespond)
+
+	// Best-effort compaction: trigger if message count exceeds batch threshold.
+	// Compaction failures are logged but do not fail the response.
+	if l.compactor != nil {
+		if _, compactErr := l.compactor.Compact(ctx, msg.WorkspaceID); compactErr != nil {
+			slog.WarnContext(ctx, "compaction trigger failed (best-effort)",
+				"workspace_id", msg.WorkspaceID,
+				"session_id", msg.SessionID,
+				"error", compactErr,
+			)
+		}
+	}
 
 	// Step 7: AUDIT — log the interaction, including threat metadata if detected.
 	l.audit(ctx, msg, out, outputThreat)

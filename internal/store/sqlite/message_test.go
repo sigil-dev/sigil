@@ -574,6 +574,30 @@ func TestMessageStore_GetOldest(t *testing.T) {
 			wantLen:   0,
 		},
 		{
+			// n=0 passes LIMIT 0 to SQLite, which returns zero rows. This differs
+			// from the mock in compaction_lifecycle_test.go (which returns all
+			// messages when n<=0), but production callers are guarded by
+			// NewCompactor validating BatchSize > 0. Document and test the SQLite
+			// contract explicitly so future callers know n=0 means empty, not
+			// unlimited.
+			name: "zero_n_returns_empty",
+			setup: func(ms *sqlite.MessageStore) {
+				for i := 0; i < 3; i++ {
+					err := ms.Append(ctx, "ws-zero-n", &store.Message{
+						ID:        fmt.Sprintf("zero-msg-%d", i),
+						SessionID: "sess-1",
+						Role:      store.MessageRoleUser,
+						Content:   fmt.Sprintf("Message %d", i),
+						CreatedAt: base.Add(time.Duration(i) * time.Hour),
+					})
+					require.NoError(t, err)
+				}
+			},
+			workspace: "ws-zero-n",
+			n:         0,
+			wantLen:   0,
+		},
+		{
 			name: "workspace_isolation",
 			setup: func(ms *sqlite.MessageStore) {
 				for i := 0; i < 3; i++ {
