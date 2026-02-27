@@ -157,17 +157,19 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	embeddingStored := false
 	defer func() {
 		if !confirmed {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 			if embeddingStored {
-				if vecErr := c.cfg.VectorStore.Delete(ctx, []string{summary.ID}); vecErr != nil {
-					slog.WarnContext(ctx, "compaction: failed to clean up summary vector embedding",
+				if vecErr := c.cfg.VectorStore.Delete(cleanupCtx, []string{summary.ID}); vecErr != nil {
+					slog.WarnContext(cleanupCtx, "compaction: failed to clean up summary vector embedding",
 						"workspace_id", workspaceID,
 						"summary_id", summary.ID,
 						"error", vecErr,
 					)
 				}
 			}
-			if delErr := c.cfg.MemoryStore.Summaries().Delete(ctx, workspaceID, summary.ID); delErr != nil {
-				slog.WarnContext(ctx, "compaction: failed to clean up pending summary",
+			if delErr := c.cfg.MemoryStore.Summaries().Delete(cleanupCtx, workspaceID, summary.ID); delErr != nil {
+				slog.WarnContext(cleanupCtx, "compaction: failed to clean up pending summary",
 					"workspace_id", workspaceID,
 					"summary_id", summary.ID,
 					"error", delErr,
