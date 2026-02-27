@@ -328,6 +328,37 @@ func TestRoutes_GetProviderHealth_JSONKeyNames(t *testing.T) {
 	assert.True(t, hasCooldownUntil, "key 'cooldown_until' must be present from embedded health.Metrics")
 }
 
+// TestRoutes_GetProviderHealth_MetricsUnavailable verifies that the HTTP response correctly
+// reflects MetricsAvailable=false and Available=false when the mock returns that fallback path.
+// This guards against regressions where the handler silently overwrites or ignores these fields.
+func TestRoutes_GetProviderHealth_MetricsUnavailable(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"openai": {
+				Provider:         "openai",
+				Message:          "no metrics",
+				MetricsAvailable: false,
+				Metrics:          health.Metrics{Available: false},
+			},
+		},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/openai/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err, "response body must be valid JSON")
+
+	assert.Equal(t, false, raw["metrics_available"], "key 'metrics_available' must be false")
+	assert.Equal(t, false, raw["available"], "key 'available' must be false")
+	assert.Equal(t, "openai", raw["provider"], "key 'provider' must be present")
+}
+
 // nilDetailProviderService is a ProviderService stub that returns (nil, nil) from GetHealth,
 // simulating a contract-violating implementation to exercise the defensive 500 guard.
 type nilDetailProviderService struct{}
