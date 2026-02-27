@@ -7,7 +7,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -77,10 +76,16 @@ CREATE INDEX IF NOT EXISTS idx_summaries_workspace_created ON summaries(workspac
 		return err
 	}
 
-	// Add status column to existing tables. Ignore "duplicate column" for idempotency.
-	_, err := db.Exec("ALTER TABLE summaries ADD COLUMN status TEXT NOT NULL DEFAULT 'committed'")
-	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
-		return err
+	// Add status column to existing tables that predate this schema version.
+	// Use PRAGMA table_info to check column existence before ALTER TABLE.
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('summaries') WHERE name='status'").Scan(&count); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking summaries schema: %w", err)
+	}
+	if count == 0 {
+		if _, err := db.Exec("ALTER TABLE summaries ADD COLUMN status TEXT NOT NULL DEFAULT 'committed'"); err != nil {
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "adding status column to summaries: %w", err)
+		}
 	}
 	return nil
 }
@@ -139,7 +144,18 @@ func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryI
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: rows affected: %w", summaryID, err)
 	}
 	if n == 0 {
-		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: not found in workspace %s", summaryID, workspaceID)
+		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "confirming summary %s: not found in workspace %s", summaryID, workspaceID)
+	}
+	return nil
+}
+
+// Delete removes a summary by ID within the workspace. Used to clean up
+// orphaned pending summaries when compaction fails after Store.
+func (s *SummaryStore) Delete(ctx context.Context, workspaceID string, summaryID string) error {
+	const q = `DELETE FROM summaries WHERE id = ? AND workspace_id = ?`
+	_, err := s.db.ExecContext(ctx, q, summaryID, workspaceID)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting summary %s: %w", summaryID, err)
 	}
 	return nil
 }

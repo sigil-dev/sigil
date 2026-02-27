@@ -6,6 +6,7 @@ package agent_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/agent"
@@ -30,6 +31,67 @@ func TestCompaction_ShouldTrigger(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := agent.ShouldCompact(tt.count, tt.batchSize)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestTruncateField(t *testing.T) {
+	maxLen := agent.MaxFactFieldLen // 4096
+
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{
+			name:   "empty string",
+			input:  "",
+			maxLen: maxLen,
+			want:   "",
+		},
+		{
+			name:   "shorter than maxLen",
+			input:  "hello",
+			maxLen: maxLen,
+			want:   "hello",
+		},
+		{
+			name:   "exactly maxLen ASCII",
+			input:  strings.Repeat("a", maxLen),
+			maxLen: maxLen,
+			want:   strings.Repeat("a", maxLen),
+		},
+		{
+			name:   "ASCII exceeding maxLen",
+			input:  strings.Repeat("x", maxLen+100),
+			maxLen: maxLen,
+			want:   strings.Repeat("x", maxLen),
+		},
+		{
+			name: "multi-byte rune at boundary not split",
+			// 4095 ASCII chars + one 3-byte UTF-8 rune (€ = U+20AC, 3 bytes).
+			// The rune starts at byte 4095 and would end at byte 4097, exceeding
+			// maxLen=4096. truncateField must not split it; result is 4095 chars.
+			input:  strings.Repeat("a", maxLen-1) + "€",
+			maxLen: maxLen,
+			want:   strings.Repeat("a", maxLen-1),
+		},
+		{
+			name: "all multi-byte characters truncated at rune boundary",
+			// Each '€' is 3 bytes. 1366 runes = 4098 bytes > 4096.
+			// truncateField must stop before exceeding maxLen bytes,
+			// so it returns 1365 runes (4095 bytes).
+			input:  strings.Repeat("€", 1366),
+			maxLen: maxLen,
+			want:   strings.Repeat("€", 1365),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agent.TruncateField(tt.input, tt.maxLen)
 			assert.Equal(t, tt.want, got)
 		})
 	}

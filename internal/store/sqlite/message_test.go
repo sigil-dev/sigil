@@ -233,14 +233,24 @@ func TestMessageStore_GetRange_WithLimit(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// from/to spans all 5 messages; limit=2 should return only the 2 oldest.
 	from := base
 	to := base.Add(5 * time.Hour)
-	results, err := ms.GetRange(ctx, "ws-1", from, to, 2)
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-	assert.Equal(t, "msg-0", results[0].ID)
-	assert.Equal(t, "msg-1", results[1].ID)
+
+	t.Run("positive_limit", func(t *testing.T) {
+		// limit=2 should return only the 2 oldest.
+		results, err := ms.GetRange(ctx, "ws-1", from, to, 2)
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+		assert.Equal(t, "msg-0", results[0].ID)
+		assert.Equal(t, "msg-1", results[1].ID)
+	})
+
+	t.Run("zero_limit_means_unlimited", func(t *testing.T) {
+		// limit=0 must return all messages, not zero results.
+		results, err := ms.GetRange(ctx, "ws-1", from, to, 0)
+		require.NoError(t, err)
+		assert.Len(t, results, 5, "limit=0 should return all messages (unlimited behavior)")
+	})
 }
 
 // TestMessageStore_Search_InjectionTests verifies that FTS5 query injection

@@ -129,6 +129,106 @@ func TestKnowledgeStore_Traverse(t *testing.T) {
 	assert.Len(t, graph.Relationships, 2)
 }
 
+// TestKnowledgeStore_PutFacts_BatchInsert verifies that PutFacts stores all facts
+// from a batch correctly and they are all retrievable afterwards.
+func TestKnowledgeStore_PutFacts_BatchInsert(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "knowledge-putfacts-batch")
+	ks, err := sqlite.NewKnowledgeStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ks.Close() }()
+
+	require.NoError(t, ks.PutEntity(ctx, "ws-1", &store.Entity{
+		ID: "alice", WorkspaceID: "ws-1", Type: "person", Name: "Alice", CreatedAt: time.Now(),
+	}))
+
+	facts := []*store.Fact{
+		{
+			ID: "f-1", WorkspaceID: "ws-1", EntityID: "alice",
+			Predicate: "occupation", Value: "engineer", Confidence: 0.9, CreatedAt: time.Now(),
+		},
+		{
+			ID: "f-2", WorkspaceID: "ws-1", EntityID: "alice",
+			Predicate: "location", Value: "San Francisco", Confidence: 0.8, CreatedAt: time.Now(),
+		},
+		{
+			ID: "f-3", WorkspaceID: "ws-1", EntityID: "alice",
+			Predicate: "language", Value: "Go", Confidence: 1.0, CreatedAt: time.Now(),
+		},
+	}
+
+	err = ks.PutFacts(ctx, "ws-1", facts)
+	require.NoError(t, err)
+
+	stored, err := ks.FindFacts(ctx, "ws-1", store.FactQuery{EntityID: "alice"})
+	require.NoError(t, err)
+	assert.Len(t, stored, 3)
+
+	valueByPred := make(map[string]string, len(stored))
+	for _, f := range stored {
+		valueByPred[f.Predicate] = f.Value
+	}
+	assert.Equal(t, "engineer", valueByPred["occupation"])
+	assert.Equal(t, "San Francisco", valueByPred["location"])
+	assert.Equal(t, "Go", valueByPred["language"])
+}
+
+// TestKnowledgeStore_PutFacts_EmptySlice_Noop verifies that passing an empty
+// slice to PutFacts returns no error and inserts zero rows.
+func TestKnowledgeStore_PutFacts_EmptySlice_Noop(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "knowledge-putfacts-empty")
+	ks, err := sqlite.NewKnowledgeStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ks.Close() }()
+
+	err = ks.PutFacts(ctx, "ws-1", []*store.Fact{})
+	require.NoError(t, err)
+
+	stored, err := ks.FindFacts(ctx, "ws-1", store.FactQuery{})
+	require.NoError(t, err)
+	assert.Empty(t, stored)
+}
+
+// TestKnowledgeStore_PutFacts_AtomicRollback verifies that PutFacts rolls back
+// all inserts when the operation fails, leaving zero committed facts.
+func TestKnowledgeStore_PutFacts_AtomicRollback(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "knowledge-putfacts-rollback")
+	ks, err := sqlite.NewKnowledgeStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, ks.PutEntity(ctx, "ws-1", &store.Entity{
+		ID: "alice", WorkspaceID: "ws-1", Type: "person", Name: "Alice", CreatedAt: time.Now(),
+	}))
+
+	// Close the store to make subsequent DB operations fail.
+	require.NoError(t, ks.Close())
+
+	facts := []*store.Fact{
+		{
+			ID: "f-1", WorkspaceID: "ws-1", EntityID: "alice",
+			Predicate: "occupation", Value: "engineer", Confidence: 0.9, CreatedAt: time.Now(),
+		},
+		{
+			ID: "f-2", WorkspaceID: "ws-1", EntityID: "alice",
+			Predicate: "location", Value: "San Francisco", Confidence: 0.8, CreatedAt: time.Now(),
+		},
+	}
+
+	err = ks.PutFacts(ctx, "ws-1", facts)
+	require.Error(t, err, "PutFacts should fail when the database is closed")
+
+	// Reopen to verify no facts were committed.
+	ks2, err := sqlite.NewKnowledgeStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ks2.Close() }()
+
+	stored, err := ks2.FindFacts(ctx, "ws-1", store.FactQuery{EntityID: "alice"})
+	require.NoError(t, err)
+	assert.Empty(t, stored, "no facts should be committed after a failed PutFacts")
+}
+
 // TestKnowledgeStore_Traverse_StartNotFound tests that Traverse returns ErrNotFound
 // when the starting entity doesn't exist.
 func TestKnowledgeStore_Traverse_StartNotFound(t *testing.T) {

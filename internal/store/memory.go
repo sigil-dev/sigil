@@ -32,6 +32,7 @@ type MessageStore interface {
 type SummaryStore interface {
 	Store(ctx context.Context, workspaceID string, summary *Summary) error
 	Confirm(ctx context.Context, workspaceID string, summaryID string) error
+	Delete(ctx context.Context, workspaceID string, summaryID string) error
 	GetByRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*Summary, error)
 	GetLatest(ctx context.Context, workspaceID string, n int) ([]*Summary, error)
 	Close() error

@@ -437,6 +437,49 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	assert.Len(t, vec.vectors, 1)
 }
 
+func TestCompaction_Compact_ConfirmFailure(t *testing.T) {
+	// This test documents a data-loss scenario: if Confirm() fails, the
+	// compacted messages have already been deleted from Tier 1 (DeleteByIDs
+	// ran successfully before Confirm). The summary remains as pending
+	// (invisible to GetByRange/GetLatest which filter WHERE status='committed'),
+	// so the compacted messages are permanently lost.
+	mem := newLifecycleMemoryStore()
+	mem.summaries.confirmErr = fmt.Errorf("confirm failed")
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{1.0},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+
+		Summarizer: p,
+		Embedder:   p,
+		BatchSize:  5,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	// Summary was stored (as pending) before Confirm was called.
+	assert.Len(t, mem.summaries.summaries, 1, "summary should be stored before Confirm is called")
+
+	// Vector embedding was stored before Confirm was called.
+	assert.Len(t, vec.vectors, 1, "summary embedding should be stored before Confirm is called")
+
+	// Messages were already deleted before Confirm was called — this is the data-loss point.
+	count, countErr := mem.messages.Count(context.Background(), "ws-1")
+	require.NoError(t, countErr)
+	assert.Equal(t, int64(0), count, "messages are already deleted when Confirm fails — data-loss scenario")
+}
+
 func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
@@ -675,8 +718,9 @@ func (m *lifecycleMessageStore) DeleteByIDs(_ context.Context, _ string, ids []s
 func (m *lifecycleMessageStore) Close() error { return nil }
 
 type lifecycleSummaryStore struct {
-	summaries []*store.Summary
-	storeErr  error
+	summaries  []*store.Summary
+	storeErr   error
+	confirmErr error
 }
 
 func (s *lifecycleSummaryStore) Store(_ context.Context, _ string, summary *store.Summary) error {
@@ -712,7 +756,13 @@ func (s *lifecycleSummaryStore) GetLatest(_ context.Context, _ string, n int) ([
 	return sorted[:n], nil
 }
 
-func (s *lifecycleSummaryStore) Confirm(_ context.Context, _ string, _ string) error { return nil }
+func (s *lifecycleSummaryStore) Confirm(_ context.Context, _ string, _ string) error {
+	return s.confirmErr
+}
+
+func (s *lifecycleSummaryStore) Delete(_ context.Context, _ string, _ string) error {
+	return nil
+}
 
 func (s *lifecycleSummaryStore) Close() error { return nil }
 
@@ -956,6 +1006,19 @@ func TestCompaction_storeFacts_Sanitization(t *testing.T) {
 				require.Len(t, facts, 1)
 				assert.Equal(t, 1.0, facts[0].Confidence)
 			},
+		},
+		{
+			name: "all facts have empty EntityID — zero stored",
+			inputFacts: []*store.Fact{
+				{EntityID: "", Predicate: "role", Value: "engineer", Confidence: 0.9},
+				{EntityID: "", Predicate: "team", Value: "platform", Confidence: 0.8},
+			},
+			wantFactCount: 0,
+		},
+		{
+			name: "all nil facts — zero stored",
+			inputFacts: []*store.Fact{nil, nil, nil},
+			wantFactCount: 0,
 		},
 		{
 			name: "Confidence +Inf stored as 0.0",

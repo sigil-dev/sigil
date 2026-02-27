@@ -191,6 +191,10 @@ func (m *mockSummaryStore) Confirm(ctx context.Context, workspaceID string, summ
 	return nil
 }
 
+func (m *mockSummaryStore) Delete(ctx context.Context, workspaceID string, summaryID string) error {
+	return nil
+}
+
 // mockKnowledgeStore implements KnowledgeStore with configurable Close error.
 type mockKnowledgeStore struct {
 	mockClosableStore

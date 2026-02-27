@@ -269,6 +269,12 @@ func (m *MessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids 
 		return 0, nil
 	}
 
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning delete transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	// SQLite has a 999-variable limit per statement; reserve 1 for workspaceID.
 	const batchLimit = 998
 	var totalDeleted int64
@@ -290,18 +296,21 @@ func (m *MessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids 
 		}
 
 		q := `DELETE FROM memory_messages WHERE workspace_id = ? AND id IN (` + strings.Join(placeholders, ",") + `)`
-		result, err := m.db.ExecContext(ctx, q, args...)
+		result, err := tx.ExecContext(ctx, q, args...)
 		if err != nil {
-			return totalDeleted, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting messages by ids: %w", err)
+			return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting messages by ids: %w", err)
 		}
 
 		n, err := result.RowsAffected()
 		if err != nil {
-			return totalDeleted, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting rows affected: %w", err)
+			return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting rows affected: %w", err)
 		}
 		totalDeleted += n
 	}
 
+	if err := tx.Commit(); err != nil {
+		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "committing delete transaction: %w", err)
+	}
 	return totalDeleted, nil
 }
 

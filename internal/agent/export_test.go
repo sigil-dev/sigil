@@ -30,3 +30,9 @@ var ExportBuildBlockedAuditEntry = buildBlockedAuditEntry
 
 // AuditLogEscalationThreshold re-exports security.AuditLogEscalationThreshold for test compatibility.
 const AuditLogEscalationThreshold = security.AuditLogEscalationThreshold
+
+// TruncateField exposes truncateField for white-box testing.
+var TruncateField = truncateField
+
+// MaxFactFieldLen exposes maxFactFieldLen for white-box testing.
+const MaxFactFieldLen = maxFactFieldLen

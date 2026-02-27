@@ -737,6 +737,8 @@ func (m *mockSummaryStore) GetLatest(_ context.Context, _ string, _ int) ([]*sto
 
 func (m *mockSummaryStore) Confirm(_ context.Context, _ string, _ string) error { return nil }
 
+func (m *mockSummaryStore) Delete(_ context.Context, _ string, _ string) error { return nil }
+
 func (m *mockSummaryStore) Close() error { return nil }
 
 // --- mockKnowledgeStore ---

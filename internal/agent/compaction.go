@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -151,6 +152,14 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing compaction summary for workspace %s", workspaceID)
 	}
 
+	// Clean up the pending summary if any subsequent step fails.
+	confirmed := false
+	defer func() {
+		if !confirmed {
+			_ = c.cfg.MemoryStore.Summaries().Delete(ctx, workspaceID, summary.ID)
+		}
+	}()
+
 	result.SummariesCreated = 1
 	result.MessagesProcessed = len(batch)
 
@@ -191,6 +200,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	if err := c.cfg.MemoryStore.Summaries().Confirm(ctx, workspaceID, summary.ID); err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "confirming compaction summary for workspace %s", workspaceID)
 	}
+	confirmed = true
 
 	return result, nil
 }
@@ -242,6 +252,11 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 
 		// Validate and truncate untrusted text fields.
 		if fact.EntityID == "" {
+			slog.WarnContext(ctx, "compaction: skipping fact with empty entity ID",
+				"workspace_id", workspaceID,
+				"summary_id", summaryID,
+				"index", i,
+			)
 			continue
 		}
 		fact.EntityID = truncateField(fact.EntityID, maxFactFieldLen)
