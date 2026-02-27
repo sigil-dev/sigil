@@ -85,6 +85,8 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 	var remaining []string
 	for _, id := range orphans {
 		if err := c.cfg.VectorStore.Delete(ctx, []string{id}); err != nil {
+			// Note: workspace_id reflects the current compaction context, not
+			// necessarily the workspace where the orphaned embedding originated.
 			slog.ErrorContext(ctx, "compaction: orphan vector cleanup retry failed",
 				"workspace_id", workspaceID,
 				"embedding_id", id,
@@ -92,6 +94,8 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 			)
 			remaining = append(remaining, id)
 		} else {
+			// Note: workspace_id reflects the current compaction context, not
+			// necessarily the workspace where the orphaned embedding originated.
 			slog.InfoContext(ctx, "compaction: cleaned up orphaned vector embedding",
 				"workspace_id", workspaceID,
 				"embedding_id", id,

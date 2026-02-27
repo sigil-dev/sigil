@@ -7535,6 +7535,82 @@ func TestAgentLoop_RealScanner_CancelledContext_InputStage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Compaction integration tests
+// ---------------------------------------------------------------------------
+
+// TestLoop_ProcessMessage_Compaction verifies that the best-effort compaction
+// path in ProcessMessage behaves correctly in all three cases:
+//   - compaction succeeds: response is returned normally
+//   - compaction errors: error is logged but NOT propagated (best-effort)
+//   - compactor is nil: no panic, response is returned normally
+func TestLoop_ProcessMessage_Compaction(t *testing.T) {
+	tests := []struct {
+		name        string
+		compactor   *mockCompactor
+		wantErr     bool
+		wantContent string
+	}{
+		{
+			name:        "compaction_succeeds",
+			compactor:   &mockCompactor{compactErr: nil},
+			wantErr:     false,
+			wantContent: "Hello, world!",
+		},
+		{
+			name:        "compaction_error_is_best_effort",
+			compactor:   &mockCompactor{compactErr: fmt.Errorf("compaction failed")},
+			wantErr:     false,
+			wantContent: "Hello, world!",
+		},
+		{
+			name:        "compaction_nil_compactor",
+			compactor:   nil,
+			wantErr:     false,
+			wantContent: "Hello, world!",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := newMockSessionManager()
+			ctx := context.Background()
+
+			session, err := sm.Create(ctx, "ws-compact", "user-1")
+			require.NoError(t, err)
+
+			cfg := newTestLoopConfig(t)
+			cfg.SessionManager = sm
+			if tt.compactor != nil {
+				cfg.Compactor = tt.compactor
+			}
+			loop, err := agent.NewLoop(cfg)
+			require.NoError(t, err)
+
+			out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+				SessionID:   session.ID,
+				WorkspaceID: "ws-compact",
+				UserID:      "user-1",
+				Content:     "trigger compaction test",
+			})
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Contains(t, out.Content, tt.wantContent,
+				"ProcessMessage must return the response regardless of compaction outcome")
+
+			if tt.compactor != nil {
+				assert.Equal(t, 1, tt.compactor.compactCalls,
+					"Compact must be called exactly once per ProcessMessage when compactor is set")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // testLogHandler — slog.Handler that captures log records for assertions
 // ---------------------------------------------------------------------------
 

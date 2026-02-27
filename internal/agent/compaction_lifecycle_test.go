@@ -481,8 +481,8 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	// DeleteByIDs failed after Confirm — partial commit with recovery data.
 	require.NotNil(t, result)
 	assert.True(t, result.PartialCommit)
-	assert.NotEmpty(t, result.SummaryID)
-	assert.Len(t, result.MessageIDs, 5)
+	assert.Equal(t, mem.summaries.summaries[0].ID, result.SummaryID, "SummaryID must match the committed summary")
+	assert.ElementsMatch(t, []string{"msg-0", "msg-1", "msg-2", "msg-3", "msg-4"}, result.MessageIDs, "MessageIDs must contain the exact batch message IDs")
 	// Summary is committed (Confirm succeeded before DeleteByIDs was reached).
 	assert.Len(t, mem.summaries.summaries, 1)
 	assert.Len(t, vec.vectors, 1)
@@ -531,6 +531,80 @@ func TestCompaction_Compact_ConfirmFailure(t *testing.T) {
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, countErr)
 	assert.Equal(t, int64(5), count, "messages are preserved when Confirm fails — no data loss")
+}
+
+func TestCompaction_Compact_OrphanVectorRetryQueue(t *testing.T) {
+	// Scenario:
+	// 1. First Compact(): summary embedding is stored (embeddingStored=true), then
+	//    Confirm fails so the defer runs with confirmed=false. The defer calls
+	//    VectorStore.Delete which fails on call #2 (the defer cleanup), so the
+	//    summary ID is queued in pendingOrphans.
+	// 2. PendingOrphanCount() == 1 after the failed Compact.
+	// 3. Second Compact(): drainOrphans() runs first, retries the delete which now
+	//    succeeds (deleteErrOnCall=2 means only call #2 fails). The orphan is cleared.
+	// 4. PendingOrphanCount() == 0 after the successful drain.
+
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	// Fail VectorStore.Delete only on call #2: the defer cleanup in Compact 1.
+	// Call #1 is the per-batch-IDs delete (succeeds), call #2 is the defer cleanup
+	// of the summary embedding (fails → orphan queued), call #3 is drainOrphans
+	// in the second Compact (succeeds).
+	vec.deleteErr = fmt.Errorf("vector delete transient failure")
+	vec.deleteErrOnCall = 2
+
+	mem.summaries.confirmErr = fmt.Errorf("confirm failed")
+
+	p := &mockCompactionProvider{
+		summary:   "summary for orphan test",
+		embedding: []float32{0.5, 0.6},
+	}
+
+	// First compaction: 5 messages → triggers Compact.
+	appendMessages(t, mem.messages, "ws-orphan", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// First Compact: Confirm fails → defer runs → VectorStore.Delete fails → orphan queued.
+	result, err := c.Compact(context.Background(), "ws-orphan")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "confirming compaction summary")
+
+	// The vector ID should be in the orphan queue.
+	assert.Equal(t, 1, c.PendingOrphanCount(), "failed defer Delete must add ID to pendingOrphans")
+
+	// Verify the summary embedding is still in the vector store (delete failed).
+	assert.Len(t, vec.vectors, 1, "summary embedding should remain after failed delete")
+
+	// Remove the Confirm error so the second Compact can succeed.
+	mem.summaries.confirmErr = nil
+	// Also need fresh messages to exceed the batch threshold again.
+	appendMessages(t, mem.messages, "ws-orphan", 5)
+
+	// Second Compact: drainOrphans() runs first (retry succeeds), then full compaction.
+	result2, err2 := c.Compact(context.Background(), "ws-orphan")
+	require.NoError(t, err2)
+	require.NotNil(t, result2)
+
+	// Orphan queue drained successfully.
+	assert.Equal(t, 0, c.PendingOrphanCount(), "orphan must be drained after successful retry")
+
+	// The orphaned vector from the first Compact was deleted during drainOrphans.
+	// The second Compact then stored a new summary embedding and deleted message vectors.
+	// At the end, only the new summary embedding should remain.
+	assert.Len(t, vec.vectors, 1, "only the second summary embedding should remain after drain and compaction")
+
+	// Verify Delete was called at least twice: once in the first defer (failed) and
+	// once via drainOrphans (succeeded), plus the per-message delete in the second Compact.
+	assert.GreaterOrEqual(t, vec.deleteCalls, 2, "Delete must be called at least twice across both Compact calls")
 }
 
 func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.T) {
@@ -704,7 +778,10 @@ func (m *lifecycleMessageStore) GetOldest(_ context.Context, _ string, n int) ([
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
 	})
-	if n > 0 && n < len(sorted) {
+	if n <= 0 {
+		return []*store.Message{}, nil
+	}
+	if n < len(sorted) {
 		sorted = sorted[:n]
 	}
 	return sorted, nil
@@ -895,10 +972,12 @@ type lifecycleVector struct {
 }
 
 type lifecycleVectorStore struct {
-	vectors   map[string]lifecycleVector
-	storeErr  error
-	searchErr error
-	deleteErr error
+	vectors         map[string]lifecycleVector
+	storeErr        error
+	searchErr       error
+	deleteErr       error
+	deleteErrOnCall int // if > 0, return deleteErr only on this specific call number (1-indexed)
+	deleteCalls     int // total number of Delete calls made
 }
 
 func newLifecycleVectorStore() *lifecycleVectorStore {
@@ -923,8 +1002,13 @@ func (v *lifecycleVectorStore) Search(_ context.Context, _ []float32, _ int, _ m
 }
 
 func (v *lifecycleVectorStore) Delete(_ context.Context, ids []string) error {
+	v.deleteCalls++
 	if v.deleteErr != nil {
-		return v.deleteErr
+		// If deleteErrOnCall is set, fail only on that specific call number.
+		// If deleteErrOnCall is zero, fail on every call.
+		if v.deleteErrOnCall == 0 || v.deleteCalls == v.deleteErrOnCall {
+			return v.deleteErr
+		}
 	}
 	for _, id := range ids {
 		delete(v.vectors, id)

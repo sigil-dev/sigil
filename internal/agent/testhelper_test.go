@@ -1407,3 +1407,22 @@ func (p *mockProviderBatchToolCall) Chat(_ context.Context, _ provider.ChatReque
 	close(ch)
 	return ch, nil
 }
+
+// ---------------------------------------------------------------------------
+// Compactor mock
+// ---------------------------------------------------------------------------
+
+// mockCompactor implements the compactorRunner interface for testing.
+// Configure compactErr to simulate a Compact failure; leave nil for success.
+type mockCompactor struct {
+	compactErr   error
+	compactCalls int
+}
+
+func (m *mockCompactor) Compact(_ context.Context, _ string) (*agent.CompactionResult, error) {
+	m.compactCalls++
+	if m.compactErr != nil {
+		return nil, m.compactErr
+	}
+	return &agent.CompactionResult{}, nil
+}

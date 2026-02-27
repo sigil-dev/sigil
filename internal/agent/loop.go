@@ -149,7 +149,14 @@ type LoopConfig struct {
 	// Compactor is an optional memory compactor. When non-nil, the loop triggers
 	// best-effort compaction after persisting assistant responses (design doc 08,
 	// RESPOND step: "trigger compaction if needed").
-	Compactor *Compactor
+	// Accepts *Compactor or any implementation of compactorRunner (e.g. test mocks).
+	Compactor compactorRunner
+}
+
+// compactorRunner is the minimal interface the Loop requires from a Compactor.
+// *Compactor satisfies this interface; tests may use a lightweight mock.
+type compactorRunner interface {
+	Compact(ctx context.Context, workspaceID string) (*CompactionResult, error)
 }
 
 // Validate checks that all required fields in LoopConfig are set.
@@ -202,7 +209,7 @@ type Loop struct {
 	// it is not reset on success, so intermittent failure patterns remain visible to operators.
 	auditSecurityFailTotal atomic.Int64
 	// compactor is an optional memory compactor wired into the RESPOND step.
-	compactor *Compactor
+	compactor compactorRunner
 }
 
 // NewLoop creates a Loop with the given dependencies.
@@ -343,12 +350,21 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	// Best-effort compaction: trigger if message count exceeds batch threshold.
 	// Compaction failures are logged but do not fail the response.
 	if l.compactor != nil {
-		if _, compactErr := l.compactor.Compact(ctx, msg.WorkspaceID); compactErr != nil {
-			slog.WarnContext(ctx, "compaction trigger failed (best-effort)",
+		compactResult, compactErr := l.compactor.Compact(ctx, msg.WorkspaceID)
+		if compactErr != nil {
+			fields := []any{
 				"workspace_id", msg.WorkspaceID,
 				"session_id", msg.SessionID,
 				"error", compactErr,
-			)
+			}
+			if compactResult != nil && compactResult.PartialCommit {
+				fields = append(fields,
+					"partial_commit", true,
+					"summary_id", compactResult.SummaryID,
+					"message_ids_count", len(compactResult.MessageIDs),
+				)
+			}
+			slog.WarnContext(ctx, "compaction trigger failed (best-effort)", fields...)
 		}
 	}
 
