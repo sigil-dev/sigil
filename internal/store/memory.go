@@ -31,6 +31,7 @@ type MessageStore interface {
 // SummaryStore manages Tier 2: LLM-generated compaction summaries.
 type SummaryStore interface {
 	Store(ctx context.Context, workspaceID string, summary *Summary) error
+	Confirm(ctx context.Context, workspaceID string, summaryID string) error
 	GetByRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*Summary, error)
 	GetLatest(ctx context.Context, workspaceID string, n int) ([]*Summary, error)
 	Close() error
@@ -46,6 +47,7 @@ type KnowledgeStore interface {
 	GetRelationships(ctx context.Context, entityID string, opts RelOpts) ([]*Relationship, error)
 
 	PutFact(ctx context.Context, workspaceID string, fact *Fact) error
+	PutFacts(ctx context.Context, workspaceID string, facts []*Fact) error
 	FindFacts(ctx context.Context, workspaceID string, query FactQuery) ([]*Fact, error)
 
 	Traverse(ctx context.Context, startID string, depth int, filter TraversalFilter) (*Graph, error)

@@ -167,6 +167,7 @@ type Summary struct {
 	Content     string
 	MessageIDs  []string
 	CreatedAt   time.Time
+	Status      string // "pending" or "committed"
 }
 
 // Entity represents a named entity extracted from conversations.

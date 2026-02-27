@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -64,15 +65,24 @@ CREATE TABLE IF NOT EXISTS summaries (
 	to_time      TEXT NOT NULL,
 	content      TEXT NOT NULL DEFAULT '',
 	message_ids  TEXT NOT NULL DEFAULT '[]',
-	created_at   TEXT NOT NULL
+	created_at   TEXT NOT NULL,
+	status       TEXT NOT NULL DEFAULT 'committed'
 );
 
 CREATE INDEX IF NOT EXISTS idx_summaries_workspace ON summaries(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_summaries_workspace_range ON summaries(workspace_id, from_time, to_time);
 CREATE INDEX IF NOT EXISTS idx_summaries_workspace_created ON summaries(workspace_id, created_at);
 `
-	_, err := db.Exec(ddl)
-	return err
+	if _, err := db.Exec(ddl); err != nil {
+		return err
+	}
+
+	// Add status column to existing tables. Ignore "duplicate column" for idempotency.
+	_, err := db.Exec("ALTER TABLE summaries ADD COLUMN status TEXT NOT NULL DEFAULT 'committed'")
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	return nil
 }
 
 // Close closes the underlying database connection if this store owns it.
@@ -85,14 +95,21 @@ func (s *SummaryStore) Close() error {
 }
 
 // Store inserts a summary into the store for the given workspace.
+// The summary's Status field is persisted as-is; callers should set it
+// to "pending" for two-phase compaction or "committed" for immediate use.
 func (s *SummaryStore) Store(ctx context.Context, workspaceID string, summary *store.Summary) error {
 	msgIDs, err := json.Marshal(summary.MessageIDs)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling message IDs: %w", err)
 	}
 
-	const q = `INSERT INTO summaries (id, workspace_id, from_time, to_time, content, message_ids, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)`
+	status := summary.Status
+	if status == "" {
+		status = "committed"
+	}
+
+	const q = `INSERT INTO summaries (id, workspace_id, from_time, to_time, content, message_ids, created_at, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err = s.db.ExecContext(ctx, q,
 		summary.ID,
@@ -102,6 +119,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`
 		summary.Content,
 		string(msgIDs),
 		formatTime(summary.CreatedAt),
+		status,
 	)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "storing summary %s: %w", summary.ID, err)
@@ -109,12 +127,30 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`
 	return nil
 }
 
-// GetByRange returns summaries whose time range falls within [from, to].
+// Confirm promotes a pending summary to committed status.
+func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryID string) error {
+	const q = `UPDATE summaries SET status = 'committed' WHERE id = ? AND workspace_id = ?`
+	res, err := s.db.ExecContext(ctx, q, summaryID, workspaceID)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: %w", summaryID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: rows affected: %w", summaryID, err)
+	}
+	if n == 0 {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: not found in workspace %s", summaryID, workspaceID)
+	}
+	return nil
+}
+
+// GetByRange returns committed summaries whose time range falls within [from, to].
 // A summary is included if its from_time >= from AND to_time <= to.
+// Pending summaries are excluded to prevent partially-compacted data from leaking.
 func (s *SummaryStore) GetByRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*store.Summary, error) {
-	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at
+	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at, status
 FROM summaries
-WHERE workspace_id = ? AND from_time >= ? AND to_time <= ?
+WHERE workspace_id = ? AND from_time >= ? AND to_time <= ? AND status = 'committed'
 ORDER BY from_time ASC`
 
 	rows, err := s.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
@@ -126,11 +162,12 @@ ORDER BY from_time ASC`
 	return scanSummaries(rows)
 }
 
-// GetLatest returns the n most recent summaries ordered by created_at descending.
+// GetLatest returns the n most recent committed summaries ordered by created_at descending.
+// Pending summaries are excluded to prevent partially-compacted data from leaking.
 func (s *SummaryStore) GetLatest(ctx context.Context, workspaceID string, n int) ([]*store.Summary, error) {
-	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at
+	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at, status
 FROM summaries
-WHERE workspace_id = ?
+WHERE workspace_id = ? AND status = 'committed'
 ORDER BY created_at DESC
 LIMIT ?`
 
@@ -158,6 +195,7 @@ func scanSummaries(rows *sql.Rows) ([]*store.Summary, error) {
 			&sm.Content,
 			&msgIDsJSON,
 			&createdAt,
+			&sm.Status,
 		); err != nil {
 			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning summary row: %w", err)
 		}

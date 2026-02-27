@@ -187,6 +187,10 @@ func (m *mockSummaryStore) GetLatest(ctx context.Context, workspaceID string, n 
 	return nil, nil
 }
 
+func (m *mockSummaryStore) Confirm(ctx context.Context, workspaceID string, summaryID string) error {
+	return nil
+}
+
 // mockKnowledgeStore implements KnowledgeStore with configurable Close error.
 type mockKnowledgeStore struct {
 	mockClosableStore
@@ -213,6 +217,10 @@ func (m *mockKnowledgeStore) GetRelationships(ctx context.Context, entityID stri
 }
 
 func (m *mockKnowledgeStore) PutFact(ctx context.Context, workspaceID string, fact *store.Fact) error {
+	return nil
+}
+
+func (m *mockKnowledgeStore) PutFacts(ctx context.Context, workspaceID string, facts []*store.Fact) error {
 	return nil
 }
 

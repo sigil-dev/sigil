@@ -214,6 +214,35 @@ func TestMessageStore_GetRange(t *testing.T) {
 	assert.Len(t, results, 3) // messages 0, 1, 2
 }
 
+func TestMessageStore_GetRange_WithLimit(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "messages-range-limit")
+	ms, err := sqlite.NewMessageStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ms.Close() }()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		err = ms.Append(ctx, "ws-1", &store.Message{
+			ID:        fmt.Sprintf("msg-%d", i),
+			SessionID: "sess-1",
+			Role:      store.MessageRoleUser,
+			Content:   fmt.Sprintf("Message %d", i),
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		})
+		require.NoError(t, err)
+	}
+
+	// from/to spans all 5 messages; limit=2 should return only the 2 oldest.
+	from := base
+	to := base.Add(5 * time.Hour)
+	results, err := ms.GetRange(ctx, "ws-1", from, to, 2)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "msg-0", results[0].ID)
+	assert.Equal(t, "msg-1", results[1].ID)
+}
+
 // TestMessageStore_Search_InjectionTests verifies that FTS5 query injection
 // attempts are properly sanitized and do not alter query behavior.
 // The sanitization works by wrapping the entire query in double quotes,
@@ -472,4 +501,115 @@ END;
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "user_input", results[0].Origin, "Origin should round-trip through storage")
+}
+
+func TestMessageStore_GetOldest(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name       string
+		setup      func(ms *sqlite.MessageStore)
+		workspace  string
+		n          int
+		wantLen    int
+		wantFirst  string // expected ID of first returned message
+		wantLast   string // expected ID of last returned message
+	}{
+		{
+			name: "ordering_oldest_first",
+			setup: func(ms *sqlite.MessageStore) {
+				for i := 0; i < 5; i++ {
+					err := ms.Append(ctx, "ws-order", &store.Message{
+						ID:        fmt.Sprintf("msg-%d", i),
+						SessionID: "sess-1",
+						Role:      store.MessageRoleUser,
+						Content:   fmt.Sprintf("Message %d", i),
+						CreatedAt: base.Add(time.Duration(i) * time.Hour),
+					})
+					require.NoError(t, err)
+				}
+			},
+			workspace: "ws-order",
+			n:         3,
+			wantLen:   3,
+			wantFirst: "msg-0",
+			wantLast:  "msg-2",
+		},
+		{
+			name: "n_greater_than_total_returns_all",
+			setup: func(ms *sqlite.MessageStore) {
+				for i := 0; i < 3; i++ {
+					err := ms.Append(ctx, "ws-overflow", &store.Message{
+						ID:        fmt.Sprintf("overflow-msg-%d", i),
+						SessionID: "sess-1",
+						Role:      store.MessageRoleUser,
+						Content:   fmt.Sprintf("Message %d", i),
+						CreatedAt: base.Add(time.Duration(i) * time.Hour),
+					})
+					require.NoError(t, err)
+				}
+			},
+			workspace: "ws-overflow",
+			n:         100,
+			wantLen:   3,
+			wantFirst: "overflow-msg-0",
+			wantLast:  "overflow-msg-2",
+		},
+		{
+			name:      "empty_workspace_returns_empty_slice",
+			setup:     func(_ *sqlite.MessageStore) {},
+			workspace: "ws-empty",
+			n:         10,
+			wantLen:   0,
+		},
+		{
+			name: "workspace_isolation",
+			setup: func(ms *sqlite.MessageStore) {
+				for i := 0; i < 3; i++ {
+					err := ms.Append(ctx, "ws-iso-1", &store.Message{
+						ID:        fmt.Sprintf("ws1-msg-%d", i),
+						SessionID: "sess-1",
+						Role:      store.MessageRoleUser,
+						Content:   fmt.Sprintf("WS1 Message %d", i),
+						CreatedAt: base.Add(time.Duration(i) * time.Hour),
+					})
+					require.NoError(t, err)
+				}
+				err := ms.Append(ctx, "ws-iso-2", &store.Message{
+					ID:        "ws2-msg-0",
+					SessionID: "sess-2",
+					Role:      store.MessageRoleUser,
+					Content:   "WS2 Message 0",
+					CreatedAt: base,
+				})
+				require.NoError(t, err)
+			},
+			workspace: "ws-iso-1",
+			n:         10,
+			wantLen:   3,
+			wantFirst: "ws1-msg-0",
+			wantLast:  "ws1-msg-2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := testDBPath(t, "messages-getoldest-"+tt.name)
+			ms, err := sqlite.NewMessageStore(db)
+			require.NoError(t, err)
+			defer func() { _ = ms.Close() }()
+
+			tt.setup(ms)
+
+			got, err := ms.GetOldest(ctx, tt.workspace, tt.n)
+			require.NoError(t, err)
+			assert.Len(t, got, tt.wantLen)
+
+			if tt.wantLen > 0 {
+				assert.Equal(t, tt.wantFirst, got[0].ID, "first message should be oldest")
+				assert.Equal(t, tt.wantLast, got[tt.wantLen-1].ID, "last message should be newest of the returned set")
+			}
+		})
+	}
 }

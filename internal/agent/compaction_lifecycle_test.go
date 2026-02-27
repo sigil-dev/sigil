@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ import (
 func TestCompaction_Compact_NoOpBelowThreshold(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:   "unused",
 		facts:     []*store.Fact{{ID: "fact-unused"}},
@@ -33,7 +34,7 @@ func TestCompaction_Compact_NoOpBelowThreshold(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -60,7 +61,7 @@ func TestCompaction_Compact_NoOpBelowThreshold(t *testing.T) {
 func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary: "Summary: discussion about deployment and ownership",
 		facts: []*store.Fact{
@@ -75,7 +76,7 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -106,6 +107,23 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 	assert.Equal(t, "ws-1", mem.knowledge.facts[0].WorkspaceID)
 	assert.Equal(t, "ws-1", mem.knowledge.facts[1].WorkspaceID)
 
+	// Verify identity fields are overridden by compaction — not taken from the provider.
+	// The summary ID follows the pattern "sum-<ts>-<hex>", so fact IDs must be
+	// "<sumID>-fact-<index>" which matches "sum-<digits>-<hex>-fact-<index>".
+	factIDPattern := regexp.MustCompile(`^sum-\d+-[0-9a-f]+-fact-\d+$`)
+	for i, fact := range mem.knowledge.facts {
+		assert.Regexp(t, factIDPattern, fact.ID,
+			"fact[%d].ID must follow sum-<ts>-<hex>-fact-<index> pattern, got %q", i, fact.ID)
+		assert.NotEqual(t, fmt.Sprintf("fact-%d", i+1), fact.ID,
+			"fact[%d].ID must not be the provider-supplied value", i)
+		assert.Equal(t, "compaction", fact.Source,
+			"fact[%d].Source must be overridden to 'compaction'", i)
+		assert.False(t, fact.CreatedAt.IsZero(),
+			"fact[%d].CreatedAt must be non-zero", i)
+		assert.WithinDuration(t, time.Now(), fact.CreatedAt, 10*time.Second,
+			"fact[%d].CreatedAt must be set to approximately now", i)
+	}
+
 	count, err := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), count, "oldest compacted batch should be trimmed")
@@ -121,7 +139,7 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 func TestCompaction_Compact_FullLifecycle_ExtractFactsDisabled(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:   "Summary without fact extraction",
 		facts:     []*store.Fact{{ID: "fact-1", EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: 0.95}},
@@ -133,7 +151,7 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsDisabled(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -158,7 +176,7 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsDisabled(t *testing.T) {
 func TestCompaction_Compact_SummarizeProviderFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summarizeErr: fmt.Errorf("summarize failed"),
 		embedding:    []float32{1.0},
@@ -169,7 +187,7 @@ func TestCompaction_Compact_SummarizeProviderFailure(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -190,7 +208,7 @@ func TestCompaction_Compact_SummaryStoreFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	mem.summaries.storeErr = fmt.Errorf("summary store failed")
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:   "summary",
 		embedding: []float32{1.0},
@@ -201,7 +219,7 @@ func TestCompaction_Compact_SummaryStoreFailure(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -220,7 +238,7 @@ func TestCompaction_Compact_SummaryStoreFailure(t *testing.T) {
 func TestCompaction_Compact_FactExtractionProviderFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:    "summary",
 		extractErr: fmt.Errorf("extract facts failed"),
@@ -232,7 +250,7 @@ func TestCompaction_Compact_FactExtractionProviderFailure(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -253,7 +271,7 @@ func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	mem.knowledge.putFactErr = fmt.Errorf("knowledge store failed")
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary: "summary",
 		facts: []*store.Fact{
@@ -267,7 +285,7 @@ func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -286,7 +304,7 @@ func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
 func TestCompaction_Compact_EmbeddingProviderFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:  "summary",
 		embedErr: fmt.Errorf("embed failed"),
@@ -297,7 +315,7 @@ func TestCompaction_Compact_EmbeddingProviderFailure(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -316,7 +334,7 @@ func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
 	vec.storeErr = fmt.Errorf("vector store failed")
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:   "summary",
 		embedding: []float32{1.0},
@@ -327,7 +345,7 @@ func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -348,7 +366,7 @@ func TestCompaction_Compact_VectorDeleteFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
 	vec.deleteErr = fmt.Errorf("vector delete failed")
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary: "summary",
 		facts: []*store.Fact{
@@ -362,7 +380,7 @@ func TestCompaction_Compact_VectorDeleteFailure(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:   mem,
 		VectorStore:   vec,
-		SessionStore:  ss,
+
 		Summarizer:    p,
 		Embedder:      p,
 		BatchSize:     5,
@@ -393,7 +411,7 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	mem.messages.deleteErr = fmt.Errorf("delete failed")
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:   "summary",
 		embedding: []float32{1.0},
@@ -404,7 +422,7 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -422,7 +440,7 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:   "summary",
 		embedding: []float32{1.0},
@@ -441,7 +459,7 @@ func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -473,7 +491,7 @@ func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.
 func TestCompaction_Compact_PreservesMessageAppendedAfterCountBeforeDelete(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	vec := newLifecycleVectorStore()
-	ss := newMockSessionStore()
+
 	p := &mockCompactionProvider{
 		summary:   "summary",
 		embedding: []float32{1.0},
@@ -492,7 +510,7 @@ func TestCompaction_Compact_PreservesMessageAppendedAfterCountBeforeDelete(t *te
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
 		VectorStore:           vec,
-		SessionStore:          ss,
+
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
@@ -693,6 +711,8 @@ func (s *lifecycleSummaryStore) GetLatest(_ context.Context, _ string, n int) ([
 	return sorted[:n], nil
 }
 
+func (s *lifecycleSummaryStore) Confirm(_ context.Context, _ string, _ string) error { return nil }
+
 func (s *lifecycleSummaryStore) Close() error { return nil }
 
 type lifecycleKnowledgeStore struct {
@@ -717,6 +737,14 @@ func (k *lifecycleKnowledgeStore) PutFact(_ context.Context, _ string, fact *sto
 		return k.putFactErr
 	}
 	k.facts = append(k.facts, fact)
+	return nil
+}
+
+func (k *lifecycleKnowledgeStore) PutFacts(_ context.Context, _ string, facts []*store.Fact) error {
+	if k.putFactErr != nil {
+		return k.putFactErr
+	}
+	k.facts = append(k.facts, facts...)
 	return nil
 }
 
@@ -947,7 +975,7 @@ func TestCompaction_storeFacts_Sanitization(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mem := newLifecycleMemoryStore()
 			vec := newLifecycleVectorStore()
-			ss := newMockSessionStore()
+		
 			p := &mockCompactionProvider{
 				summary:   "test summary",
 				facts:     tt.inputFacts,
@@ -960,7 +988,7 @@ func TestCompaction_storeFacts_Sanitization(t *testing.T) {
 			c, newErr := agent.NewCompactor(agent.CompactorConfig{
 				MemoryStore:   mem,
 				VectorStore:   vec,
-				SessionStore:  ss,
+		
 				Summarizer:    p,
 				Embedder:      p,
 				BatchSize:     5,
@@ -980,6 +1008,85 @@ func TestCompaction_storeFacts_Sanitization(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompaction_Compact_EmptyWorkspaceID(t *testing.T) {
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{1.0},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:  mem,
+		VectorStore:  vec,
+
+		Summarizer:   p,
+		Embedder:     p,
+		BatchSize:    5,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "workspaceID must not be empty")
+}
+
+func TestCompaction_Compact_CountFailure(t *testing.T) {
+	mem := newLifecycleMemoryStore()
+	mem.messages.countErr = fmt.Errorf("count failed")
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{1.0},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:  mem,
+		VectorStore:  vec,
+
+		Summarizer:   p,
+		Embedder:     p,
+		BatchSize:    5,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "counting messages")
+}
+
+func TestCompaction_Compact_LoadBatchFailure(t *testing.T) {
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{1.0},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+	mem.messages.getRangeErr = fmt.Errorf("get oldest failed")
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:  mem,
+		VectorStore:  vec,
+
+		Summarizer:   p,
+		Embedder:     p,
+		BatchSize:    5,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "loading compaction batch")
 }
 
 func appendMessages(t *testing.T, ms *lifecycleMessageStore, workspaceID string, n int) {

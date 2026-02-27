@@ -735,6 +735,8 @@ func (m *mockSummaryStore) GetLatest(_ context.Context, _ string, _ int) ([]*sto
 	return nil, nil
 }
 
+func (m *mockSummaryStore) Confirm(_ context.Context, _ string, _ string) error { return nil }
+
 func (m *mockSummaryStore) Close() error { return nil }
 
 // --- mockKnowledgeStore ---
@@ -765,6 +767,11 @@ func (m *mockKnowledgeStore) GetRelationships(_ context.Context, _ string, _ sto
 
 func (m *mockKnowledgeStore) PutFact(_ context.Context, _ string, fact *store.Fact) error {
 	m.facts = append(m.facts, fact)
+	return nil
+}
+
+func (m *mockKnowledgeStore) PutFacts(_ context.Context, _ string, facts []*store.Fact) error {
+	m.facts = append(m.facts, facts...)
 	return nil
 }
 

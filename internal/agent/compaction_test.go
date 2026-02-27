@@ -91,12 +91,12 @@ func TestNewCompactor_Validation(t *testing.T) {
 func TestCompaction_RollMessage(t *testing.T) {
 	ms := newMockMemoryStore()
 	vs := newMockVectorStore()
-	ss := newMockSessionStore()
+
 
 	c, err := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:  ms,
 		VectorStore:  vs,
-		SessionStore: ss,
+
 		Summarizer:   noopSummarizer{},
 		Embedder:     noopEmbedder{},
 		BatchSize:    50,
@@ -127,12 +127,12 @@ func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
 		knowledge: &mockKnowledgeStore{},
 	}
 	vs := newMockVectorStore()
-	ss := newMockSessionStore()
+
 
 	c, err := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:  memStoreErr,
 		VectorStore:  vs,
-		SessionStore: ss,
+
 		Summarizer:   noopSummarizer{},
 		Embedder:     noopEmbedder{},
 		BatchSize:    50,
@@ -148,7 +148,8 @@ func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
 
 	err = c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.Error(t, err)
-	assert.Equal(t, expectedErr, err)
+	assert.ErrorIs(t, err, expectedErr)
+	assert.Contains(t, err.Error(), "rolling message for workspace")
 
 	// Verify VectorStore.Store was NOT called
 	assert.Empty(t, vs.vectors, "VectorStore should not have been called after message append error")
@@ -161,12 +162,12 @@ func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
 		mockVectorStore: mockVectorStore{vectors: make(map[string]mockVector)},
 		storeErr:        expectedErr,
 	}
-	ss := newMockSessionStore()
+
 
 	c, err := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:  ms,
 		VectorStore:  vs,
-		SessionStore: ss,
+
 		Summarizer:   noopSummarizer{},
 		Embedder:     noopEmbedder{},
 		BatchSize:    50,
@@ -182,7 +183,8 @@ func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
 
 	err = c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.Error(t, err)
-	assert.Equal(t, expectedErr, err)
+	assert.ErrorIs(t, err, expectedErr)
+	assert.Contains(t, err.Error(), "storing placeholder vector for message")
 
 	// Verify message WAS appended to memory store (before vector store error)
 	count, err := ms.Messages().Count(ctx, "ws-1")

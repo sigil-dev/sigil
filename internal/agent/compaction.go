@@ -42,7 +42,6 @@ type Embedder interface {
 type CompactorConfig struct {
 	MemoryStore   store.MemoryStore
 	VectorStore   store.VectorStore
-	SessionStore  store.SessionStore
 	Summarizer    Summarizer
 	Embedder      Embedder
 	FactExtractor FactExtractor
@@ -92,11 +91,14 @@ func (c *Compactor) RollMessage(ctx context.Context, workspaceID, sessionID stri
 		return sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "rolling message for workspace %s session %s", workspaceID, sessionID)
 	}
 
-	return c.cfg.VectorStore.Store(ctx, msg.ID, []float32{0}, map[string]any{
+	if err := c.cfg.VectorStore.Store(ctx, msg.ID, []float32{0}, map[string]any{
 		"workspace_id": workspaceID,
 		"session_id":   sessionID,
 		"content":      msg.Content,
-	})
+	}); err != nil {
+		return sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing placeholder vector for message %s workspace %s session %s", msg.ID, workspaceID, sessionID)
+	}
+	return nil
 }
 
 // Compact executes one full memory compaction pass for a workspace:
@@ -143,6 +145,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		Content:     summaryText,
 		MessageIDs:  batchIDs,
 		CreatedAt:   now,
+		Status:      "pending",
 	}
 	if err := c.cfg.MemoryStore.Summaries().Store(ctx, workspaceID, summary); err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing compaction summary for workspace %s", workspaceID)
@@ -184,6 +187,11 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	}
 	result.MessagesTrimmed = int(trimmed)
 
+	// Promote summary from pending to committed now that all post-operations succeeded.
+	if err := c.cfg.MemoryStore.Summaries().Confirm(ctx, workspaceID, summary.ID); err != nil {
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "confirming compaction summary for workspace %s", workspaceID)
+	}
+
 	return result, nil
 }
 
@@ -206,8 +214,10 @@ const maxFactsPerCompaction = 100
 // maxFactFieldLen caps the length of untrusted text fields on extracted facts.
 const maxFactFieldLen = 4096
 
-// storeFacts extracts facts from the summarized batch and persists them.
+// storeFacts extracts facts from the summarized batch and persists them atomically.
 // All provider-supplied fields are validated and sanitized — LLM output is untrusted.
+// Facts are persisted via PutFacts for all-or-nothing semantics: if any write fails,
+// no facts from this batch are committed to the store.
 func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summaryText string, batch []*store.Message, now time.Time) (int, error) {
 	facts, err := c.cfg.FactExtractor.ExtractFacts(ctx, summaryText, batch)
 	if err != nil {
@@ -218,7 +228,8 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 		facts = facts[:maxFactsPerCompaction]
 	}
 
-	count := 0
+	// First pass: sanitize all facts and collect valid ones.
+	sanitized := make([]*store.Fact, 0, len(facts))
 	for i, fact := range facts {
 		if fact == nil {
 			continue
@@ -244,12 +255,14 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 			fact.Confidence = 1
 		}
 
-		if err := c.cfg.MemoryStore.Knowledge().PutFact(ctx, workspaceID, fact); err != nil {
-			return 0, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing extracted fact %s for workspace %s", fact.ID, workspaceID)
-		}
-		count++
+		sanitized = append(sanitized, fact)
 	}
-	return count, nil
+
+	// Second pass: persist all sanitized facts atomically.
+	if err := c.cfg.MemoryStore.Knowledge().PutFacts(ctx, workspaceID, sanitized); err != nil {
+		return 0, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing extracted facts for workspace %s", workspaceID)
+	}
+	return len(sanitized), nil
 }
 
 func truncateField(s string, maxLen int) string {

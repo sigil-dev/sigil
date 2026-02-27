@@ -469,6 +469,45 @@ ON CONFLICT(workspace, subject, predicate, object) DO UPDATE SET
 	return nil
 }
 
+// PutFacts inserts multiple facts atomically using a database transaction.
+// If any insert fails, all prior inserts in the batch are rolled back.
+func (k *KnowledgeStore) PutFacts(ctx context.Context, workspaceID string, facts []*store.Fact) error {
+	tx, err := k.db.BeginTx(ctx, nil)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning fact transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const q = `INSERT INTO triples (subject, predicate, object, workspace, metadata, created)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(workspace, subject, predicate, object) DO UPDATE SET
+	metadata = excluded.metadata,
+	created = excluded.created`
+
+	for _, fact := range facts {
+		fm := factTripleMetadata{
+			FactID:     fact.ID,
+			Confidence: fact.Confidence,
+			Source:     fact.Source,
+		}
+		metaJSON, err := json.Marshal(fm)
+		if err != nil {
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling fact metadata: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, q,
+			fact.EntityID, fact.Predicate, fact.Value,
+			workspaceID, string(metaJSON), formatTime(fact.CreatedAt),
+		); err != nil {
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "putting fact %s: %w", fact.ID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "committing fact transaction: %w", err)
+	}
+	return nil
+}
+
 // FindFacts searches for facts by workspace with optional entity and predicate filters.
 // Facts are triples where the predicate is not a reserved entity predicate (type, name, prop:*).
 func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, query store.FactQuery) ([]*store.Fact, error) {
