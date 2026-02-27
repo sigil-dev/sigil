@@ -998,14 +998,16 @@ func TestWireGateway_InvalidDataDir(t *testing.T) {
 	assert.Nil(t, gw, "Gateway must be nil when WireGateway fails")
 }
 
-// TestProviderServiceAdapter_GetHealth tests the six code paths in
+// TestProviderServiceAdapter_GetHealth tests the eight code paths in
 // providerServiceAdapter.GetHealth:
 //  1. CodeProviderNotFound from the registry is translated to CodeServerEntityNotFound
 //  2. Non-NotFound registry error is wrapped as CodeProviderUpstreamFailure
 //  3. Status() returning Health == nil with Available=true: detail.Available is true
 //  4. Status() returning Health == nil with Available=false: detail.Available is false
 //  5. Status() returning populated Health copies the metrics into the detail
-//  6. Status() returning an error wraps it as CodeProviderUpstreamFailure
+//  6. Status() returning populated Health with Available=true propagates Available from Health
+//  7. Status() returning an error wraps it as CodeProviderUpstreamFailure
+//  8. Context cancellation before Status() is called propagates the error
 func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 	t.Run("unknown provider returns CodeServerEntityNotFound", func(t *testing.T) {
 		reg := provider.NewRegistry()
@@ -1114,6 +1116,33 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 			"MetricsAvailable should be true when Health is non-nil")
 	})
 
+	t.Run("populated Health with Available=true reports available", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		wantMetrics := health.Metrics{
+			FailureCount: 0,
+			Available:    true, // Health says available
+		}
+		p := &statusStubProvider{
+			name: "stub",
+			status: provider.ProviderStatus{
+				Provider:  "stub",
+				Available: false, // status.Available diverges from Health.Available
+				Message:   "recovering",
+				Health:    &wantMetrics,
+			},
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		detail, err := adapter.GetHealth(context.Background(), "stub")
+		require.NoError(t, err)
+		require.NotNil(t, detail)
+		assert.True(t, detail.Available,
+			"Available should come from Health.Available when Health is non-nil")
+		assert.True(t, detail.MetricsAvailable,
+			"MetricsAvailable should be true when Health is non-nil")
+	})
+
 	t.Run("Status error returns wrapped upstream failure", func(t *testing.T) {
 		reg := provider.NewRegistry()
 		p := &statusStubProvider{
@@ -1128,6 +1157,23 @@ func TestProviderServiceAdapter_GetHealth(t *testing.T) {
 		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeProviderUpstreamFailure),
 			"expected CodeProviderUpstreamFailure, got: %v", err)
 	})
+
+	t.Run("context cancellation propagates error", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		p := &statusStubProvider{
+			name:     "stub",
+			ctxAware: true,
+		}
+		reg.Register("stub", p)
+		adapter := &providerServiceAdapter{reg: reg}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // cancel immediately before calling GetHealth
+
+		detail, err := adapter.GetHealth(ctx, "stub")
+		require.Error(t, err, "cancelled context must produce an error")
+		assert.Nil(t, detail, "detail must be nil when context is cancelled")
+	})
 }
 
 // registryGetStub implements providerLookup for testing the non-NotFound error path.
@@ -1141,10 +1187,13 @@ func (s *registryGetStub) Get(_ string) (provider.Provider, error) { return s.p,
 // statusStubProvider is a Provider stub that returns a configurable ProviderStatus.
 // Unlike stubProvider (which always returns available=true with no Health),
 // this variant allows tests to inject specific Status() return values.
+// When ctxAware is true, Status() returns ctx.Err() if the context is already
+// cancelled, simulating a blocking RPC that respects context cancellation.
 type statusStubProvider struct {
-	name       string
-	status     provider.ProviderStatus
-	statusErr  error
+	name      string
+	status    provider.ProviderStatus
+	statusErr error
+	ctxAware  bool
 }
 
 func (s *statusStubProvider) Name() string                                               { return s.name }
@@ -1153,7 +1202,12 @@ func (s *statusStubProvider) ListModels(_ context.Context) ([]provider.ModelInfo
 func (s *statusStubProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	return nil, nil
 }
-func (s *statusStubProvider) Status(_ context.Context) (provider.ProviderStatus, error) {
+func (s *statusStubProvider) Status(ctx context.Context) (provider.ProviderStatus, error) {
+	if s.ctxAware {
+		if err := ctx.Err(); err != nil {
+			return provider.ProviderStatus{}, err
+		}
+	}
 	return s.status, s.statusErr
 }
 func (s *statusStubProvider) Close() error { return nil }

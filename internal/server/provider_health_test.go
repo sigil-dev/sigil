@@ -359,6 +359,52 @@ func TestRoutes_GetProviderHealth_MetricsUnavailable(t *testing.T) {
 	assert.Equal(t, "openai", raw["provider"], "key 'provider' must be present")
 }
 
+// TestRoutes_GetProviderHealth_HealthyWithMetrics verifies the canonical healthy state where
+// MetricsAvailable=true, Available=true, FailureCount=0, and no LastFailureAt/CooldownUntil are set.
+// This guards against regressions where the handler zeroes MetricsAvailable on success responses.
+func TestRoutes_GetProviderHealth_HealthyWithMetrics(t *testing.T) {
+	ps := &mockProviderService{
+		healthMap: map[string]*server.ProviderHealthDetail{
+			"anthropic": {
+				Provider:         "anthropic",
+				Message:          "ok",
+				MetricsAvailable: true,
+				Metrics: health.Metrics{
+					Available:    true,
+					FailureCount: 0,
+				},
+			},
+		},
+	}
+	srv := newTestServerWithProviders(t, ps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/anthropic/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err, "response body must be valid JSON")
+
+	assert.Equal(t, true, raw["metrics_available"], "key 'metrics_available' must be true for healthy provider")
+	assert.Equal(t, true, raw["available"], "key 'available' must be true for healthy provider")
+	assert.Equal(t, "anthropic", raw["provider"], "key 'provider' must be present")
+
+	// Verify FailureCount is zero.
+	fc, hasFC := raw["failure_count"]
+	if hasFC {
+		assert.Equal(t, float64(0), fc, "failure_count must be 0 for healthy provider")
+	}
+
+	// omitempty on nil time pointers means these keys must be absent.
+	_, hasLastFailureAt := raw["last_failure_at"]
+	assert.False(t, hasLastFailureAt, "last_failure_at must be absent (omitempty) for healthy provider")
+	_, hasCooldownUntil := raw["cooldown_until"]
+	assert.False(t, hasCooldownUntil, "cooldown_until must be absent (omitempty) for healthy provider")
+}
+
 // nilDetailProviderService is a ProviderService stub that returns (nil, nil) from GetHealth,
 // simulating a contract-violating implementation to exercise the defensive 500 guard.
 type nilDetailProviderService struct{}

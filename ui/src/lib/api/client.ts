@@ -31,8 +31,8 @@ export function validateApiUrl(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
-  } catch {
-    throw new Error(`API URL is not a valid URL: ${url}`);
+  } catch (cause) {
+    throw new Error(`API URL is not a valid URL: ${url}`, { cause });
   }
   const isHttp = parsed.protocol === "http:" || parsed.protocol === "https:";
   if (!isHttp) {
