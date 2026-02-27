@@ -123,6 +123,44 @@ func TestMessageStore_DeleteByIDs(t *testing.T) {
 	assert.Equal(t, int64(0), deleted)
 }
 
+func TestMessageStore_DeleteByIDs_LargeBatch(t *testing.T) {
+	// Verify that DeleteByIDs correctly handles batches exceeding SQLite's
+	// 999-variable limit by splitting into multiple statements and accumulating
+	// the total deleted count across all batches.
+	const count = 1001
+	ctx := context.Background()
+	db := testDBPath(t, "messages-delete-large-batch")
+	ms, err := sqlite.NewMessageStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ms.Close() }()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	ids := make([]string, count)
+	for i := 0; i < count; i++ {
+		ids[i] = fmt.Sprintf("msg-%d", i)
+		err = ms.Append(ctx, "ws-1", &store.Message{
+			ID:        ids[i],
+			SessionID: "sess-1",
+			Role:      store.MessageRoleUser,
+			Content:   fmt.Sprintf("Message %d", i),
+			CreatedAt: base.Add(time.Duration(i) * time.Second),
+		})
+		require.NoError(t, err)
+	}
+
+	n, err := ms.Count(ctx, "ws-1")
+	require.NoError(t, err)
+	require.Equal(t, int64(count), n)
+
+	deleted, err := ms.DeleteByIDs(ctx, "ws-1", ids)
+	require.NoError(t, err)
+	assert.Equal(t, int64(count), deleted)
+
+	remaining, err := ms.Count(ctx, "ws-1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), remaining)
+}
+
 func TestMessageStore_Trim(t *testing.T) {
 	ctx := context.Background()
 	db := testDBPath(t, "messages-trim")

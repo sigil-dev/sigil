@@ -20,7 +20,8 @@ type MemoryStore interface {
 type MessageStore interface {
 	Append(ctx context.Context, workspaceID string, msg *Message) error
 	Search(ctx context.Context, workspaceID string, query string, opts SearchOpts) ([]*Message, error)
-	GetRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*Message, error)
+	GetRange(ctx context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*Message, error)
+	GetOldest(ctx context.Context, workspaceID string, n int) ([]*Message, error)
 	Count(ctx context.Context, workspaceID string) (int64, error)
 	DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error)
 	Trim(ctx context.Context, workspaceID string, keepLast int) (int64, error)

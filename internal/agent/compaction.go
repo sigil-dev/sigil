@@ -9,18 +9,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
-)
-
-// Sentinel time bounds for querying all messages via GetRange.
-// GetRange(from=zero, to=timeMax) is the convention for "fetch all messages"
-// since the MessageStore interface has no dedicated GetAll method.
-var (
-	timeMin = time.Time{}
-	timeMax = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 )
 
 // ShouldCompact returns true when count >= batchSize, indicating
@@ -95,7 +89,7 @@ func NewCompactor(cfg CompactorConfig) (*Compactor, error) {
 // (summarise + extract facts) is deferred to Phase 6.
 func (c *Compactor) RollMessage(ctx context.Context, workspaceID, sessionID string, msg *store.Message) error {
 	if err := c.cfg.MemoryStore.Messages().Append(ctx, workspaceID, msg); err != nil {
-		return err
+		return sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "rolling message for workspace %s session %s", workspaceID, sessionID)
 	}
 
 	return c.cfg.VectorStore.Store(ctx, msg.ID, []float32{0}, map[string]any{
@@ -139,7 +133,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	now := time.Now().UTC()
 	sumID, err := generateSummaryID(now)
 	if err != nil {
-		return nil, err
+		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "generating summary ID for workspace %s", workspaceID)
 	}
 	summary := &store.Summary{
 		ID:          sumID,
@@ -194,21 +188,14 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 }
 
 // loadBatch fetches the oldest BatchSize messages from the memory store.
-// GetRange returns rows sorted by created_at ASC so no in-process sort is needed.
 func (c *Compactor) loadBatch(ctx context.Context, workspaceID string) ([]*store.Message, []string, error) {
-	allMessages, err := c.cfg.MemoryStore.Messages().GetRange(ctx, workspaceID, timeMin, timeMax)
+	batch, err := c.cfg.MemoryStore.Messages().GetOldest(ctx, workspaceID, c.cfg.BatchSize)
 	if err != nil {
 		return nil, nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "loading compaction batch for workspace %s", workspaceID)
 	}
-	if len(allMessages) == 0 {
+	if len(batch) == 0 {
 		return nil, nil, nil
 	}
-
-	batchSize := c.cfg.BatchSize
-	if batchSize > len(allMessages) {
-		batchSize = len(allMessages)
-	}
-	batch := allMessages[:batchSize]
 	return batch, messageIDs(batch), nil
 }
 
@@ -266,10 +253,17 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 }
 
 func truncateField(s string, maxLen int) string {
-	if len(s) > maxLen {
-		return s[:maxLen]
+	if len(s) <= maxLen {
+		return s
 	}
-	return s
+	var b strings.Builder
+	for _, r := range s {
+		if b.Len()+utf8.RuneLen(r) > maxLen {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // generateSummaryID creates a unique summary ID using timestamp and random bytes.

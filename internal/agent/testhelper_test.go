@@ -661,8 +661,19 @@ func (m *mockMessageStore) Search(_ context.Context, _ string, query string, _ s
 	return results, nil
 }
 
-func (m *mockMessageStore) GetRange(_ context.Context, _ string, _, _ time.Time) ([]*store.Message, error) {
+func (m *mockMessageStore) GetRange(_ context.Context, _ string, _, _ time.Time, _ ...int) ([]*store.Message, error) {
 	return nil, nil
+}
+
+func (m *mockMessageStore) GetOldest(_ context.Context, _ string, n int) ([]*store.Message, error) {
+	if n <= 0 || len(m.msgs) == 0 {
+		return nil, nil
+	}
+	end := n
+	if end > len(m.msgs) {
+		end = len(m.msgs)
+	}
+	return m.msgs[:end], nil
 }
 
 func (m *mockMessageStore) Count(_ context.Context, _ string) (int64, error) {

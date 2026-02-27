@@ -6,7 +6,9 @@ package agent_test
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -342,6 +344,51 @@ func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
 	assert.Equal(t, int64(5), count, "messages should not trim when vector storage fails")
 }
 
+func TestCompaction_Compact_VectorDeleteFailure(t *testing.T) {
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	vec.deleteErr = fmt.Errorf("vector delete failed")
+	ss := newMockSessionStore()
+	p := &mockCompactionProvider{
+		summary: "summary",
+		facts: []*store.Fact{
+			{ID: "fact-1", EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: 0.95},
+		},
+		embedding: []float32{1.0},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:   mem,
+		VectorStore:   vec,
+		SessionStore:  ss,
+		Summarizer:    p,
+		Embedder:      p,
+		BatchSize:     5,
+		FactExtractor: p,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	// Summary and facts were committed before Delete was called.
+	assert.Len(t, mem.summaries.summaries, 1, "summary should be stored before Delete is called")
+	assert.Len(t, mem.knowledge.facts, 1, "facts should be stored before Delete is called")
+
+	// The summary embedding was stored before Delete was called; it should be present.
+	// The message placeholder vectors (from RollMessage) are not in this test setup,
+	// but Delete was not called so no vectors were removed.
+	assert.Len(t, vec.vectors, 1, "summary embedding should be stored; Delete did not run so no removal occurred")
+
+	// Messages were not trimmed (DeleteByIDs was not reached).
+	count, countErr := mem.messages.Count(context.Background(), "ws-1")
+	require.NoError(t, countErr)
+	assert.Equal(t, int64(5), count, "messages should not be trimmed when vector Delete fails")
+}
+
 func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	mem := newLifecycleMemoryStore()
 	mem.messages.deleteErr = fmt.Errorf("delete failed")
@@ -510,7 +557,7 @@ func (m *lifecycleMessageStore) Search(_ context.Context, _ string, _ string, _ 
 	return nil, nil
 }
 
-func (m *lifecycleMessageStore) GetRange(_ context.Context, _ string, from, to time.Time) ([]*store.Message, error) {
+func (m *lifecycleMessageStore) GetRange(_ context.Context, _ string, from, to time.Time, limit ...int) ([]*store.Message, error) {
 	if m.getRangeErr != nil {
 		return nil, m.getRangeErr
 	}
@@ -523,7 +570,29 @@ func (m *lifecycleMessageStore) GetRange(_ context.Context, _ string, from, to t
 	sort.Slice(inRange, func(i, j int) bool {
 		return inRange[i].CreatedAt.Before(inRange[j].CreatedAt)
 	})
+	n := 0
+	if len(limit) > 0 {
+		n = limit[0]
+	}
+	if n > 0 && n < len(inRange) {
+		inRange = inRange[:n]
+	}
 	return inRange, nil
+}
+
+func (m *lifecycleMessageStore) GetOldest(_ context.Context, _ string, n int) ([]*store.Message, error) {
+	if m.getRangeErr != nil {
+		return nil, m.getRangeErr
+	}
+	sorted := make([]*store.Message, len(m.msgs))
+	copy(sorted, m.msgs)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
+	})
+	if n > 0 && n < len(sorted) {
+		sorted = sorted[:n]
+	}
+	return sorted, nil
 }
 
 func (m *lifecycleMessageStore) Count(_ context.Context, _ string) (int64, error) {
@@ -670,6 +739,7 @@ type lifecycleVectorStore struct {
 	vectors   map[string]lifecycleVector
 	storeErr  error
 	searchErr error
+	deleteErr error
 }
 
 func newLifecycleVectorStore() *lifecycleVectorStore {
@@ -694,6 +764,9 @@ func (v *lifecycleVectorStore) Search(_ context.Context, _ []float32, _ int, _ m
 }
 
 func (v *lifecycleVectorStore) Delete(_ context.Context, ids []string) error {
+	if v.deleteErr != nil {
+		return v.deleteErr
+	}
 	for _, id := range ids {
 		delete(v.vectors, id)
 	}
@@ -746,6 +819,167 @@ func (m *mockCompactionProvider) Embed(_ context.Context, _ string) ([]float32, 
 		return nil, m.embedErr
 	}
 	return m.embedding, nil
+}
+
+func TestCompaction_storeFacts_Sanitization(t *testing.T) {
+	tests := []struct {
+		name          string
+		inputFacts    []*store.Fact
+		wantFactCount int
+		checkFacts    func(t *testing.T, facts []*store.Fact)
+	}{
+		{
+			name: "101 facts capped to 100",
+			inputFacts: func() []*store.Fact {
+				facts := make([]*store.Fact, 101)
+				for i := range facts {
+					facts[i] = &store.Fact{
+						EntityID:   fmt.Sprintf("entity-%d", i),
+						Predicate:  "role",
+						Value:      "engineer",
+						Confidence: 0.9,
+					}
+				}
+				return facts
+			}(),
+			wantFactCount: 100,
+		},
+		{
+			name: "nil entry mid-slice is skipped",
+			inputFacts: []*store.Fact{
+				{EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: 0.9},
+				nil,
+				{EntityID: "bob", Predicate: "role", Value: "manager", Confidence: 0.8},
+			},
+			wantFactCount: 2,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				entityIDs := make([]string, 0, len(facts))
+				for _, f := range facts {
+					entityIDs = append(entityIDs, f.EntityID)
+				}
+				assert.Contains(t, entityIDs, "alice")
+				assert.Contains(t, entityIDs, "bob")
+			},
+		},
+		{
+			name: "empty EntityID is skipped",
+			inputFacts: []*store.Fact{
+				{EntityID: "", Predicate: "role", Value: "engineer", Confidence: 0.9},
+				{EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: 0.9},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				assert.Equal(t, "alice", facts[0].EntityID)
+			},
+		},
+		{
+			name: "EntityID longer than 4096 chars is truncated",
+			inputFacts: []*store.Fact{
+				{
+					EntityID:   strings.Repeat("x", 5000),
+					Predicate:  "role",
+					Value:      "engineer",
+					Confidence: 0.9,
+				},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				assert.Equal(t, 4096, len(facts[0].EntityID))
+			},
+		},
+		{
+			name: "Confidence NaN stored as 0.0",
+			inputFacts: []*store.Fact{
+				{EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: math.NaN()},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				assert.Equal(t, 0.0, facts[0].Confidence)
+			},
+		},
+		{
+			name: "Confidence -0.5 stored as 0.0",
+			inputFacts: []*store.Fact{
+				{EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: -0.5},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				assert.Equal(t, 0.0, facts[0].Confidence)
+			},
+		},
+		{
+			name: "Confidence 1.5 stored as 1.0",
+			inputFacts: []*store.Fact{
+				{EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: 1.5},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				assert.Equal(t, 1.0, facts[0].Confidence)
+			},
+		},
+		{
+			name: "Confidence +Inf stored as 0.0",
+			inputFacts: []*store.Fact{
+				{EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: math.Inf(1)},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				// +Inf matches IsInf branch, clamped to 0 before the >1 check.
+				assert.Equal(t, 0.0, facts[0].Confidence)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := newLifecycleMemoryStore()
+			vec := newLifecycleVectorStore()
+			ss := newMockSessionStore()
+			p := &mockCompactionProvider{
+				summary:   "test summary",
+				facts:     tt.inputFacts,
+				embedding: []float32{0.1},
+			}
+
+			// Need enough messages to exceed BatchSize and trigger Compact.
+			appendMessages(t, mem.messages, "ws-san", 5)
+
+			c, newErr := agent.NewCompactor(agent.CompactorConfig{
+				MemoryStore:   mem,
+				VectorStore:   vec,
+				SessionStore:  ss,
+				Summarizer:    p,
+				Embedder:      p,
+				BatchSize:     5,
+				FactExtractor: p,
+			})
+			require.NoError(t, newErr)
+
+			result, err := c.Compact(context.Background(), "ws-san")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			assert.Equal(t, tt.wantFactCount, result.FactsExtracted)
+			assert.Len(t, mem.knowledge.facts, tt.wantFactCount)
+
+			if tt.checkFacts != nil {
+				tt.checkFacts(t, mem.knowledge.facts)
+			}
+		})
+	}
 }
 
 func appendMessages(t *testing.T, ms *lifecycleMessageStore, workspaceID string, n int) {

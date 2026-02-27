@@ -198,15 +198,50 @@ LIMIT ? OFFSET ?`
 }
 
 // GetRange returns messages created between from (inclusive) and to (exclusive).
-func (m *MessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*store.Message, error) {
-	const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
+// An optional limit restricts the number of rows returned; 0 or omitted means unlimited.
+func (m *MessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*store.Message, error) {
+	n := 0
+	if len(limit) > 0 {
+		n = limit[0]
+	}
+
+	var rows *sql.Rows
+	var err error
+
+	if n > 0 {
+		const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
+FROM memory_messages
+WHERE workspace_id = ? AND created_at >= ? AND created_at < ?
+ORDER BY created_at ASC
+LIMIT ?`
+		rows, err = m.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to), n)
+	} else {
+		const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
 FROM memory_messages
 WHERE workspace_id = ? AND created_at >= ? AND created_at < ?
 ORDER BY created_at ASC`
+		rows, err = m.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
+	}
 
-	rows, err := m.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting message range: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	return scanMessages(rows)
+}
+
+// GetOldest returns the n oldest messages for the workspace, sorted by created_at ASC.
+func (m *MessageStore) GetOldest(ctx context.Context, workspaceID string, n int) ([]*store.Message, error) {
+	const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
+FROM memory_messages
+WHERE workspace_id = ?
+ORDER BY created_at ASC
+LIMIT ?`
+
+	rows, err := m.db.QueryContext(ctx, q, workspaceID, n)
+	if err != nil {
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting oldest messages: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 

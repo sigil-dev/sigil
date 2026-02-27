@@ -125,8 +125,9 @@ type LifecycleConfig struct {
 }
 
 // ParseManifest parses YAML data into a Manifest and validates it.
-// All validation errors are joined into a single error via errors.Join;
-// individual errors are accessible via the Unwrap() []error interface.
+// Validation errors are wrapped in a single sigilerr error with
+// CodePluginManifestValidateInvalid; individual sub-errors are
+// accessible via the Unwrap() []error interface on the wrapped join error.
 func ParseManifest(data []byte) (*Manifest, error) {
 	var m Manifest
 	if err := yaml.Unmarshal(data, &m); err != nil {
@@ -135,7 +136,8 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	}
 
 	if errs := m.Validate(); len(errs) > 0 {
-		return nil, errors.Join(errs...)
+		return nil, sigilerr.Errorf(sigilerr.CodePluginManifestValidateInvalid,
+			"manifest validation failed: %w", errors.Join(errs...))
 	}
 
 	return &m, nil

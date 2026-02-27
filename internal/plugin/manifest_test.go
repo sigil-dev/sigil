@@ -4,6 +4,7 @@
 package plugin_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -58,7 +59,11 @@ execution:
 	_, err := plugin.ParseManifest([]byte(yaml))
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "type")
-	subErrs := err.(interface{ Unwrap() []error }).Unwrap()
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+		"top-level ParseManifest error should have CodePluginManifestValidateInvalid")
+	var joinErr interface{ Unwrap() []error }
+	require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+	subErrs := joinErr.Unwrap()
 	assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"manifest type validation error should have CodePluginManifestValidateInvalid")
 }
@@ -72,7 +77,9 @@ execution:
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
 	require.Error(t, err)
-	subErrs := err.(interface{ Unwrap() []error }).Unwrap()
+	var joinErr interface{ Unwrap() []error }
+	require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+	subErrs := joinErr.Unwrap()
 	assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"missing name error should have CodePluginManifestValidateInvalid")
 }
@@ -87,7 +94,9 @@ execution:
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
 	require.Error(t, err)
-	subErrs := err.(interface{ Unwrap() []error }).Unwrap()
+	var joinErr interface{ Unwrap() []error }
+	require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+	subErrs := joinErr.Unwrap()
 	assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"invalid tier error should have CodePluginManifestValidateInvalid")
 }
@@ -128,7 +137,9 @@ capabilities:
 `
 		_, err := plugin.ParseManifest([]byte(yaml))
 		require.Error(t, err)
-		subErrs := err.(interface{ Unwrap() []error }).Unwrap()
+		var joinErr interface{ Unwrap() []error }
+		require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+		subErrs := joinErr.Unwrap()
 		assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid))
 		assert.ErrorContains(t, err, "execution.image")
 	})
@@ -147,7 +158,9 @@ capabilities:
 `
 		_, err := plugin.ParseManifest([]byte(yaml))
 		require.Error(t, err)
-		subErrs := err.(interface{ Unwrap() []error }).Unwrap()
+		var joinErr interface{ Unwrap() []error }
+		require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+		subErrs := joinErr.Unwrap()
 		assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid))
 		assert.ErrorContains(t, err, "execution.memory_limit")
 	})
@@ -167,7 +180,9 @@ capabilities:
 `
 		_, err := plugin.ParseManifest([]byte(yaml))
 		require.Error(t, err)
-		subErrs := err.(interface{ Unwrap() []error }).Unwrap()
+		var joinErr interface{ Unwrap() []error }
+		require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+		subErrs := joinErr.Unwrap()
 		assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid))
 		assert.ErrorContains(t, err, "execution.network")
 	})
@@ -234,7 +249,9 @@ capabilities:
 `
 		_, err := plugin.ParseManifest([]byte(yaml))
 		require.Error(t, err)
-		subErrs := err.(interface{ Unwrap() []error }).Unwrap()
+		var joinErr interface{ Unwrap() []error }
+		require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+		subErrs := joinErr.Unwrap()
 		assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid))
 		assert.ErrorContains(t, err, "execution.image")
 	})

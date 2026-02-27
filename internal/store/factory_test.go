@@ -150,7 +150,11 @@ func (m *mockMessageStore) Search(ctx context.Context, workspaceID string, query
 	return nil, nil
 }
 
-func (m *mockMessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*store.Message, error) {
+func (m *mockMessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*store.Message, error) {
+	return nil, nil
+}
+
+func (m *mockMessageStore) GetOldest(ctx context.Context, workspaceID string, n int) ([]*store.Message, error) {
 	return nil, nil
 }
 
