@@ -587,7 +587,7 @@ func TestCompaction_Compact_OrphanVectorRetryQueue(t *testing.T) {
 	// Remove the Confirm error so the second Compact can succeed.
 	mem.summaries.confirmErr = nil
 	// Also need fresh messages to exceed the batch threshold again.
-	appendMessages(t, mem.messages, "ws-orphan", 5)
+	appendMessages(t, mem.messages, "ws-orphan", 5, 5)
 
 	// Second Compact: drainOrphans() runs first (retry succeeds), then full compaction.
 	result2, err2 := c.Compact(context.Background(), "ws-orphan")
@@ -1329,16 +1329,22 @@ func TestCompaction_Compact_LoadBatchFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "loading compaction batch")
 }
 
-func appendMessages(t *testing.T, ms *lifecycleMessageStore, workspaceID string, n int) {
+func appendMessages(t *testing.T, ms *lifecycleMessageStore, workspaceID string, n int, startIndex ...int) {
 	t.Helper()
+
+	start := 0
+	if len(startIndex) > 0 {
+		start = startIndex[0]
+	}
 
 	now := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 	for i := range n {
+		idx := start + i
 		err := ms.Append(context.Background(), workspaceID, &store.Message{
-			ID:        fmt.Sprintf("msg-%d", i),
+			ID:        fmt.Sprintf("msg-%d", idx),
 			Role:      store.MessageRoleUser,
-			Content:   fmt.Sprintf("message %d", i),
-			CreatedAt: now.Add(time.Duration(i) * time.Minute),
+			Content:   fmt.Sprintf("message %d", idx),
+			CreatedAt: now.Add(time.Duration(idx) * time.Minute),
 		})
 		require.NoError(t, err)
 	}

@@ -7,7 +7,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -143,9 +142,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 // Confirm promotes a pending summary to committed status.
 func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryID string) error {
-	q := fmt.Sprintf(`UPDATE summaries SET status = '%s' WHERE id = ? AND workspace_id = ? AND status = '%s'`,
-		summaryStatusCommitted, summaryStatusPending)
-	res, err := s.db.ExecContext(ctx, q, summaryID, workspaceID)
+	const q = `UPDATE summaries SET status = ? WHERE id = ? AND workspace_id = ? AND status = ?`
+	res, err := s.db.ExecContext(ctx, q, summaryStatusCommitted, summaryID, workspaceID, summaryStatusPending)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: %w", summaryID, err)
 	}
@@ -177,12 +175,12 @@ func (s *SummaryStore) Delete(ctx context.Context, workspaceID string, summaryID
 // A summary is included if its from_time >= from AND to_time <= to.
 // Pending summaries are excluded to prevent partially-compacted data from leaking.
 func (s *SummaryStore) GetByRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*store.Summary, error) {
-	q := fmt.Sprintf(`SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at, status
+	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at, status
 FROM summaries
-WHERE workspace_id = ? AND from_time >= ? AND to_time <= ? AND status = '%s'
-ORDER BY from_time ASC`, summaryStatusCommitted)
+WHERE workspace_id = ? AND from_time >= ? AND to_time <= ? AND status = ?
+ORDER BY from_time ASC`
 
-	rows, err := s.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
+	rows, err := s.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to), summaryStatusCommitted)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting summaries by range: %w", err)
 	}
@@ -194,13 +192,13 @@ ORDER BY from_time ASC`, summaryStatusCommitted)
 // GetLatest returns the n most recent committed summaries ordered by created_at descending.
 // Pending summaries are excluded to prevent partially-compacted data from leaking.
 func (s *SummaryStore) GetLatest(ctx context.Context, workspaceID string, n int) ([]*store.Summary, error) {
-	q := fmt.Sprintf(`SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at, status
+	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at, status
 FROM summaries
-WHERE workspace_id = ? AND status = '%s'
+WHERE workspace_id = ? AND status = ?
 ORDER BY created_at DESC
-LIMIT ?`, summaryStatusCommitted)
+LIMIT ?`
 
-	rows, err := s.db.QueryContext(ctx, q, workspaceID, n)
+	rows, err := s.db.QueryContext(ctx, q, workspaceID, summaryStatusCommitted, n)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting latest summaries: %w", err)
 	}

@@ -362,6 +362,7 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 					"partial_commit", true,
 					"summary_id", compactResult.SummaryID,
 					"message_ids_count", len(compactResult.MessageIDs),
+					"message_ids", compactResult.MessageIDs,
 				)
 			}
 			slog.WarnContext(ctx, "compaction trigger failed (best-effort)", fields...)
