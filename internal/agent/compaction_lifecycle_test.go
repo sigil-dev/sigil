@@ -562,6 +562,7 @@ type lifecycleMessageStore struct {
 	msgs               []*store.Message
 	countErr           error
 	getRangeErr        error
+	getOldestErr       error
 	deleteErr          error
 	appendBeforeDelete func() error
 }
@@ -599,8 +600,8 @@ func (m *lifecycleMessageStore) GetRange(_ context.Context, _ string, from, to t
 }
 
 func (m *lifecycleMessageStore) GetOldest(_ context.Context, _ string, n int) ([]*store.Message, error) {
-	if m.getRangeErr != nil {
-		return nil, m.getRangeErr
+	if m.getOldestErr != nil {
+		return nil, m.getOldestErr
 	}
 	sorted := make([]*store.Message, len(m.msgs))
 	copy(sorted, m.msgs)
@@ -1071,7 +1072,7 @@ func TestCompaction_Compact_LoadBatchFailure(t *testing.T) {
 	}
 
 	appendMessages(t, mem.messages, "ws-1", 5)
-	mem.messages.getRangeErr = fmt.Errorf("get oldest failed")
+	mem.messages.getOldestErr = fmt.Errorf("get oldest failed")
 
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:  mem,
