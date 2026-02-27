@@ -121,6 +121,7 @@ func TestGoogleProvider_Status_AfterFailure(t *testing.T) {
 	assert.False(t, status.Health.Available)
 	assert.Equal(t, int64(1), status.Health.FailureCount)
 	assert.NotNil(t, status.Health.CooldownUntil)
+	assert.NotNil(t, status.Health.LastFailureAt)
 }
 
 func TestGoogleProvider_Available(t *testing.T) {
