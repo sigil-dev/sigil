@@ -39,6 +39,9 @@ func TestNewCompactor_Validation(t *testing.T) {
 	ms := newMockMemoryStore()
 	vs := newMockVectorStore()
 
+	sum := noopSummarizer{}
+	emb := noopEmbedder{}
+
 	tests := []struct {
 		name    string
 		cfg     agent.CompactorConfig
@@ -46,23 +49,33 @@ func TestNewCompactor_Validation(t *testing.T) {
 	}{
 		{
 			name:    "nil MemoryStore",
-			cfg:     agent.CompactorConfig{VectorStore: vs, BatchSize: 5},
+			cfg:     agent.CompactorConfig{VectorStore: vs, Summarizer: sum, Embedder: emb, BatchSize: 5},
 			wantErr: "MemoryStore must not be nil",
 		},
 		{
 			name:    "nil VectorStore",
-			cfg:     agent.CompactorConfig{MemoryStore: ms, BatchSize: 5},
+			cfg:     agent.CompactorConfig{MemoryStore: ms, Summarizer: sum, Embedder: emb, BatchSize: 5},
 			wantErr: "VectorStore must not be nil",
 		},
 		{
 			name:    "zero BatchSize",
-			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, BatchSize: 0},
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, Summarizer: sum, Embedder: emb, BatchSize: 0},
 			wantErr: "BatchSize must be positive",
 		},
 		{
 			name:    "negative BatchSize",
-			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, BatchSize: -1},
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, Summarizer: sum, Embedder: emb, BatchSize: -1},
 			wantErr: "BatchSize must be positive",
+		},
+		{
+			name:    "nil Summarizer",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, Embedder: emb, BatchSize: 5},
+			wantErr: "Summarizer must not be nil",
+		},
+		{
+			name:    "nil Embedder",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, Summarizer: sum, BatchSize: 5},
+			wantErr: "Embedder must not be nil",
 		},
 	}
 
@@ -84,6 +97,8 @@ func TestCompaction_RollMessage(t *testing.T) {
 		MemoryStore:  ms,
 		VectorStore:  vs,
 		SessionStore: ss,
+		Summarizer:   noopSummarizer{},
+		Embedder:     noopEmbedder{},
 		BatchSize:    50,
 	})
 	require.NoError(t, err)
@@ -118,6 +133,8 @@ func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
 		MemoryStore:  memStoreErr,
 		VectorStore:  vs,
 		SessionStore: ss,
+		Summarizer:   noopSummarizer{},
+		Embedder:     noopEmbedder{},
 		BatchSize:    50,
 	})
 	require.NoError(t, err)
@@ -150,6 +167,8 @@ func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
 		MemoryStore:  ms,
 		VectorStore:  vs,
 		SessionStore: ss,
+		Summarizer:   noopSummarizer{},
+		Embedder:     noopEmbedder{},
 		BatchSize:    50,
 	})
 	require.NoError(t, err)

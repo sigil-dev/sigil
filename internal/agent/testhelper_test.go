@@ -853,6 +853,22 @@ func (m *mockVectorStore) Delete(_ context.Context, ids []string) error {
 
 func (m *mockVectorStore) Close() error { return nil }
 
+// ---------------------------------------------------------------------------
+// Summarizer / Embedder no-op mocks for tests that only exercise RollMessage.
+// ---------------------------------------------------------------------------
+
+type noopSummarizer struct{}
+
+func (noopSummarizer) Summarize(_ context.Context, _ []*store.Message) (string, error) {
+	return "", nil
+}
+
+type noopEmbedder struct{}
+
+func (noopEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	return []float32{0}, nil
+}
+
 // --- Error-returning mock variants ---
 
 // mockMessageStoreError returns an error from Append.

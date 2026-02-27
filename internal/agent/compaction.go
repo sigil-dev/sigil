@@ -8,14 +8,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"math"
 	"time"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
-// Sentinel time bounds for querying all messages regardless of timestamp.
+// Sentinel time bounds for querying all messages via GetRange.
+// GetRange(from=zero, to=timeMax) is the convention for "fetch all messages"
+// since the MessageStore interface has no dedicated GetAll method.
 var (
 	timeMin = time.Time{}
 	timeMax = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
@@ -27,10 +29,13 @@ func ShouldCompact(count int64, batchSize int) bool {
 	return count >= int64(batchSize)
 }
 
-// Summarizer performs summarization and fact extraction for the
-// compaction lifecycle.
+// Summarizer produces text summaries from messages during compaction.
 type Summarizer interface {
 	Summarize(ctx context.Context, messages []*store.Message) (string, error)
+}
+
+// FactExtractor extracts structured facts from a summary and its source messages.
+type FactExtractor interface {
 	ExtractFacts(ctx context.Context, summary string, messages []*store.Message) ([]*store.Fact, error)
 }
 
@@ -41,13 +46,13 @@ type Embedder interface {
 
 // CompactorConfig holds the dependencies and tuning parameters for a Compactor.
 type CompactorConfig struct {
-	MemoryStore  store.MemoryStore
-	VectorStore  store.VectorStore
-	SessionStore store.SessionStore
-	Summarizer   Summarizer
-	Embedder     Embedder
-	BatchSize    int
-	ExtractFacts bool
+	MemoryStore   store.MemoryStore
+	VectorStore   store.VectorStore
+	SessionStore  store.SessionStore
+	Summarizer    Summarizer
+	Embedder      Embedder
+	FactExtractor FactExtractor
+	BatchSize     int
 }
 
 // Compactor manages the memory compaction lifecycle: rolling messages into
@@ -61,7 +66,7 @@ type CompactionResult struct {
 	SummariesCreated  int
 	FactsExtracted    int
 	MessagesProcessed int
-	MessagesTrimmed   int64
+	MessagesTrimmed   int
 }
 
 // NewCompactor creates a Compactor with the given configuration.
@@ -75,6 +80,12 @@ func NewCompactor(cfg CompactorConfig) (*Compactor, error) {
 	}
 	if cfg.BatchSize <= 0 {
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "CompactorConfig.BatchSize must be positive")
+	}
+	if cfg.Summarizer == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "CompactorConfig.Summarizer must not be nil")
+	}
+	if cfg.Embedder == nil {
+		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "CompactorConfig.Embedder must not be nil")
 	}
 	return &Compactor{cfg: cfg}, nil
 }
@@ -101,12 +112,6 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	if workspaceID == "" {
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "workspaceID must not be empty")
 	}
-	if c.cfg.Summarizer == nil {
-		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Summarizer is required for compaction")
-	}
-	if c.cfg.Embedder == nil {
-		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "Embedder is required for compaction")
-	}
 
 	count, err := c.cfg.MemoryStore.Messages().Count(ctx, workspaceID)
 	if err != nil {
@@ -132,8 +137,12 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	}
 
 	now := time.Now().UTC()
+	sumID, err := generateSummaryID(now)
+	if err != nil {
+		return nil, err
+	}
 	summary := &store.Summary{
-		ID:          generateSummaryID(now),
+		ID:          sumID,
 		WorkspaceID: workspaceID,
 		FromTime:    batch[0].CreatedAt,
 		ToTime:      batch[len(batch)-1].CreatedAt,
@@ -148,7 +157,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	result.SummariesCreated = 1
 	result.MessagesProcessed = len(batch)
 
-	if c.cfg.ExtractFacts {
+	if c.cfg.FactExtractor != nil {
 		n, err := c.storeFacts(ctx, workspaceID, summary.ID, summaryText, batch, now)
 		if err != nil {
 			return nil, err
@@ -179,12 +188,13 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	if err != nil {
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "deleting compacted messages for workspace %s", workspaceID)
 	}
-	result.MessagesTrimmed = trimmed
+	result.MessagesTrimmed = int(trimmed)
 
 	return result, nil
 }
 
-// loadBatch fetches all messages, sorts by time, and returns the oldest BatchSize entries.
+// loadBatch fetches the oldest BatchSize messages from the memory store.
+// GetRange returns rows sorted by created_at ASC so no in-process sort is needed.
 func (c *Compactor) loadBatch(ctx context.Context, workspaceID string) ([]*store.Message, []string, error) {
 	allMessages, err := c.cfg.MemoryStore.Messages().GetRange(ctx, workspaceID, timeMin, timeMax)
 	if err != nil {
@@ -194,13 +204,6 @@ func (c *Compactor) loadBatch(ctx context.Context, workspaceID string) ([]*store
 		return nil, nil, nil
 	}
 
-	sort.Slice(allMessages, func(i, j int) bool {
-		if allMessages[i].CreatedAt.Equal(allMessages[j].CreatedAt) {
-			return allMessages[i].ID < allMessages[j].ID
-		}
-		return allMessages[i].CreatedAt.Before(allMessages[j].CreatedAt)
-	})
-
 	batchSize := c.cfg.BatchSize
 	if batchSize > len(allMessages) {
 		batchSize = len(allMessages)
@@ -209,12 +212,23 @@ func (c *Compactor) loadBatch(ctx context.Context, workspaceID string) ([]*store
 	return batch, messageIDs(batch), nil
 }
 
+// maxFactsPerCompaction caps the number of facts that can be extracted from a
+// single compaction batch, preventing LLM output from exhausting memory/storage.
+const maxFactsPerCompaction = 100
+
+// maxFactFieldLen caps the length of untrusted text fields on extracted facts.
+const maxFactFieldLen = 4096
+
 // storeFacts extracts facts from the summarized batch and persists them.
-// IDs and WorkspaceIDs are always overwritten — provider output is untrusted.
+// All provider-supplied fields are validated and sanitized — LLM output is untrusted.
 func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summaryText string, batch []*store.Message, now time.Time) (int, error) {
-	facts, err := c.cfg.Summarizer.ExtractFacts(ctx, summaryText, batch)
+	facts, err := c.cfg.FactExtractor.ExtractFacts(ctx, summaryText, batch)
 	if err != nil {
 		return 0, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "extracting facts for workspace %s", workspaceID)
+	}
+
+	if len(facts) > maxFactsPerCompaction {
+		facts = facts[:maxFactsPerCompaction]
 	}
 
 	count := 0
@@ -222,11 +236,25 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 		if fact == nil {
 			continue
 		}
-		// Always override — do not trust provider-returned values.
+		// Always override identity and scoping — do not trust provider-returned values.
 		fact.ID = fmt.Sprintf("%s-fact-%d", summaryID, i)
 		fact.WorkspaceID = workspaceID
-		if fact.CreatedAt.IsZero() {
-			fact.CreatedAt = now
+		fact.CreatedAt = now
+		fact.Source = "compaction"
+
+		// Validate and truncate untrusted text fields.
+		if fact.EntityID == "" {
+			continue
+		}
+		fact.EntityID = truncateField(fact.EntityID, maxFactFieldLen)
+		fact.Predicate = truncateField(fact.Predicate, maxFactFieldLen)
+		fact.Value = truncateField(fact.Value, maxFactFieldLen)
+
+		// Clamp confidence to valid range.
+		if math.IsNaN(fact.Confidence) || math.IsInf(fact.Confidence, 0) || fact.Confidence < 0 {
+			fact.Confidence = 0
+		} else if fact.Confidence > 1 {
+			fact.Confidence = 1
 		}
 
 		if err := c.cfg.MemoryStore.Knowledge().PutFact(ctx, workspaceID, fact); err != nil {
@@ -237,11 +265,20 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 	return count, nil
 }
 
+func truncateField(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen]
+	}
+	return s
+}
+
 // generateSummaryID creates a unique summary ID using timestamp and random bytes.
-func generateSummaryID(t time.Time) string {
+func generateSummaryID(t time.Time) (string, error) {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("sum-%d-%s", t.UnixNano(), hex.EncodeToString(b))
+	if _, err := rand.Read(b); err != nil {
+		return "", sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "generating summary ID: crypto/rand unavailable")
+	}
+	return fmt.Sprintf("sum-%d-%s", t.UnixNano(), hex.EncodeToString(b)), nil
 }
 
 func messageIDs(messages []*store.Message) []string {

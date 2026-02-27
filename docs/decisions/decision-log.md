@@ -1362,3 +1362,69 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 **Rationale:** Optional registration handles the case where Sigil runs without any providers configured (e.g., channel-only deployments). The admin:providers capability follows the existing ABAC pattern. The adapter pattern matches the existing service adapters (workspaceServiceAdapter, pluginServiceAdapter, etc.).
 
 **Ref:** PR #28, sigil-cv7y review epic, sigil-kqd.307, `docs/design/07-provider-system.md`
+
+---
+
+## D085: DeleteByIDs Replaces Trim for Concurrent-Append Race Safety
+
+**Status:** Decided (2026-02-27)
+
+**Question:** Should compaction remove processed messages using `Trim(keepLast)` as specified in the plan, or using `DeleteByIDs` targeting only the captured batch?
+
+**Context:** The plan doc (docs/plans/06-phase-6-advanced-features.md Task 4, Step 3, point 7) specified "Trim processed messages from Tier 1." The implementation uses `DeleteByIDs` instead. This was a deliberate deviation to fix a concurrent-append race condition: `Trim(keepLast)` could delete messages appended after the compaction window was captured, whereas `DeleteByIDs` targets only the exact IDs captured in the batch.
+
+**Options considered:**
+
+1. Trim with pre-computed keepLast accounting for post-batch appends — Complex to compute correctly, still racy under high concurrency.
+2. DeleteByIDs targeting captured batch IDs — Targets exact messages, immune to concurrent appends. Requires adding DeleteByIDs to MessageStore interface.
+3. Trim within a transaction lock — Prevents concurrent appends during trim but adds lock contention.
+
+**Decision:** Option 2. `DeleteByIDs` was added to the `store.MessageStore` interface. The compaction method `Compact()` collects batch message IDs during `loadBatch()`, then passes those exact IDs to `DeleteByIDs` after summarization. This also addresses the interface cohesion concern — `DeleteByIDs` serves a distinct purpose (targeted deletion of known IDs) vs `Trim` (retain last N).
+
+**Rationale:** Correctness over spec adherence. The race condition is a real data-loss risk in production where messages can arrive while compaction runs. The ID-based approach is deterministic and auditable (the exact IDs deleted are logged).
+
+**Ref:** PR #29, `internal/agent/compaction.go`, `internal/store/memory.go`
+
+---
+
+## D086: WindowSize Removed from CompactorConfig
+
+**Status:** Decided (2026-02-27)
+
+**Question:** Should `CompactorConfig` expose both `BatchSize` and `WindowSize` parameters as specified in the plan, or only `BatchSize`?
+
+**Context:** The plan doc specified both `BatchSize` and `WindowSize` parameters for `CompactorConfig`. The implementation uses only `BatchSize` as the sole pagination parameter for compaction batches.
+
+**Options considered:**
+
+1. Keep both BatchSize and WindowSize — More flexible but adds configuration complexity without a clear use case.
+2. Use only BatchSize — Simpler, single knob. The "window" concept is implicit in BatchSize (process the oldest N messages).
+3. Add WindowSize later when time-based windowing is needed — YAGNI principle.
+
+**Decision:** Option 2. `BatchSize` serves as both the trigger threshold (via `ShouldCompact`) and the batch size for `loadBatch`. `WindowSize` was removed as unnecessary complexity with no distinct semantic difference from `BatchSize` in the current implementation.
+
+**Rationale:** YAGNI. Adding a second size parameter without a concrete use case increases configuration surface area. If time-based windowing becomes needed (e.g., "compact messages older than 24 hours"), it can be added as a distinct parameter with clear semantics rather than overloading the existing one.
+
+**Ref:** PR #29, `internal/agent/compaction.go`, `docs/plans/06-phase-6-advanced-features.md`
+
+---
+
+## D087: Summarizer and Embedder as Explicit Interface Boundaries
+
+**Status:** Decided (2026-02-27)
+
+**Question:** Where should the `Summarizer` and `Embedder` interfaces introduced by the Phase 6 compaction system be documented?
+
+**Context:** The compaction system introduces two new interfaces — `Summarizer` (text summarization) and `Embedder` (vector embedding) — that form a boundary between the agent loop and the LLM provider layer. These interfaces are not documented in the design docs but represent an emergent architectural boundary.
+
+**Options considered:**
+
+1. Document interfaces in the design doc — Modify `docs/design/08-agent-core.md`. But design docs are immutable per project convention.
+2. Document interfaces in decision log only — Record the design rationale here.
+3. Add a dedicated interface spec document — Overkill for two small interfaces.
+
+**Decision:** Option 2. The `Summarizer` and `Embedder` interfaces are documented here as part of the Phase 6 memory compaction system. `Summarizer` transforms a batch of messages into a text summary. `Embedder` converts text to a vector embedding for similarity search. Both are injected into `CompactorConfig` and validated at construction time. A separate `FactExtractor` interface handles optional fact extraction from summaries.
+
+**Rationale:** Design docs are immutable specs. The decision log is the appropriate place to document emergent interfaces that arise during implementation. These interfaces follow the project's "accept interfaces, return structs" pattern and serve as the provider abstraction boundary for the compaction subsystem.
+
+**Ref:** PR #29, `internal/agent/compaction.go`, `docs/design/08-agent-core.md`

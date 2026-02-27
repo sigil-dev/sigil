@@ -35,7 +35,7 @@ func TestCompaction_Compact_NoOpBelowThreshold(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          true,
+		FactExtractor: p,
 	})
 	require.NoError(t, newErr)
 
@@ -46,7 +46,7 @@ func TestCompaction_Compact_NoOpBelowThreshold(t *testing.T) {
 	assert.Equal(t, 0, result.SummariesCreated)
 	assert.Equal(t, 0, result.FactsExtracted)
 	assert.Equal(t, 0, result.MessagesProcessed)
-	assert.Equal(t, int64(0), result.MessagesTrimmed)
+	assert.Equal(t, 0, result.MessagesTrimmed)
 	assert.Equal(t, 0, p.summarizeCalls)
 	assert.Equal(t, 0, p.extractCalls)
 	assert.Equal(t, 0, p.embedCalls)
@@ -77,7 +77,7 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          true,
+		FactExtractor: p,
 	})
 	require.NoError(t, newErr)
 
@@ -88,7 +88,7 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 	assert.Equal(t, 1, result.SummariesCreated)
 	assert.Equal(t, 2, result.FactsExtracted)
 	assert.Equal(t, 5, result.MessagesProcessed)
-	assert.Equal(t, int64(5), result.MessagesTrimmed)
+	assert.Equal(t, 5, result.MessagesTrimmed)
 	assert.Equal(t, 1, p.summarizeCalls)
 	assert.Equal(t, 1, p.extractCalls)
 	assert.Equal(t, 1, p.embedCalls)
@@ -135,7 +135,7 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsDisabled(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          false,
+
 	})
 	require.NoError(t, newErr)
 
@@ -146,7 +146,7 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsDisabled(t *testing.T) {
 	assert.Equal(t, 1, result.SummariesCreated)
 	assert.Equal(t, 0, result.FactsExtracted)
 	assert.Equal(t, 5, result.MessagesProcessed)
-	assert.Equal(t, int64(5), result.MessagesTrimmed)
+	assert.Equal(t, 5, result.MessagesTrimmed)
 	assert.Equal(t, 1, p.summarizeCalls)
 	assert.Equal(t, 0, p.extractCalls, "fact extraction should be skipped when disabled")
 	assert.Equal(t, 1, p.embedCalls)
@@ -171,7 +171,7 @@ func TestCompaction_Compact_SummarizeProviderFailure(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          true,
+		FactExtractor: p,
 	})
 	require.NoError(t, newErr)
 
@@ -203,7 +203,7 @@ func TestCompaction_Compact_SummaryStoreFailure(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          true,
+		FactExtractor: p,
 	})
 	require.NoError(t, newErr)
 
@@ -234,7 +234,7 @@ func TestCompaction_Compact_FactExtractionProviderFailure(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          true,
+		FactExtractor: p,
 	})
 	require.NoError(t, newErr)
 
@@ -269,7 +269,7 @@ func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          true,
+		FactExtractor: p,
 	})
 	require.NoError(t, newErr)
 
@@ -299,7 +299,7 @@ func TestCompaction_Compact_EmbeddingProviderFailure(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          false,
+
 	})
 	require.NoError(t, newErr)
 
@@ -329,7 +329,7 @@ func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          false,
+
 	})
 	require.NoError(t, newErr)
 
@@ -361,7 +361,7 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          false,
+
 	})
 	require.NoError(t, newErr)
 
@@ -398,7 +398,7 @@ func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          false,
+
 	})
 	require.NoError(t, newErr)
 
@@ -406,7 +406,7 @@ func TestCompaction_Compact_PreservesMessageAppendedDuringCompaction(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, 5, result.MessagesProcessed)
-	assert.Equal(t, int64(5), result.MessagesTrimmed)
+	assert.Equal(t, 5, result.MessagesTrimmed)
 
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, countErr)
@@ -449,7 +449,7 @@ func TestCompaction_Compact_PreservesMessageAppendedAfterCountBeforeDelete(t *te
 		Summarizer:   p,
 		Embedder:     p,
 		BatchSize:             5,
-		ExtractFacts:          false,
+
 	})
 	require.NoError(t, newErr)
 
@@ -457,7 +457,7 @@ func TestCompaction_Compact_PreservesMessageAppendedAfterCountBeforeDelete(t *te
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, 5, result.MessagesProcessed)
-	assert.Equal(t, int64(5), result.MessagesTrimmed)
+	assert.Equal(t, 5, result.MessagesTrimmed)
 
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, countErr)
@@ -494,12 +494,10 @@ func (m *lifecycleMemoryStore) Knowledge() store.KnowledgeStore { return m.knowl
 func (m *lifecycleMemoryStore) Close() error                    { return nil }
 
 type lifecycleMessageStore struct {
-	msgs         []*store.Message
-	countErr     error
-	getRangeErr  error
-	deleteErr    error
-	trimErr      error
-	lastTrimKeep int
+	msgs               []*store.Message
+	countErr           error
+	getRangeErr        error
+	deleteErr          error
 	appendBeforeDelete func() error
 }
 
@@ -536,16 +534,6 @@ func (m *lifecycleMessageStore) Count(_ context.Context, _ string) (int64, error
 }
 
 func (m *lifecycleMessageStore) Trim(_ context.Context, _ string, keepLast int) (int64, error) {
-	if m.trimErr != nil {
-		return 0, m.trimErr
-	}
-	if m.appendBeforeDelete != nil {
-		if err := m.appendBeforeDelete(); err != nil {
-			return 0, err
-		}
-		m.appendBeforeDelete = nil
-	}
-	m.lastTrimKeep = keepLast
 	if keepLast < 0 {
 		keepLast = 0
 	}
