@@ -1082,10 +1082,12 @@ func (s *lifecycleSummaryStore) Delete(_ context.Context, _ string, id string) e
 func (s *lifecycleSummaryStore) Close() error { return nil }
 
 type lifecycleKnowledgeStore struct {
-	facts                  []*store.Fact
-	putFactErr             error
-	deleteFactsBySourceErr error
-	deleteFactsByIDsErr    error
+	facts                     []*store.Fact
+	putFactErr                error
+	deleteFactsBySourceErr    error
+	deleteFactsByIDsErr       error
+	deleteFactsByIDsCallCount int
+	deleteFactsByIDsErrOnCall int // if > 0, fail only on this call number (1-indexed)
 }
 
 func (k *lifecycleKnowledgeStore) PutEntity(_ context.Context, _ string, _ *store.Entity) error {
@@ -1143,7 +1145,11 @@ func (k *lifecycleKnowledgeStore) DeleteFactsBySource(_ context.Context, _ strin
 }
 
 func (k *lifecycleKnowledgeStore) DeleteFactsByIDs(_ context.Context, _ string, ids []string) error {
-	if k.deleteFactsByIDsErr != nil {
+	k.deleteFactsByIDsCallCount++
+	if k.deleteFactsByIDsErrOnCall > 0 && k.deleteFactsByIDsCallCount == k.deleteFactsByIDsErrOnCall {
+		return k.deleteFactsByIDsErr
+	}
+	if k.deleteFactsByIDsErrOnCall == 0 && k.deleteFactsByIDsErr != nil {
 		return k.deleteFactsByIDsErr
 	}
 	idSet := make(map[string]bool, len(ids))
@@ -2031,6 +2037,51 @@ func TestCompaction_drainPendingFacts_AllFail(t *testing.T) {
 	assert.Equal(t, 0, result.SummariesCreated, "no compaction should happen below threshold")
 
 	assert.Equal(t, 2, c.PendingFactCount(), "all entries must be re-queued when DeleteFactsByIDs fails")
+}
+
+func TestCompaction_drainPendingFacts_PartialFailure(t *testing.T) {
+	// When drainPendingFacts has entries for two workspaces and the second
+	// workspace's DeleteFactsByIDs fails, only the failing workspace's
+	// entries should be re-queued. The successful workspace's entries
+	// must be drained.
+	mem := newLifecycleMemoryStore()
+	// Fail only on call #2 (second workspace).
+	mem.knowledge.deleteFactsByIDsErr = fmt.Errorf("transient ws-2 failure")
+	mem.knowledge.deleteFactsByIDsErrOnCall = 2
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "unused",
+		embedding: []float32{0.1},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// Seed facts in the mock store so we can verify deletion.
+	mem.knowledge.facts = append(mem.knowledge.facts,
+		&store.Fact{ID: "fact-a", WorkspaceID: "ws-1"},
+		&store.Fact{ID: "fact-b", WorkspaceID: "ws-2"},
+	)
+
+	// Inject pending facts for both workspaces.
+	c.InjectPendingFacts("ws-1", []string{"fact-a"})
+	c.InjectPendingFacts("ws-2", []string{"fact-b"})
+	require.Equal(t, 2, c.PendingFactCount(), "precondition: 2 facts queued across 2 workspaces")
+
+	// Compact with no messages triggers drain only.
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// ws-1 succeeded, ws-2 failed → only ws-2's fact remains queued.
+	assert.Equal(t, 1, c.PendingFactCount(), "only failed workspace's facts should be re-queued")
 }
 
 func TestCompaction_AppendPendingFactsLocked_FullCapOverflow(t *testing.T) {
