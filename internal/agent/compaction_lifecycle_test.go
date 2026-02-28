@@ -1758,6 +1758,46 @@ func TestCompaction_drainOrphans_PartialFailure(t *testing.T) {
 	assert.Equal(t, 1, c.PendingOrphanCount(), "only the failed orphan should remain")
 }
 
+func TestCompaction_drainOrphans_CrossWorkspace(t *testing.T) {
+	// drainOrphans drains orphans regardless of which workspace the current Compact
+	// call is for. Orphans queued from workspace A must be deleted even when Compact
+	// is called for workspace B.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{0.1},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// Inject orphans that originated from workspace "ws-a".
+	c.InjectOrphans([]string{"orphan-ws-a-1", "orphan-ws-a-2"})
+	assert.Equal(t, 2, c.PendingOrphanCount())
+
+	// Append 2 messages for workspace "ws-b" — below BatchSize=5, so no compaction
+	// runs, but drainOrphans still executes.
+	appendMessages(t, mem.messages, "ws-b", 2)
+
+	// Compact is called for ws-b, not ws-a.
+	result, err := c.Compact(context.Background(), "ws-b")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.SummariesCreated, "no compaction should happen below batch threshold")
+
+	// All orphans must be drained even though they came from a different workspace.
+	assert.Equal(t, 0, c.PendingOrphanCount(), "orphans drained regardless of workspace mismatch")
+	assert.GreaterOrEqual(t, vec.deleteCalls, 2, "Delete must be called for each orphan ID")
+}
+
 func TestCompaction_Compact_FactsRollbackFailure(t *testing.T) {
 	// Scenario: facts are stored (factsStored=true), then VectorStore.Delete fails
 	// on the batch-IDs delete (call #1), triggering the defer cleanup path with
