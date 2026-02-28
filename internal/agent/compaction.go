@@ -26,6 +26,10 @@ import (
 // retry them.
 const maxPendingOrphans = 1000
 
+// maxPendingFacts caps the number of orphaned fact IDs retained in memory.
+// Matches the maxPendingOrphans cap for consistency.
+const maxPendingFacts = 1000
+
 // ShouldCompact returns true when count >= batchSize, indicating
 // that enough messages have accumulated to trigger a compaction pass.
 func ShouldCompact(count int64, batchSize int) bool {
@@ -57,17 +61,27 @@ type CompactorConfig struct {
 	BatchSize     int
 }
 
+// pendingFactEntry groups fact IDs with their workspace for deferred retry.
+type pendingFactEntry struct {
+	workspaceID string
+	factIDs     []string
+}
+
 // Compactor manages the memory compaction lifecycle: rolling messages into
 // long-term storage and (in Phase 6) summarising and extracting facts.
 type Compactor struct {
 	cfg CompactorConfig
 
-	// mu guards pendingOrphans for concurrent access.
+	// mu guards pendingOrphans and pendingFacts for concurrent access.
 	mu sync.Mutex
 	// pendingOrphans tracks vector embedding IDs that failed cleanup in a
 	// previous Compact defer block. Retried at the start of the next Compact call.
 	// In-process only (not durable across restarts).
 	pendingOrphans []string
+	// pendingFacts tracks fact IDs that failed rollback deletion in a previous
+	// Compact defer block. Retried at the start of the next Compact call.
+	// In-process only (not durable across restarts).
+	pendingFacts []pendingFactEntry
 }
 
 // InjectOrphans adds orphan IDs for testing. Not for production use.
@@ -100,13 +114,13 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 
 	var remaining []string
 	for _, id := range orphans {
-		deleteCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		deleteCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := c.cfg.VectorStore.Delete(deleteCtx, []string{id})
 		cancel()
 		if err != nil {
 			// Note: workspace_id reflects the current compaction context, not
 			// necessarily the workspace where the orphaned embedding originated.
-			slog.ErrorContext(context.Background(), "compaction: orphan vector cleanup retry failed",
+			slog.ErrorContext(ctx, "compaction: orphan vector cleanup retry failed",
 				"workspace_id", workspaceID,
 				"embedding_id", id,
 				"error", err,
@@ -115,7 +129,7 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 		} else {
 			// Note: workspace_id reflects the current compaction context, not
 			// necessarily the workspace where the orphaned embedding originated.
-			slog.InfoContext(context.Background(), "compaction: cleaned up orphaned vector embedding",
+			slog.InfoContext(ctx, "compaction: cleaned up orphaned vector embedding",
 				"workspace_id", workspaceID,
 				"embedding_id", id,
 			)
@@ -126,6 +140,105 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 		c.mu.Lock()
 		c.appendOrphansLocked(ctx, workspaceID, remaining)
 		c.mu.Unlock()
+	}
+}
+
+// InjectPendingFacts adds pending fact entries for testing. Not for production use.
+func (c *Compactor) InjectPendingFacts(workspaceID string, factIDs []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pendingFacts = append(c.pendingFacts, pendingFactEntry{
+		workspaceID: workspaceID,
+		factIDs:     factIDs,
+	})
+}
+
+// PendingFactCount returns the total number of orphaned fact IDs awaiting cleanup.
+func (c *Compactor) PendingFactCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, e := range c.pendingFacts {
+		n += len(e.factIDs)
+	}
+	return n
+}
+
+// drainPendingFacts attempts to delete any previously orphaned facts.
+// Successful deletes are removed; failures are re-queued for the next pass.
+// A fresh background context with bounded timeout is used for DeleteFactsByIDs
+// calls to avoid inheriting a cancelled or deadline-exceeded caller context.
+func (c *Compactor) drainPendingFacts(ctx context.Context) {
+	c.mu.Lock()
+	entries := c.pendingFacts
+	c.pendingFacts = nil
+	c.mu.Unlock()
+
+	if len(entries) == 0 {
+		return
+	}
+
+	var remaining []pendingFactEntry
+	for _, entry := range entries {
+		deleteCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.cfg.MemoryStore.Knowledge().DeleteFactsByIDs(deleteCtx, entry.workspaceID, entry.factIDs)
+		cancel()
+		if err != nil {
+			slog.ErrorContext(ctx, "compaction: pending fact cleanup retry failed",
+				"workspace_id", entry.workspaceID,
+				"fact_ids", entry.factIDs,
+				"error", err,
+			)
+			remaining = append(remaining, entry)
+		} else {
+			slog.InfoContext(ctx, "compaction: cleaned up orphaned facts",
+				"workspace_id", entry.workspaceID,
+				"fact_count", len(entry.factIDs),
+			)
+		}
+	}
+
+	if len(remaining) > 0 {
+		c.mu.Lock()
+		c.appendPendingFactsLocked(ctx, remaining)
+		c.mu.Unlock()
+	}
+}
+
+// appendPendingFactsLocked appends pending fact entries, dropping excess
+// entries if the cap would be exceeded. Caller must hold c.mu.
+func (c *Compactor) appendPendingFactsLocked(ctx context.Context, entries []pendingFactEntry) {
+	currentCount := 0
+	for _, e := range c.pendingFacts {
+		currentCount += len(e.factIDs)
+	}
+
+	for _, entry := range entries {
+		space := maxPendingFacts - currentCount
+		if space <= 0 {
+			slog.WarnContext(ctx, "compaction: pendingFacts cap reached, dropping fact IDs",
+				"workspace_id", entry.workspaceID,
+				"dropped", len(entry.factIDs),
+				"cap", maxPendingFacts,
+			)
+			continue
+		}
+		if len(entry.factIDs) <= space {
+			c.pendingFacts = append(c.pendingFacts, entry)
+			currentCount += len(entry.factIDs)
+		} else {
+			c.pendingFacts = append(c.pendingFacts, pendingFactEntry{
+				workspaceID: entry.workspaceID,
+				factIDs:     entry.factIDs[:space],
+			})
+			dropped := len(entry.factIDs) - space
+			currentCount += space
+			slog.WarnContext(ctx, "compaction: pendingFacts cap reached, dropping fact IDs",
+				"workspace_id", entry.workspaceID,
+				"dropped", dropped,
+				"cap", maxPendingFacts,
+			)
+		}
 	}
 }
 
@@ -218,6 +331,8 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 
 	// Best-effort cleanup of any orphaned vector embeddings from prior failures.
 	c.drainOrphans(ctx, workspaceID)
+	// Best-effort cleanup of any orphaned facts from prior rollback failures.
+	c.drainPendingFacts(ctx)
 
 	count, err := c.cfg.MemoryStore.Messages().Count(ctx, workspaceID)
 	if err != nil {
@@ -284,12 +399,18 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 			}
 			if len(storedFactIDs) > 0 {
 				if factErr := c.cfg.MemoryStore.Knowledge().DeleteFactsByIDs(cleanupCtx, workspaceID, storedFactIDs); factErr != nil {
-					slog.ErrorContext(cleanupCtx, "compaction: failed to roll back committed facts",
+					slog.ErrorContext(cleanupCtx, "compaction: failed to roll back committed facts, queuing for retry",
 						"workspace_id", workspaceID,
 						"summary_id", summary.ID,
 						"fact_ids", storedFactIDs,
 						"error", factErr,
 					)
+					c.mu.Lock()
+					c.appendPendingFactsLocked(cleanupCtx, []pendingFactEntry{{
+						workspaceID: workspaceID,
+						factIDs:     storedFactIDs,
+					}})
+					c.mu.Unlock()
 				}
 			}
 			if delErr := c.cfg.MemoryStore.Summaries().Delete(cleanupCtx, workspaceID, summary.ID); delErr != nil {

@@ -108,17 +108,16 @@ func (s *SummaryStore) Close() error {
 }
 
 // Store inserts a summary into the store for the given workspace.
-// The summary's Status field is persisted as-is; callers should set it
-// to SummaryStatusPending for two-phase compaction or SummaryStatusCommitted for immediate use.
+// The caller must set summary.Status explicitly to either SummaryStatusPending
+// (for two-phase compaction via Confirm) or SummaryStatusCommitted (for immediate use).
 func (s *SummaryStore) Store(ctx context.Context, workspaceID string, summary *store.Summary) error {
+	if summary.Status == "" {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "summary status must be set explicitly")
+	}
+
 	msgIDs, err := json.Marshal(summary.MessageIDs)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling message IDs: %w", err)
-	}
-
-	status := summary.Status
-	if status == "" {
-		status = store.SummaryStatusCommitted
 	}
 
 	const q = `INSERT INTO summaries (id, workspace_id, from_time, to_time, content, message_ids, created_at, status)
@@ -132,7 +131,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		summary.Content,
 		string(msgIDs),
 		formatTime(summary.CreatedAt),
-		status,
+		summary.Status,
 	)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "storing summary %s: %w", summary.ID, err)

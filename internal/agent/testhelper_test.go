@@ -817,7 +817,18 @@ func (m *mockKnowledgeStore) DeleteFactsBySource(_ context.Context, _ string, so
 	return nil
 }
 
-func (m *mockKnowledgeStore) DeleteFactsByIDs(_ context.Context, _ string, _ []string) error {
+func (m *mockKnowledgeStore) DeleteFactsByIDs(_ context.Context, _ string, ids []string) error {
+	idSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+	var kept []*store.Fact
+	for _, f := range m.facts {
+		if _, ok := idSet[f.ID]; !ok {
+			kept = append(kept, f)
+		}
+	}
+	m.facts = kept
 	return nil
 }
 

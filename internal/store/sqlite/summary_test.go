@@ -27,9 +27,9 @@ func TestSummaryStore_StoreAndRetrieve(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	summaries := []*store.Summary{
-		{ID: "sum-1", WorkspaceID: "ws-1", FromTime: base, ToTime: base.Add(1 * time.Hour), Content: "Discussion about K8s", CreatedAt: base.Add(1 * time.Hour)},
-		{ID: "sum-2", WorkspaceID: "ws-1", FromTime: base.Add(1 * time.Hour), ToTime: base.Add(2 * time.Hour), Content: "Terraform planning", CreatedAt: base.Add(2 * time.Hour)},
-		{ID: "sum-3", WorkspaceID: "ws-1", FromTime: base.Add(2 * time.Hour), ToTime: base.Add(3 * time.Hour), Content: "Monitoring setup", CreatedAt: base.Add(3 * time.Hour)},
+		{ID: "sum-1", WorkspaceID: "ws-1", FromTime: base, ToTime: base.Add(1 * time.Hour), Content: "Discussion about K8s", CreatedAt: base.Add(1 * time.Hour), Status: store.SummaryStatusCommitted},
+		{ID: "sum-2", WorkspaceID: "ws-1", FromTime: base.Add(1 * time.Hour), ToTime: base.Add(2 * time.Hour), Content: "Terraform planning", CreatedAt: base.Add(2 * time.Hour), Status: store.SummaryStatusCommitted},
+		{ID: "sum-3", WorkspaceID: "ws-1", FromTime: base.Add(2 * time.Hour), ToTime: base.Add(3 * time.Hour), Content: "Monitoring setup", CreatedAt: base.Add(3 * time.Hour), Status: store.SummaryStatusCommitted},
 	}
 
 	for _, s := range summaries {
@@ -66,6 +66,7 @@ func TestSummaryStore_StoreWithMessageIDs(t *testing.T) {
 		Content:     "Summary with message refs",
 		MessageIDs:  []string{"msg-1", "msg-2", "msg-3"},
 		CreatedAt:   base.Add(1 * time.Hour),
+		Status:      store.SummaryStatusCommitted,
 	}
 
 	err = ss.Store(ctx, "ws-1", summary)
@@ -77,35 +78,28 @@ func TestSummaryStore_StoreWithMessageIDs(t *testing.T) {
 	assert.Equal(t, []string{"msg-1", "msg-2", "msg-3"}, results[0].MessageIDs)
 }
 
-func TestSummaryStore_Store_EmptyStatusDefaultsToCommitted(t *testing.T) {
+func TestSummaryStore_Store_EmptyStatus_ReturnsError(t *testing.T) {
 	ctx := context.Background()
-	db := testDBPath(t, "summaries-empty-status-default")
+	db := testDBPath(t, "summaries-empty-status-error")
 	ss, err := sqlite.NewSummaryStore(db)
 	require.NoError(t, err)
 	defer func() { _ = ss.Close() }()
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	// Store a summary with Status="" (zero value) — should default to committed.
+	// Store a summary with Status="" (zero value) — must return an error.
 	summary := &store.Summary{
-		ID:          "sum-default",
+		ID:          "sum-no-status",
 		WorkspaceID: "ws-1",
 		FromTime:    base,
 		ToTime:      base.Add(1 * time.Hour),
-		Content:     "Default status summary",
+		Content:     "Status not set",
 		CreatedAt:   base.Add(1 * time.Hour),
 		// Status intentionally left as zero value ""
 	}
 	err = ss.Store(ctx, "ws-1", summary)
-	require.NoError(t, err)
-
-	// GetLatest filters WHERE status = 'committed'; the summary must be returned,
-	// confirming the empty-status default was applied.
-	results, err := ss.GetLatest(ctx, "ws-1", 10)
-	require.NoError(t, err)
-	require.Len(t, results, 1, "summary with empty Status should be stored as committed and visible")
-	assert.Equal(t, "sum-default", results[0].ID)
-	assert.Equal(t, store.SummaryStatusCommitted, results[0].Status)
+	require.Error(t, err, "Store with empty Status should return an error")
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopInvalidInput), "expected CodeAgentLoopInvalidInput, got: %v", err)
 }
 
 func TestSummaryStore_GetByRangeEmpty(t *testing.T) {
@@ -132,13 +126,13 @@ func TestSummaryStore_WorkspaceIsolation(t *testing.T) {
 
 	err = ss.Store(ctx, "ws-1", &store.Summary{
 		ID: "sum-1", WorkspaceID: "ws-1", FromTime: base, ToTime: base.Add(1 * time.Hour),
-		Content: "WS1 summary", CreatedAt: base.Add(1 * time.Hour),
+		Content: "WS1 summary", CreatedAt: base.Add(1 * time.Hour), Status: store.SummaryStatusCommitted,
 	})
 	require.NoError(t, err)
 
 	err = ss.Store(ctx, "ws-2", &store.Summary{
 		ID: "sum-2", WorkspaceID: "ws-2", FromTime: base, ToTime: base.Add(1 * time.Hour),
-		Content: "WS2 summary", CreatedAt: base.Add(1 * time.Hour),
+		Content: "WS2 summary", CreatedAt: base.Add(1 * time.Hour), Status: store.SummaryStatusCommitted,
 	})
 	require.NoError(t, err)
 
@@ -278,6 +272,7 @@ func TestSummaryStore_GetByRange_ExcludesPendingSummaries(t *testing.T) {
 		ToTime:      base.Add(1 * time.Hour),
 		Content:     "Committed summary",
 		CreatedAt:   base.Add(1 * time.Hour),
+		Status:      store.SummaryStatusCommitted,
 	}
 	pending := &store.Summary{
 		ID:          "sum-pending",
@@ -316,6 +311,7 @@ func TestSummaryStore_GetLatest_ExcludesPendingSummaries(t *testing.T) {
 		ToTime:      base.Add(1 * time.Hour),
 		Content:     "Committed summary",
 		CreatedAt:   base.Add(1 * time.Hour),
+		Status:      store.SummaryStatusCommitted,
 	}
 	pending := &store.Summary{
 		ID:          "sum-pending",
@@ -354,6 +350,7 @@ func TestSummaryStore_Delete_RemovesSummary(t *testing.T) {
 		ToTime:      base.Add(1 * time.Hour),
 		Content:     "To be deleted",
 		CreatedAt:   base.Add(1 * time.Hour),
+		Status:      store.SummaryStatusCommitted,
 	}
 	err = ss.Store(ctx, "ws-1", summary)
 	require.NoError(t, err)
@@ -393,6 +390,7 @@ func TestSummaryStore_Delete_WorkspaceScoping(t *testing.T) {
 		ToTime:      base.Add(1 * time.Hour),
 		Content:     "WS1 summary",
 		CreatedAt:   base.Add(1 * time.Hour),
+		Status:      store.SummaryStatusCommitted,
 	})
 	require.NoError(t, err)
 
@@ -403,6 +401,7 @@ func TestSummaryStore_Delete_WorkspaceScoping(t *testing.T) {
 		ToTime:      base.Add(1 * time.Hour),
 		Content:     "WS2 summary",
 		CreatedAt:   base.Add(1 * time.Hour),
+		Status:      store.SummaryStatusCommitted,
 	})
 	require.NoError(t, err)
 

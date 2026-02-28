@@ -1111,6 +1111,9 @@ func (k *lifecycleKnowledgeStore) PutFact(_ context.Context, _ string, fact *sto
 }
 
 func (k *lifecycleKnowledgeStore) PutFacts(_ context.Context, _ string, facts []*store.Fact) error {
+	if len(facts) == 0 {
+		return nil
+	}
 	if k.putFactErr != nil {
 		return k.putFactErr
 	}
@@ -1801,6 +1804,9 @@ func TestCompaction_Compact_FactsRollbackFailure(t *testing.T) {
 
 	// Facts must remain in the store — rollback failed.
 	assert.NotEmpty(t, mem.knowledge.facts, "facts must remain when DeleteFactsByIDs fails")
+
+	// Failed fact IDs must be queued for retry on the next Compact call.
+	assert.Equal(t, 1, c.PendingFactCount(), "failed fact rollback IDs must be queued for retry")
 
 	// Summary cleanup (Delete) must still have been attempted.
 	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called to clean up pending summary")

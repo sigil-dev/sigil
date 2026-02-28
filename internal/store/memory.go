@@ -21,6 +21,9 @@ type MessageStore interface {
 	Append(ctx context.Context, workspaceID string, msg *Message) error
 	Search(ctx context.Context, workspaceID string, query string, opts SearchOpts) ([]*Message, error)
 	GetRange(ctx context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*Message, error)
+	// GetOldest returns the n oldest messages for a workspace, ordered by creation
+	// time ascending. n must be positive; callers (e.g., NewCompactor) validate
+	// n > 0. Behavior for n <= 0 is undefined and implementation-dependent.
 	GetOldest(ctx context.Context, workspaceID string, n int) ([]*Message, error)
 	Count(ctx context.Context, workspaceID string) (int64, error)
 	DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error)
