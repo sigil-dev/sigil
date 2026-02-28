@@ -30,6 +30,10 @@ const maxPendingOrphans = 1000
 // Matches the maxPendingOrphans cap for consistency.
 const maxPendingFacts = 1000
 
+// maxPendingSummaryOrphans caps the number of orphaned summary IDs retained in memory.
+// Matches the maxPendingOrphans cap for consistency.
+const maxPendingSummaryOrphans = 1000
+
 // ShouldCompact returns true when count >= batchSize, indicating
 // that enough messages have accumulated to trigger a compaction pass.
 func ShouldCompact(count int64, batchSize int) bool {
@@ -72,6 +76,12 @@ type pendingFactEntry struct {
 	factIDs     []string
 }
 
+// pendingSummaryEntry groups a summary ID with its workspace for deferred retry.
+type pendingSummaryEntry struct {
+	workspaceID string
+	summaryID   string
+}
+
 // Compactor manages the memory compaction lifecycle: rolling messages into
 // long-term storage and (in Phase 6) summarising and extracting facts.
 type Compactor struct {
@@ -81,7 +91,7 @@ type Compactor struct {
 	// supplied via CompactorConfig.Logger.
 	log *slog.Logger
 
-	// mu guards pendingOrphans and pendingFacts for concurrent access.
+	// mu guards pendingOrphans, pendingFacts, and pendingSummaryOrphans for concurrent access.
 	mu sync.Mutex
 	// pendingOrphans tracks vector embedding IDs that failed cleanup in a
 	// previous Compact defer block. Retried at the start of the next Compact call.
@@ -91,6 +101,10 @@ type Compactor struct {
 	// Compact defer block. Retried at the start of the next Compact call.
 	// In-process only (not durable across restarts).
 	pendingFacts []pendingFactEntry
+	// pendingSummaryOrphans tracks summary IDs that failed deletion in a previous
+	// Compact defer block. Retried at the start of the next Compact call.
+	// In-process only (not durable across restarts).
+	pendingSummaryOrphans []pendingSummaryEntry
 }
 
 // InjectOrphans adds orphan IDs for testing. Not for production use.
@@ -149,6 +163,82 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 		c.mu.Lock()
 		c.appendOrphansLocked(ctx, workspaceID, remaining)
 		c.mu.Unlock()
+	}
+}
+
+// InjectPendingSummaries adds a pending summary entry for testing. Not for production use.
+func (c *Compactor) InjectPendingSummaries(workspaceID, summaryID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pendingSummaryOrphans = append(c.pendingSummaryOrphans, pendingSummaryEntry{
+		workspaceID: workspaceID,
+		summaryID:   summaryID,
+	})
+}
+
+// PendingSummaryOrphanCount returns the number of orphaned summary IDs awaiting cleanup.
+func (c *Compactor) PendingSummaryOrphanCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.pendingSummaryOrphans)
+}
+
+// drainPendingSummaries attempts to delete any previously orphaned pending summaries.
+// Successful deletes are removed; failures are re-queued for the next pass.
+// A fresh background context with bounded timeout is used for Summaries().Delete
+// calls to avoid inheriting a cancelled or deadline-exceeded caller context.
+func (c *Compactor) drainPendingSummaries(ctx context.Context) {
+	c.mu.Lock()
+	entries := c.pendingSummaryOrphans
+	c.pendingSummaryOrphans = nil
+	c.mu.Unlock()
+
+	if len(entries) == 0 {
+		return
+	}
+
+	var remaining []pendingSummaryEntry
+	for _, entry := range entries {
+		deleteCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.cfg.MemoryStore.Summaries().Delete(deleteCtx, entry.workspaceID, entry.summaryID)
+		cancel()
+		if err != nil {
+			c.log.ErrorContext(ctx, "compaction: pending summary cleanup retry failed",
+				"workspace_id", entry.workspaceID,
+				"summary_id", entry.summaryID,
+				"error", err,
+			)
+			remaining = append(remaining, entry)
+		} else {
+			c.log.InfoContext(ctx, "compaction: cleaned up orphaned pending summary",
+				"workspace_id", entry.workspaceID,
+				"summary_id", entry.summaryID,
+			)
+		}
+	}
+
+	if len(remaining) > 0 {
+		c.mu.Lock()
+		c.appendPendingSummaryOrphansLocked(ctx, remaining)
+		c.mu.Unlock()
+	}
+}
+
+// appendPendingSummaryOrphansLocked appends pending summary entries, dropping excess
+// entries if the cap would be exceeded. Caller must hold c.mu.
+func (c *Compactor) appendPendingSummaryOrphansLocked(ctx context.Context, entries []pendingSummaryEntry) {
+	space := maxPendingSummaryOrphans - len(c.pendingSummaryOrphans)
+	for _, entry := range entries {
+		if space <= 0 {
+			c.log.WarnContext(ctx, "compaction: pendingSummaryOrphans cap reached, dropping summary ID",
+				"workspace_id", entry.workspaceID,
+				"summary_id", entry.summaryID,
+				"cap", maxPendingSummaryOrphans,
+			)
+			continue
+		}
+		c.pendingSummaryOrphans = append(c.pendingSummaryOrphans, entry)
+		space--
 	}
 }
 
@@ -342,6 +432,8 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "workspaceID must not be empty")
 	}
 
+	// Best-effort cleanup of any orphaned pending summaries from prior failures.
+	c.drainPendingSummaries(ctx)
 	// Best-effort cleanup of any orphaned vector embeddings from prior failures.
 	c.drainOrphans(ctx, workspaceID)
 	// Best-effort cleanup of any orphaned facts from prior rollback failures.
@@ -427,11 +519,17 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 				}
 			}
 			if delErr := c.cfg.MemoryStore.Summaries().Delete(cleanupCtx, workspaceID, summary.ID); delErr != nil {
-				c.log.ErrorContext(cleanupCtx, "compaction: failed to clean up pending summary",
+				c.log.ErrorContext(cleanupCtx, "compaction: failed to clean up pending summary, queuing for retry",
 					"workspace_id", workspaceID,
 					"summary_id", summary.ID,
 					"error", delErr,
 				)
+				c.mu.Lock()
+				c.appendPendingSummaryOrphansLocked(cleanupCtx, []pendingSummaryEntry{{
+					workspaceID: workspaceID,
+					summaryID:   summary.ID,
+				}})
+				c.mu.Unlock()
 			}
 		}
 	}()

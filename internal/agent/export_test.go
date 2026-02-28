@@ -39,3 +39,6 @@ const MaxFactFieldLen = maxFactFieldLen
 
 // MaxPendingOrphans exposes maxPendingOrphans for white-box testing.
 const MaxPendingOrphans = maxPendingOrphans
+
+// MaxPendingFacts exposes maxPendingFacts for white-box testing.
+const MaxPendingFacts = maxPendingFacts

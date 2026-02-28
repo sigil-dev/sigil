@@ -1812,6 +1812,188 @@ func TestCompaction_Compact_FactsRollbackFailure(t *testing.T) {
 	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called to clean up pending summary")
 }
 
+func TestCompaction_drainPendingFacts_RetrySuccess(t *testing.T) {
+	// When drainPendingFacts is called and DeleteFactsByIDs succeeds,
+	// the pending fact queue must be empty after the drain.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "unused",
+		embedding: []float32{0.1},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// Inject pending facts — no error on DeleteFactsByIDs (default: nil).
+	c.InjectPendingFacts("ws-1", []string{"fact-1", "fact-2"})
+	require.Equal(t, 2, c.PendingFactCount(), "precondition: 2 facts queued")
+
+	// Compact with fewer messages than batchSize triggers drainPendingFacts but
+	// no compaction. DeleteFactsByIDs succeeds so the queue is fully drained.
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.SummariesCreated, "no compaction should happen below threshold")
+
+	assert.Equal(t, 0, c.PendingFactCount(), "all pending facts must be drained on success")
+}
+
+func TestCompaction_drainPendingFacts_AllFail(t *testing.T) {
+	// When drainPendingFacts is called and DeleteFactsByIDs always fails,
+	// all entries must be re-queued (none dropped).
+	mem := newLifecycleMemoryStore()
+	mem.knowledge.deleteFactsByIDsErr = fmt.Errorf("transient")
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "unused",
+		embedding: []float32{0.1},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// Inject 2 entries across different workspaces.
+	c.InjectPendingFacts("ws-1", []string{"fact-a"})
+	c.InjectPendingFacts("ws-2", []string{"fact-b"})
+	require.Equal(t, 2, c.PendingFactCount(), "precondition: 2 facts queued")
+
+	// Compact below threshold → drainPendingFacts runs, both entries fail → all re-queued.
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.SummariesCreated, "no compaction should happen below threshold")
+
+	assert.Equal(t, 2, c.PendingFactCount(), "all entries must be re-queued when DeleteFactsByIDs fails")
+}
+
+func TestCompaction_AppendPendingFactsLocked_FullCapOverflow(t *testing.T) {
+	// Verify that when pendingFacts is already at capacity (maxPendingFacts=1000),
+	// appendPendingFactsLocked drops new entries and keeps the count at 1000.
+	//
+	// Scenario:
+	// 1. InjectPendingFacts fills the queue to maxPendingFacts (1000 IDs in one entry).
+	// 2. deleteFactsByIDsErr is set so all drain attempts fail → all 1000 are re-queued.
+	// 3. The defer block in Compact calls appendPendingFactsLocked with storedFactIDs
+	//    when confirmed=false and factsStored=true. At this point the queue is at 1000
+	//    — the new entry is dropped.
+	// 4. PendingFactCount() remains 1000.
+
+	mem := newLifecycleMemoryStore()
+	mem.knowledge.deleteFactsByIDsErr = fmt.Errorf("delete always fails")
+	vec := newLifecycleVectorStore()
+	// Fail VectorStore.Delete on call #1 so the defer runs with confirmed=false.
+	vec.deleteErr = fmt.Errorf("vector delete fails")
+	vec.deleteErrOnCall = 1
+
+	p := &mockCompactionProvider{
+		summary:   "summary for overflow test",
+		embedding: []float32{0.1},
+		facts: []*store.Fact{
+			{ID: "overflow-fact", EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: 0.9},
+		},
+	}
+
+	appendMessages(t, mem.messages, "ws-overflow", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:   mem,
+		VectorStore:   vec,
+		Summarizer:    p,
+		Embedder:      p,
+		FactExtractor: p,
+		BatchSize:     5,
+	})
+	require.NoError(t, newErr)
+
+	// Fill queue to cap via InjectPendingFacts (1000 IDs in a single entry).
+	factIDs := make([]string, agent.MaxPendingFacts)
+	for i := range factIDs {
+		factIDs[i] = fmt.Sprintf("fact-%d", i)
+	}
+	c.InjectPendingFacts("ws-overflow", factIDs)
+	require.Equal(t, agent.MaxPendingFacts, c.PendingFactCount(), "precondition: queue must be at cap")
+
+	// Compact: drainPendingFacts clears + re-appends 1000 (all delete-fail).
+	// Defer appends overflow-fact but queue is at cap — it must be dropped.
+	_, err := c.Compact(context.Background(), "ws-overflow")
+	require.Error(t, err)
+
+	assert.Equal(t, agent.MaxPendingFacts, c.PendingFactCount(),
+		"PendingFactCount must stay at cap when new entry is dropped")
+}
+
+func TestCompaction_AppendPendingFactsLocked_PartialFill(t *testing.T) {
+	// Verify the partial-fill branch: space > 0 but space < total IDs in the new entry.
+	// Only the first `space` IDs are accepted; the rest are dropped.
+	//
+	// Scenario:
+	// 1. InjectPendingFacts pre-seeds 999 IDs (space=1 remaining to cap of 1000).
+	// 2. deleteFactsByIDsErr is set so drain fails → all 999 re-queued (back at 999).
+	//    At this point space is still 1.
+	// 3. Compact with facts extracted: storedFactIDs = ["overflow-fact-0", "overflow-fact-1"]
+	//    (2 IDs). Defer fires with confirmed=false, calls appendPendingFactsLocked with 2 IDs.
+	//    space=1 < 2=len(factIDs) → only "overflow-fact-0" accepted, "overflow-fact-1" dropped.
+	// 4. PendingFactCount() == 1000 (999 drained + 1 from defer).
+
+	mem := newLifecycleMemoryStore()
+	mem.knowledge.deleteFactsByIDsErr = fmt.Errorf("delete always fails")
+	vec := newLifecycleVectorStore()
+	// Fail VectorStore.Delete on call #1 so the defer runs with confirmed=false.
+	vec.deleteErr = fmt.Errorf("vector delete fails")
+	vec.deleteErrOnCall = 1
+
+	p := &mockCompactionProvider{
+		summary:   "summary for partial fill test",
+		embedding: []float32{0.2},
+		facts: []*store.Fact{
+			{ID: "overflow-fact-0", EntityID: "bob", Predicate: "role", Value: "admin", Confidence: 0.8},
+			{ID: "overflow-fact-1", EntityID: "bob", Predicate: "team", Value: "platform", Confidence: 0.7},
+		},
+	}
+
+	appendMessages(t, mem.messages, "ws-partial", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:   mem,
+		VectorStore:   vec,
+		Summarizer:    p,
+		Embedder:      p,
+		FactExtractor: p,
+		BatchSize:     5,
+	})
+	require.NoError(t, newErr)
+
+	// Pre-seed 999 IDs to leave exactly 1 slot remaining.
+	preFill := make([]string, agent.MaxPendingFacts-1)
+	for i := range preFill {
+		preFill[i] = fmt.Sprintf("pre-fact-%d", i)
+	}
+	c.InjectPendingFacts("ws-partial", preFill)
+	require.Equal(t, agent.MaxPendingFacts-1, c.PendingFactCount(), "precondition: 999 facts queued")
+
+	// Compact: drain fails (all 999 re-queued), defer adds 2 facts but only 1 fits.
+	_, err := c.Compact(context.Background(), "ws-partial")
+	require.Error(t, err)
+
+	assert.Equal(t, agent.MaxPendingFacts, c.PendingFactCount(),
+		"partial fill must not exceed cap; count must equal maxPendingFacts")
+}
+
 func appendMessages(t *testing.T, ms *lifecycleMessageStore, workspaceID string, n int, startIndex ...int) {
 	t.Helper()
 
