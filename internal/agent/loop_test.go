@@ -7613,9 +7613,9 @@ func TestLoop_ProcessMessage_Compaction(t *testing.T) {
 }
 
 // TestLoop_ProcessMessage_Compaction_PartialCommit verifies that when Compact
-// returns both a non-nil CompactionResult with PartialCommit=true and an error,
-// the warning log includes the partial_commit, summary_id, message_ids_count,
-// and message_ids fields so operators can recover the orphaned messages.
+// returns a PartialCommitError, the error log includes the partial_commit,
+// summary_id, message_ids_count, and message_ids fields so operators can
+// recover the orphaned messages.
 func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
 	// process-global logger, making this test safe for parallel execution.
@@ -7627,13 +7627,13 @@ func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 	session, err := sm.Create(ctx, "ws-compact-partial", "user-1")
 	require.NoError(t, err)
 
-	partialResult := &agent.CompactionResult{
-		PartialCommit: true,
-		SummaryID:     "sum-partial",
-		MessageIDs:    []string{"m-1", "m-2"},
-	}
+	partialResult := &agent.CompactionResult{}
 	mc := &mockCompactor{
-		compactErr:    fmt.Errorf("delete failed"),
+		compactErr: &agent.PartialCommitError{
+			Cause:      fmt.Errorf("delete failed"),
+			SummaryID:  "sum-partial",
+			MessageIDs: []string{"m-1", "m-2"},
+		},
 		compactResult: partialResult,
 	}
 
@@ -7688,7 +7688,7 @@ func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 // TestLoop_ProcessMessage_Compaction_NonPartialError verifies that when Compact
 // returns (nil, error) — the ordinary non-partial failure path — the log record
 // is emitted at Warn level and does NOT contain partial_commit, summary_id, or
-// message_ids fields (those are reserved for the PartialCommit recovery path).
+// message_ids fields (those are reserved for the PartialCommitError recovery path).
 func TestLoop_ProcessMessage_Compaction_NonPartialError(t *testing.T) {
 	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
 	// process-global logger, making this test safe for parallel execution.

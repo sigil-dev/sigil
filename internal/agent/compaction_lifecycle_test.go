@@ -489,13 +489,14 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
-	// DeleteByIDs failed after Confirm — partial commit with recovery data.
+	// DeleteByIDs failed after Confirm — PartialCommitError carries the recovery data.
 	require.NotNil(t, result)
-	assert.True(t, result.PartialCommit)
+	var pce *agent.PartialCommitError
+	require.ErrorAs(t, err, &pce, "error must be a PartialCommitError")
 	assert.Equal(t, 1, result.SummariesCreated, "summary was created before DeleteByIDs failed")
 	assert.Equal(t, 5, result.MessagesProcessed, "all 5 messages were processed")
-	assert.Equal(t, mem.summaries.summaries[0].ID, result.SummaryID, "SummaryID must match the committed summary")
-	assert.ElementsMatch(t, []string{"msg-0", "msg-1", "msg-2", "msg-3", "msg-4"}, result.MessageIDs, "MessageIDs must contain the exact batch message IDs")
+	assert.Equal(t, mem.summaries.summaries[0].ID, pce.SummaryID, "SummaryID must match the committed summary")
+	assert.ElementsMatch(t, []string{"msg-0", "msg-1", "msg-2", "msg-3", "msg-4"}, pce.MessageIDs, "MessageIDs must contain the exact batch message IDs")
 	// Summary is committed (Confirm succeeded before DeleteByIDs was reached).
 	assert.Len(t, mem.summaries.summaries, 1)
 	assert.Len(t, vec.vectors, 1)

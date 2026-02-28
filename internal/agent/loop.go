@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -365,22 +366,23 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 	// Best-effort compaction: trigger if message count exceeds batch threshold.
 	// Compaction failures are logged but do not fail the response.
 	if l.compactor != nil {
-		compactResult, compactErr := l.compactor.Compact(ctx, msg.WorkspaceID)
+		_, compactErr := l.compactor.Compact(ctx, msg.WorkspaceID)
 		if compactErr != nil {
 			fields := []any{
 				"workspace_id", msg.WorkspaceID,
 				"session_id", msg.SessionID,
 				"error", compactErr,
 			}
-			if compactResult != nil && compactResult.PartialCommit {
+			var pce *PartialCommitError
+			if errors.As(compactErr, &pce) {
 				// PartialCommit means the summary is durably committed but source
 				// messages were NOT deleted. This is a persistent data integrity
 				// issue requiring operator action — log at Error, not Warn.
 				fields = append(fields,
 					"partial_commit", true,
-					"summary_id", compactResult.SummaryID,
-					"message_ids_count", len(compactResult.MessageIDs),
-					"message_ids", compactResult.MessageIDs,
+					"summary_id", pce.SummaryID,
+					"message_ids_count", len(pce.MessageIDs),
+					"message_ids", pce.MessageIDs,
 				)
 				l.logger.ErrorContext(ctx, "compaction partial commit: summary committed but messages not deleted (operator action required)", fields...)
 			} else {

@@ -361,24 +361,32 @@ func (c *Compactor) appendOrphansLocked(ctx context.Context, workspaceID string,
 }
 
 // CompactionResult reports the work completed by one Compact pass.
-// When PartialCommit is true, the summary was committed but the source
-// messages were not deleted — callers can retry DeleteByIDs using
-// the SummaryID and MessageIDs fields.
 type CompactionResult struct {
 	SummariesCreated  int
 	FactsExtracted    int
 	MessagesProcessed int
 	MessagesTrimmed   int
+}
 
-	// PartialCommit indicates the summary was committed but source
-	// messages were not deleted. The caller should retry the deletion
-	// or schedule reconciliation.
-	PartialCommit bool
-	// SummaryID is the committed summary's ID (set when PartialCommit is true).
+// PartialCommitError is returned by Compact when the summary was committed
+// but the source messages were not deleted. Callers should use errors.As to
+// extract recovery data and retry the deletion or schedule reconciliation.
+type PartialCommitError struct {
+	// Cause is the underlying DeleteByIDs error.
+	Cause error
+	// SummaryID is the committed summary's ID.
 	SummaryID string
-	// MessageIDs lists the source message IDs that should have been deleted
-	// (set when PartialCommit is true).
+	// MessageIDs lists the source message IDs that should have been deleted.
 	MessageIDs []string
+}
+
+func (e *PartialCommitError) Error() string {
+	return fmt.Sprintf("partial commit: summary %s committed but %d messages not deleted: %v",
+		e.SummaryID, len(e.MessageIDs), e.Cause)
+}
+
+func (e *PartialCommitError) Unwrap() error {
+	return e.Cause
 }
 
 // NewCompactor creates a Compactor with the given configuration.
@@ -581,11 +589,12 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	trimmed, err := c.cfg.MemoryStore.Messages().DeleteByIDs(ctx, workspaceID, batchIDs)
 	if err != nil {
 		// Summary is committed but messages were not deleted — partial commit.
-		// Return the result with PartialCommit=true so callers can retry.
-		result.PartialCommit = true
-		result.SummaryID = summary.ID
-		result.MessageIDs = batchIDs
-		return result, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "deleting compacted messages for workspace %s (summary %s committed, messages retained)", workspaceID, summary.ID)
+		// Return a PartialCommitError so callers can extract recovery data via errors.As.
+		return result, &PartialCommitError{
+			Cause:      err,
+			SummaryID:  summary.ID,
+			MessageIDs: batchIDs,
+		}
 	}
 	result.MessagesTrimmed = int(trimmed)
 
