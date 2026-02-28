@@ -702,7 +702,7 @@ func (m *mockMessageStore) DeleteByIDs(_ context.Context, workspaceID string, id
 	}
 
 	msgs := m.msgsFor(workspaceID)
-	filtered := msgs[:0]
+	var filtered []*store.Message
 	var deleted int64
 	for _, msg := range msgs {
 		if _, ok := idSet[msg.ID]; ok {
