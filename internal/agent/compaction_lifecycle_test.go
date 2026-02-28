@@ -5,6 +5,7 @@ package agent_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -493,6 +494,7 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	require.NotNil(t, result)
 	var pce *agent.PartialCommitError
 	require.ErrorAs(t, err, &pce, "error must be a PartialCommitError")
+	assert.True(t, errors.Is(err, pce.Cause), "errors.Is must traverse through PartialCommitError via Unwrap()")
 	assert.Equal(t, 1, result.SummariesCreated, "summary was created before DeleteByIDs failed")
 	assert.Equal(t, 5, result.MessagesProcessed, "all 5 messages were processed")
 	assert.Equal(t, mem.summaries.summaries[0].ID, pce.SummaryID, "SummaryID must match the committed summary")
