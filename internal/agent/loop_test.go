@@ -7629,11 +7629,11 @@ func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 
 	partialResult := &agent.CompactionResult{}
 	mc := &mockCompactor{
-		compactErr: &agent.PartialCommitError{
-			Cause:      fmt.Errorf("delete failed"),
-			SummaryID:  "sum-partial",
-			MessageIDs: []string{"m-1", "m-2"},
-		},
+		compactErr: agent.NewPartialCommitError(
+			fmt.Errorf("delete failed"),
+			"sum-partial",
+			[]string{"m-1", "m-2"},
+		),
 		compactResult: partialResult,
 	}
 

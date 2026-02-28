@@ -378,15 +378,28 @@ type PartialCommitError struct {
 	SummaryID string
 	// MessageIDs lists the source message IDs that should have been deleted.
 	MessageIDs []string
+	coded      error // sigilerr-wrapped for HasCode() classification
+}
+
+// NewPartialCommitError creates a PartialCommitError with sigilerr coding
+// so it participates in sigilerr.HasCode classification (D056).
+func NewPartialCommitError(cause error, summaryID string, messageIDs []string) *PartialCommitError {
+	return &PartialCommitError{
+		Cause:      cause,
+		SummaryID:  summaryID,
+		MessageIDs: messageIDs,
+		coded: sigilerr.Wrapf(cause, sigilerr.CodeAgentLoopPartialCommit,
+			"partial commit: summary %s committed but %d messages not deleted",
+			summaryID, len(messageIDs)),
+	}
 }
 
 func (e *PartialCommitError) Error() string {
-	return fmt.Sprintf("partial commit: summary %s committed but %d messages not deleted: %v",
-		e.SummaryID, len(e.MessageIDs), e.Cause)
+	return e.coded.Error()
 }
 
 func (e *PartialCommitError) Unwrap() error {
-	return e.Cause
+	return e.coded
 }
 
 // NewCompactor creates a Compactor with the given configuration.
@@ -590,11 +603,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	if err != nil {
 		// Summary is committed but messages were not deleted — partial commit.
 		// Return a PartialCommitError so callers can extract recovery data via errors.As.
-		return result, &PartialCommitError{
-			Cause:      err,
-			SummaryID:  summary.ID,
-			MessageIDs: batchIDs,
-		}
+		return result, NewPartialCommitError(err, summary.ID, batchIDs)
 	}
 	result.MessagesTrimmed = int(trimmed)
 
