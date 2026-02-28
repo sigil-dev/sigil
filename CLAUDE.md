@@ -111,6 +111,15 @@ uv run           # Run Python commands in the project venv
 | **MUST NOT** use `--no-verify`     | Fix the underlying issue, don't skip hooks           |
 | **MUST NOT** force push            | Use `--force-with-lease` only with user confirmation |
 
+### Worktree Agent Safety
+
+| Requirement                                 | Description                                                                                           |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **MUST** commit between agent rounds        | Worktree agents can corrupt main HEAD and destroy uncommitted work                                    |
+| **MUST** verify `git branch --show-current` | After each worktree agent round — agents may hijack the PR branch                                     |
+| **MUST** verify findings against HEAD       | Before fixing review findings — later-turn findings may be false positives against already-fixed code |
+| **MUST** scope fix prompts tightly          | Fix-worker agents go beyond scope without explicit constraints (e.g., "change ONLY line X")           |
+
 ---
 
 ## Claude Code Configuration
