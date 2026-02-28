@@ -98,15 +98,15 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 		return
 	}
 
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	var remaining []string
 	for _, id := range orphans {
-		if err := c.cfg.VectorStore.Delete(cleanupCtx, []string{id}); err != nil {
+		deleteCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		err := c.cfg.VectorStore.Delete(deleteCtx, []string{id})
+		cancel()
+		if err != nil {
 			// Note: workspace_id reflects the current compaction context, not
 			// necessarily the workspace where the orphaned embedding originated.
-			slog.ErrorContext(ctx, "compaction: orphan vector cleanup retry failed",
+			slog.ErrorContext(context.Background(), "compaction: orphan vector cleanup retry failed",
 				"workspace_id", workspaceID,
 				"embedding_id", id,
 				"error", err,
@@ -115,7 +115,7 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 		} else {
 			// Note: workspace_id reflects the current compaction context, not
 			// necessarily the workspace where the orphaned embedding originated.
-			slog.InfoContext(ctx, "compaction: cleaned up orphaned vector embedding",
+			slog.InfoContext(context.Background(), "compaction: cleaned up orphaned vector embedding",
 				"workspace_id", workspaceID,
 				"embedding_id", id,
 			)
@@ -287,6 +287,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 					slog.ErrorContext(cleanupCtx, "compaction: failed to roll back committed facts",
 						"workspace_id", workspaceID,
 						"summary_id", summary.ID,
+						"fact_ids", storedFactIDs,
 						"error", factErr,
 					)
 				}
@@ -307,7 +308,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	if c.cfg.FactExtractor != nil {
 		n, factIDs, err := c.storeFacts(ctx, workspaceID, summary.ID, summaryText, batch, now)
 		if err != nil {
-			return nil, err
+			return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "compacting workspace %s: storing facts", workspaceID)
 		}
 		storedFactIDs = factIDs
 		result.FactsExtracted = n

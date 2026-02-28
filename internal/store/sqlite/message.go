@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -273,7 +274,11 @@ func (m *MessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids 
 	if err != nil {
 		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning delete transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			slog.Error("DeleteByIDs rollback failed", "error", rbErr)
+		}
+	}()
 
 	// SQLite has a 999-variable limit per statement; reserve 1 for workspaceID.
 	const batchLimit = 998

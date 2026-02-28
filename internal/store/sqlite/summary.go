@@ -143,9 +143,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 // Confirm promotes a pending summary to committed, making it visible to GetByRange and GetLatest.
 // Returns CodeStoreEntityNotFound if the summary does not exist, or CodeStoreConflict if it is
 // not in the pending state (e.g. already committed).
+//
+// The UPDATE and disambiguating SELECT run inside a single transaction to eliminate the
+// TOCTOU window between the two queries.
 func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: beginning transaction: %w", summaryID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	const q = `UPDATE summaries SET status = ? WHERE id = ? AND workspace_id = ? AND status = ?`
-	res, err := s.db.ExecContext(ctx, q, summaryStatusCommitted, summaryID, workspaceID, summaryStatusPending)
+	res, err := tx.ExecContext(ctx, q, summaryStatusCommitted, summaryID, workspaceID, summaryStatusPending)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: %w", summaryID, err)
 	}
@@ -154,9 +163,9 @@ func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryI
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: rows affected: %w", summaryID, err)
 	}
 	if n == 0 {
-		// Disambiguate: summary not found vs wrong state.
+		// Disambiguate within the same transaction: summary not found vs wrong state.
 		var status string
-		checkErr := s.db.QueryRowContext(ctx,
+		checkErr := tx.QueryRowContext(ctx,
 			"SELECT status FROM summaries WHERE id = ? AND workspace_id = ?", summaryID, workspaceID,
 		).Scan(&status)
 		if checkErr == sql.ErrNoRows {
@@ -170,6 +179,10 @@ func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryI
 		// Row exists but not in pending state.
 		return sigilerr.Errorf(sigilerr.CodeStoreConflict,
 			"confirming summary %s: expected status pending, got %s", summaryID, status)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: committing transaction: %w", summaryID, err)
 	}
 	return nil
 }

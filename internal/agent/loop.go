@@ -358,14 +358,19 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 				"error", compactErr,
 			}
 			if compactResult != nil && compactResult.PartialCommit {
+				// PartialCommit means the summary is durably committed but source
+				// messages were NOT deleted. This is a persistent data integrity
+				// issue requiring operator action — log at Error, not Warn.
 				fields = append(fields,
 					"partial_commit", true,
 					"summary_id", compactResult.SummaryID,
 					"message_ids_count", len(compactResult.MessageIDs),
 					"message_ids", compactResult.MessageIDs,
 				)
+				slog.ErrorContext(ctx, "compaction partial commit: summary committed but messages not deleted (operator action required)", fields...)
+			} else {
+				slog.WarnContext(ctx, "compaction trigger failed (best-effort)", fields...)
 			}
-			slog.WarnContext(ctx, "compaction trigger failed (best-effort)", fields...)
 		}
 	}
 

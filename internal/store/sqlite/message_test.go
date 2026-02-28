@@ -253,6 +253,66 @@ func TestMessageStore_GetRange_WithLimit(t *testing.T) {
 	})
 }
 
+// TestMessageStore_DeleteByIDs_WorkspaceIsolation verifies that DeleteByIDs
+// scopes deletion to the specified workspace. The SQLite schema enforces a
+// global UNIQUE constraint on id, so the same literal ID cannot exist in two
+// workspaces simultaneously. The isolation test therefore inserts distinct IDs
+// per workspace and then passes ws-2's ID to DeleteByIDs scoped to ws-1.
+// A missing WHERE workspace_id clause would match and delete ws-2's row;
+// correct implementation must leave ws-2 untouched.
+func TestMessageStore_DeleteByIDs_WorkspaceIsolation(t *testing.T) {
+	ctx := context.Background()
+	db := testDBPath(t, "messages-delete-workspace-isolation")
+	ms, err := sqlite.NewMessageStore(db)
+	require.NoError(t, err)
+	defer func() { _ = ms.Close() }()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Insert a message into ws-1.
+	err = ms.Append(ctx, "ws-1", &store.Message{
+		ID:        "ws1-msg",
+		SessionID: "sess-1",
+		Role:      store.MessageRoleUser,
+		Content:   "Message in workspace 1",
+		CreatedAt: base,
+	})
+	require.NoError(t, err)
+
+	// Insert a message into ws-2.
+	err = ms.Append(ctx, "ws-2", &store.Message{
+		ID:        "ws2-msg",
+		SessionID: "sess-2",
+		Role:      store.MessageRoleUser,
+		Content:   "Message in workspace 2",
+		CreatedAt: base,
+	})
+	require.NoError(t, err)
+
+	// Call DeleteByIDs scoped to ws-1, passing ws-2's ID.
+	// If workspace scoping is absent, ws-2's row would be deleted.
+	deleted, err := ms.DeleteByIDs(ctx, "ws-1", []string{"ws2-msg"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), deleted, "ws-2 id must not match under ws-1 scope")
+
+	// ws-1 message must still be present (it was not in the delete list).
+	ws1Count, err := ms.Count(ctx, "ws-1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), ws1Count, "ws-1 message must be unaffected")
+
+	// ws-2 message must still be present — workspace isolation held.
+	ws2Count, err := ms.Count(ctx, "ws-2")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), ws2Count, "ws-2 message must not be deleted by a ws-1 scoped call")
+
+	// Confirm ws-2 GetRange still returns the message.
+	to := base.Add(time.Second)
+	results, err := ms.GetRange(ctx, "ws-2", base, to)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "ws2-msg", results[0].ID)
+}
+
 // TestMessageStore_Search_InjectionTests verifies that FTS5 query injection
 // attempts are properly sanitized and do not alter query behavior.
 // The sanitization works by wrapping the entire query in double quotes,

@@ -1288,6 +1288,22 @@ func TestCompaction_storeFacts_Sanitization(t *testing.T) {
 			wantFactCount: 100,
 		},
 		{
+			name: "exactly 100 facts all stored (boundary)",
+			inputFacts: func() []*store.Fact {
+				facts := make([]*store.Fact, 100) // maxFactsPerCompaction boundary
+				for i := range facts {
+					facts[i] = &store.Fact{
+						EntityID:   fmt.Sprintf("entity-%d", i),
+						Predicate:  "role",
+						Value:      "engineer",
+						Confidence: 0.9,
+					}
+				}
+				return facts
+			}(),
+			wantFactCount: 100,
+		},
+		{
 			name: "nil entry mid-slice is skipped",
 			inputFacts: []*store.Fact{
 				{EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: 0.9},
@@ -1656,6 +1672,50 @@ func TestCompaction_Compact_ContextCancellation(t *testing.T) {
 
 	_, err := c.Compact(ctx, "ws-1")
 	require.Error(t, err, "Compact should fail with cancelled context")
+}
+
+func TestCompaction_Compact_ContextCancellationMidLifecycle(t *testing.T) {
+	// Compact should return an error when the context is cancelled mid-lifecycle
+	// (after Summarize succeeds but before Embed), and the defer block should
+	// still clean up the pending summary via SummaryStore.Delete.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{0.1},
+		// The hook fires inside Summarize. It cancels the outer context (simulating
+		// cancellation arriving after Count/loadBatch succeed but mid-Summarize) and
+		// returns nil so that Summarize itself succeeds. The pending summary is then
+		// stored. Embed is configured to return context.Canceled, simulating the
+		// cancelled context propagating to the provider call.
+		summarizeHook: func() error {
+			cancel()
+			return nil
+		},
+		embedErr: context.Canceled,
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	_, err := c.Compact(ctx, "ws-1")
+	require.Error(t, err, "Compact should fail when context is cancelled mid-lifecycle")
+
+	// The defer block must have run with a fresh background context and deleted
+	// the pending summary. No pending summaries should remain.
+	assert.Empty(t, mem.summaries.summaries, "defer block must delete the pending summary after mid-lifecycle cancellation")
+	assert.NotEmpty(t, mem.summaries.deletedIDs, "SummaryStore.Delete must be called by the defer block")
 }
 
 func TestCompaction_drainOrphans_PartialFailure(t *testing.T) {

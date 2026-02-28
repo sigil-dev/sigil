@@ -7659,13 +7659,13 @@ func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 	// Find the compaction warning log and verify all partial-commit fields are present.
 	var warnRec *slog.Record
 	for _, rec := range logHandler.Records() {
-		if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "compaction trigger failed") {
+		if rec.Level == slog.LevelError && strings.Contains(rec.Message, "compaction partial commit") {
 			r := rec
 			warnRec = &r
 			break
 		}
 	}
-	require.NotNil(t, warnRec, "expected a slog.LevelWarn record for compaction trigger failed")
+	require.NotNil(t, warnRec, "expected a slog.LevelError record for compaction partial commit")
 
 	attrMap := make(map[string]any)
 	warnRec.Attrs(func(a slog.Attr) bool {
@@ -7683,6 +7683,73 @@ func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 	msgIDs, ok := attrMap["message_ids"]
 	assert.True(t, ok, "log record must contain message_ids field")
 	assert.Equal(t, []string{"m-1", "m-2"}, msgIDs, "message_ids must match the partial commit IDs")
+}
+
+// TestLoop_ProcessMessage_Compaction_NonPartialError verifies that when Compact
+// returns (nil, error) — the ordinary non-partial failure path — the log record
+// is emitted at Warn level and does NOT contain partial_commit, summary_id, or
+// message_ids fields (those are reserved for the PartialCommit recovery path).
+func TestLoop_ProcessMessage_Compaction_NonPartialError(t *testing.T) {
+	logHandler := &testLogHandler{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(logHandler))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-compact-nopartial", "user-1")
+	require.NoError(t, err)
+
+	// Return (nil, error) — the typical non-partial error path.
+	mc := &mockCompactor{
+		compactErr:    fmt.Errorf("compaction failed"),
+		compactResult: nil,
+	}
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Compactor = mc
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-compact-nopartial",
+		UserID:      "user-1",
+		Content:     "trigger non-partial compaction error test",
+	})
+
+	// Compaction failure is best-effort: response is still returned.
+	require.NoError(t, procErr)
+	require.NotNil(t, out)
+	assert.Equal(t, 1, mc.compactCalls, "Compact must be called exactly once")
+
+	// Find the Warn-level compaction log record.
+	var warnRec *slog.Record
+	for _, rec := range logHandler.Records() {
+		if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "compaction trigger failed") {
+			r := rec
+			warnRec = &r
+			break
+		}
+	}
+	require.NotNil(t, warnRec, "expected a slog.LevelWarn record for compaction trigger failed (best-effort)")
+
+	attrMap := make(map[string]any)
+	warnRec.Attrs(func(a slog.Attr) bool {
+		attrMap[a.Key] = a.Value.Any()
+		return true
+	})
+
+	// workspace_id and error must be present.
+	assert.Contains(t, attrMap, "workspace_id", "log record must contain workspace_id field")
+	assert.Contains(t, attrMap, "error", "log record must contain error field")
+
+	// Partial-commit recovery fields must NOT be present.
+	assert.NotContains(t, attrMap, "partial_commit", "non-partial error log must NOT contain partial_commit field")
+	assert.NotContains(t, attrMap, "summary_id", "non-partial error log must NOT contain summary_id field")
+	assert.NotContains(t, attrMap, "message_ids", "non-partial error log must NOT contain message_ids field")
 }
 
 // ---------------------------------------------------------------------------

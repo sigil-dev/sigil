@@ -479,7 +479,11 @@ func (k *KnowledgeStore) PutFacts(ctx context.Context, workspaceID string, facts
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning fact transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			slog.Error("PutFacts rollback failed", "error", rbErr)
+		}
+	}()
 
 	const q = `INSERT INTO triples (subject, predicate, object, workspace, metadata, created)
 VALUES (?, ?, ?, ?, ?, ?)
