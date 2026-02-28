@@ -1083,8 +1083,9 @@ func (s *lifecycleSummaryStore) Delete(_ context.Context, _ string, id string) e
 func (s *lifecycleSummaryStore) Close() error { return nil }
 
 type lifecycleKnowledgeStore struct {
-	facts      []*store.Fact
-	putFactErr error
+	facts                  []*store.Fact
+	putFactErr             error
+	deleteFactsBySourceErr error
 }
 
 func (k *lifecycleKnowledgeStore) PutEntity(_ context.Context, _ string, _ *store.Entity) error { return nil }
@@ -1120,6 +1121,9 @@ func (k *lifecycleKnowledgeStore) FindFacts(_ context.Context, _ string, _ store
 }
 
 func (k *lifecycleKnowledgeStore) DeleteFactsBySource(_ context.Context, _ string, source string) error {
+	if k.deleteFactsBySourceErr != nil {
+		return k.deleteFactsBySourceErr
+	}
 	var kept []*store.Fact
 	for _, f := range k.facts {
 		if f.Source != source {
@@ -1309,6 +1313,40 @@ func TestCompaction_storeFacts_Sanitization(t *testing.T) {
 				t.Helper()
 				require.Len(t, facts, 1)
 				assert.Equal(t, 4096, len(facts[0].EntityID))
+			},
+		},
+		{
+			name: "Predicate longer than 4096 chars is truncated",
+			inputFacts: []*store.Fact{
+				{
+					EntityID:   "alice",
+					Predicate:  strings.Repeat("x", 5000),
+					Value:      "engineer",
+					Confidence: 0.9,
+				},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				assert.Equal(t, 4096, len(facts[0].Predicate))
+			},
+		},
+		{
+			name: "Value longer than 4096 chars is truncated",
+			inputFacts: []*store.Fact{
+				{
+					EntityID:   "alice",
+					Predicate:  "role",
+					Value:      strings.Repeat("x", 5000),
+					Confidence: 0.9,
+				},
+			},
+			wantFactCount: 1,
+			checkFacts: func(t *testing.T, facts []*store.Fact) {
+				t.Helper()
+				require.Len(t, facts, 1)
+				assert.Equal(t, 4096, len(facts[0].Value))
 			},
 		},
 		{
@@ -1635,6 +1673,57 @@ func TestCompaction_drainOrphans_PartialFailure(t *testing.T) {
 
 	// orphan-1 succeeded (call #1), orphan-2 failed (call #2), orphan-3 succeeded (call #3).
 	assert.Equal(t, 1, c.PendingOrphanCount(), "only the failed orphan should remain")
+}
+
+func TestCompaction_Compact_FactsRollbackFailure(t *testing.T) {
+	// Scenario: facts are stored (factsStored=true), then VectorStore.Delete fails
+	// on the batch-IDs delete (call #1), triggering the defer cleanup path with
+	// confirmed=false. The defer calls DeleteFactsBySource which also fails. The
+	// primary error (vector delete) must be returned and facts must remain in the
+	// store (rollback failed).
+	mem := newLifecycleMemoryStore()
+	// DeleteFactsBySource will fail when called from the defer rollback.
+	mem.knowledge.deleteFactsBySourceErr = fmt.Errorf("facts rollback failed")
+
+	vec := newLifecycleVectorStore()
+	// Fail only call #1 (the batch-IDs VectorStore.Delete). Call #2 (the defer
+	// cleanup of the summary embedding) will succeed so we isolate the facts path.
+	vec.deleteErr = fmt.Errorf("vector delete failed")
+	vec.deleteErrOnCall = 1
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{1.0},
+		facts: []*store.Fact{
+			{ID: "fact-1", EntityID: "alice", Predicate: "role", Value: "engineer", Confidence: 0.9},
+		},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore:   mem,
+		VectorStore:   vec,
+		Summarizer:    p,
+		Embedder:      p,
+		FactExtractor: p,
+		BatchSize:     5,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	// Primary error (vector delete) must be returned, not the rollback error.
+	assert.Contains(t, err.Error(), "vector delete failed", "primary error must be propagated")
+	assert.NotContains(t, err.Error(), "facts rollback failed", "rollback error must not replace primary error")
+
+	// Facts must remain in the store — rollback failed.
+	assert.NotEmpty(t, mem.knowledge.facts, "facts must remain when DeleteFactsBySource fails")
+
+	// Summary cleanup (Delete) must still have been attempted.
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called to clean up pending summary")
 }
 
 func appendMessages(t *testing.T, ms *lifecycleMessageStore, workspaceID string, n int, startIndex ...int) {

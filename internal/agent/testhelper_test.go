@@ -1443,13 +1443,15 @@ func (p *mockProviderBatchToolCall) Chat(_ context.Context, _ provider.ChatReque
 // Set compactResult to control the returned *CompactionResult (used to test
 // partial-commit paths where both a result and an error are returned).
 type mockCompactor struct {
-	compactErr    error
-	compactResult *agent.CompactionResult
-	compactCalls  int
+	compactErr      error
+	compactResult   *agent.CompactionResult
+	compactCalls    int
+	lastWorkspaceID string
 }
 
-func (m *mockCompactor) Compact(_ context.Context, _ string) (*agent.CompactionResult, error) {
+func (m *mockCompactor) Compact(_ context.Context, workspaceID string) (*agent.CompactionResult, error) {
 	m.compactCalls++
+	m.lastWorkspaceID = workspaceID
 	if m.compactErr != nil {
 		return m.compactResult, m.compactErr
 	}

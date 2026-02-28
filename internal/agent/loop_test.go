@@ -7605,6 +7605,8 @@ func TestLoop_ProcessMessage_Compaction(t *testing.T) {
 			if tt.compactor != nil {
 				assert.Equal(t, 1, tt.compactor.compactCalls,
 					"Compact must be called exactly once per ProcessMessage when compactor is set")
+				assert.Equal(t, "ws-compact", tt.compactor.lastWorkspaceID,
+					"Compact must receive the workspace ID from the inbound message")
 			}
 		})
 	}
