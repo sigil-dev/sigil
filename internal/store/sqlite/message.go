@@ -24,6 +24,7 @@ var _ store.MessageStore = (*MessageStore)(nil)
 type MessageStore struct {
 	db     *sql.DB
 	ownsDB bool // if true, Close() will close the underlying db connection
+	logger *slog.Logger
 }
 
 // NewMessageStore opens (or creates) a SQLite database at dbPath and
@@ -44,7 +45,7 @@ func NewMessageStore(dbPath string) (*MessageStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating message tables: %w", err)
 	}
 
-	return &MessageStore{db: db, ownsDB: true}, nil
+	return &MessageStore{db: db, ownsDB: true, logger: slog.Default()}, nil
 }
 
 // NewMessageStoreWithDB creates a MessageStore using an existing database connection.
@@ -54,7 +55,7 @@ func NewMessageStoreWithDB(db *sql.DB) (*MessageStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating message tables: %w", err)
 	}
 
-	return &MessageStore{db: db, ownsDB: false}, nil
+	return &MessageStore{db: db, ownsDB: false, logger: slog.Default()}, nil
 }
 
 func migrateMessages(db *sql.DB) error {
@@ -276,7 +277,7 @@ func (m *MessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids 
 	}
 	defer func() {
 		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-			slog.ErrorContext(ctx, "DeleteByIDs rollback failed",
+			m.logger.ErrorContext(ctx, "DeleteByIDs rollback failed",
 				"workspace_id", workspaceID,
 				"id_count", len(ids),
 				"error", rbErr,

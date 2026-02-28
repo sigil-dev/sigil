@@ -25,7 +25,8 @@ var _ store.KnowledgeStore = (*KnowledgeStore)(nil)
 // storing entities, relationships, and facts as RDF-style triples
 // in a single unified table.
 type KnowledgeStore struct {
-	db *sql.DB
+	db     *sql.DB
+	logger *slog.Logger
 }
 
 // NewKnowledgeStore opens (or creates) a SQLite database at dbPath and
@@ -46,7 +47,7 @@ func NewKnowledgeStore(dbPath string) (*KnowledgeStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating knowledge tables: %w", err)
 	}
 
-	return &KnowledgeStore{db: db}, nil
+	return &KnowledgeStore{db: db, logger: slog.Default()}, nil
 }
 
 func migrateKnowledge(db *sql.DB) error {
@@ -481,7 +482,7 @@ func (k *KnowledgeStore) PutFacts(ctx context.Context, workspaceID string, facts
 	}
 	defer func() {
 		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-			slog.ErrorContext(ctx, "PutFacts rollback failed",
+			k.logger.ErrorContext(ctx, "PutFacts rollback failed",
 				"workspace_id", workspaceID,
 				"fact_count", len(facts),
 				"error", rbErr,
