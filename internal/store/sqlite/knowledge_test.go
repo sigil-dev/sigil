@@ -280,6 +280,101 @@ func TestKnowledgeStore_PutFacts_AtomicRollback(t *testing.T) {
 	assert.Empty(t, stored, "no facts should be committed after a failed PutFacts")
 }
 
+// TestKnowledgeStore_DeleteFactsBySource verifies that DeleteFactsBySource removes
+// only the triples whose metadata source field matches the given value.
+func TestKnowledgeStore_DeleteFactsBySource(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name            string
+		setup           func(t *testing.T, ks *sqlite.KnowledgeStore)
+		deleteWorkspace string
+		deleteSource    string
+		checkWorkspace  string
+		wantPredicates  []string // predicates expected to remain after delete
+	}{
+		{
+			name: "deletes compaction facts, keeps manual facts",
+			setup: func(t *testing.T, ks *sqlite.KnowledgeStore) {
+				t.Helper()
+				require.NoError(t, ks.PutFacts(ctx, "ws-1", []*store.Fact{
+					{ID: "f-c1", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "summary", Value: "v1", Source: "compaction", CreatedAt: time.Now()},
+					{ID: "f-c2", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "topic", Value: "v2", Source: "compaction", CreatedAt: time.Now()},
+					{ID: "f-m1", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "occupation", Value: "alice", Source: "manual", CreatedAt: time.Now()},
+				}))
+			},
+			deleteWorkspace: "ws-1",
+			deleteSource:    "compaction",
+			checkWorkspace:  "ws-1",
+			wantPredicates:  []string{"occupation"},
+		},
+		{
+			name: "workspace isolation: delete in ws-1 does not affect ws-2",
+			setup: func(t *testing.T, ks *sqlite.KnowledgeStore) {
+				t.Helper()
+				require.NoError(t, ks.PutFacts(ctx, "ws-1", []*store.Fact{
+					{ID: "f-ws1", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "summary", Value: "ws1-val", Source: "compaction", CreatedAt: time.Now()},
+				}))
+				require.NoError(t, ks.PutFacts(ctx, "ws-2", []*store.Fact{
+					{ID: "f-ws2", WorkspaceID: "ws-2", EntityID: "e2", Predicate: "summary", Value: "ws2-val", Source: "compaction", CreatedAt: time.Now()},
+				}))
+			},
+			deleteWorkspace: "ws-1",
+			deleteSource:    "compaction",
+			checkWorkspace:  "ws-2",
+			wantPredicates:  []string{"summary"},
+		},
+		{
+			name: "cross-source isolation: deleting compaction leaves manual facts",
+			setup: func(t *testing.T, ks *sqlite.KnowledgeStore) {
+				t.Helper()
+				require.NoError(t, ks.PutFacts(ctx, "ws-1", []*store.Fact{
+					{ID: "f-m1", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "role", Value: "engineer", Source: "manual", CreatedAt: time.Now()},
+					{ID: "f-m2", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "city", Value: "SF", Source: "manual", CreatedAt: time.Now()},
+				}))
+			},
+			deleteWorkspace: "ws-1",
+			deleteSource:    "compaction",
+			checkWorkspace:  "ws-1",
+			wantPredicates:  []string{"role", "city"},
+		},
+		{
+			name: "no error when no facts match source",
+			setup: func(t *testing.T, ks *sqlite.KnowledgeStore) {
+				t.Helper()
+				// Store nothing — delete against empty workspace should not error.
+			},
+			deleteWorkspace: "ws-1",
+			deleteSource:    "compaction",
+			checkWorkspace:  "ws-1",
+			wantPredicates:  []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := testDBPath(t, "knowledge-delete-by-source-"+tt.name)
+			ks, err := sqlite.NewKnowledgeStore(db)
+			require.NoError(t, err)
+			defer func() { _ = ks.Close() }()
+
+			tt.setup(t, ks)
+
+			err = ks.DeleteFactsBySource(ctx, tt.deleteWorkspace, tt.deleteSource)
+			require.NoError(t, err)
+
+			remaining, err := ks.FindFacts(ctx, tt.checkWorkspace, store.FactQuery{})
+			require.NoError(t, err)
+
+			gotPredicates := make([]string, len(remaining))
+			for i, f := range remaining {
+				gotPredicates[i] = f.Predicate
+			}
+			assert.ElementsMatch(t, tt.wantPredicates, gotPredicates)
+		})
+	}
+}
+
 // TestKnowledgeStore_Traverse_StartNotFound tests that Traverse returns ErrNotFound
 // when the starting entity doesn't exist.
 func TestKnowledgeStore_Traverse_StartNotFound(t *testing.T) {

@@ -721,6 +721,119 @@ func TestCompaction_Compact_PreservesMessageAppendedAfterCountBeforeDelete(t *te
 	assert.Equal(t, "msg-appended-after-count", messages[0].ID)
 }
 
+func TestCompaction_AppendOrphansLocked_FullCapOverflow(t *testing.T) {
+	// Verify that when pendingOrphans is already at capacity (maxPendingOrphans=1000),
+	// a call to appendOrphansLocked drops the new orphan and keeps the count at 1000.
+	//
+	// Scenario:
+	// 1. InjectOrphans fills the queue to maxPendingOrphans.
+	// 2. Compact() triggers drainOrphans, which clears the queue and attempts to delete
+	//    each orphan. All deletes fail, so all 1000 are re-appended to the now-empty queue
+	//    (no overflow — queue back to 1000).
+	// 3. The summary embedding is stored successfully (embeddingStored=true).
+	// 4. VectorStore.Delete for batchIDs fails, so Compact returns an error and the defer
+	//    runs with confirmed=false+embeddingStored=true, calling appendOrphansLocked with
+	//    summary.ID. At this point the queue is at 1000 — the new ID is dropped.
+	// 5. PendingOrphanCount() remains 1000.
+
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	vec.deleteErr = fmt.Errorf("vector delete always fails")
+
+	p := &mockCompactionProvider{
+		summary:   "summary for overflow test",
+		embedding: []float32{0.1},
+	}
+
+	appendMessages(t, mem.messages, "ws-overflow", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// Fill queue to cap via InjectOrphans (bypasses cap check).
+	orphanIDs := make([]string, agent.MaxPendingOrphans)
+	for i := range orphanIDs {
+		orphanIDs[i] = fmt.Sprintf("orphan-%d", i)
+	}
+	c.InjectOrphans(orphanIDs)
+	require.Equal(t, agent.MaxPendingOrphans, c.PendingOrphanCount(), "precondition: queue must be at cap")
+
+	// Compact: drainOrphans clears + re-appends 1000 (all delete-fail), defer adds summary.ID
+	// which is dropped (queue already at cap).
+	_, err := c.Compact(context.Background(), "ws-overflow")
+	require.Error(t, err)
+
+	// The new orphan (summary.ID) was silently dropped — count must not exceed cap.
+	assert.Equal(t, agent.MaxPendingOrphans, c.PendingOrphanCount(),
+		"PendingOrphanCount must stay at cap when new orphan is dropped")
+}
+
+func TestCompaction_AppendOrphansLocked_PartialFill(t *testing.T) {
+	// Verify the partial-fill branch: space > 0 but space < len(new orphans).
+	// Only the first `space` IDs are accepted; the rest are dropped.
+	//
+	// Scenario:
+	// 1. Start drainOrphans with 3 existing orphans (id0, id1, id2).
+	// 2. All VectorStore.Delete calls fail, so all 3 accumulate in `remaining`.
+	// 3. A deleteHook fires on the first Delete call and injects 998 extra IDs into the
+	//    queue (exploiting the window between drainOrphans releasing the lock to clear
+	//    the queue and re-acquiring it to call appendOrphansLocked).
+	// 4. appendOrphansLocked is called with remaining=[id0, id1, id2] while
+	//    pendingOrphans already has 998 entries → space=2, len(ids)=3.
+	// 5. Only 2 IDs are accepted; 1 is dropped. Final count = 1000.
+
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	vec.deleteErr = fmt.Errorf("vector delete always fails")
+
+	p := &mockCompactionProvider{
+		summary:   "summary for partial fill test",
+		embedding: []float32{0.2},
+	}
+
+	appendMessages(t, mem.messages, "ws-partial", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// Pre-seed the compactor with 3 orphans that will all fail deletion.
+	c.InjectOrphans([]string{"pre-orphan-0", "pre-orphan-1", "pre-orphan-2"})
+
+	// The deleteHook fires on the first Delete call inside drainOrphans' per-ID loop.
+	// At that point drainOrphans has already released the lock (after clearing
+	// pendingOrphans to nil) and not yet re-acquired it. InjectOrphans safely
+	// acquires the lock and inserts 998 IDs, so that when appendOrphansLocked runs
+	// it sees pendingOrphans.length=998 and space=2 < 3=len(remaining).
+	filler := make([]string, agent.MaxPendingOrphans-2)
+	for i := range filler {
+		filler[i] = fmt.Sprintf("filler-%d", i)
+	}
+	vec.deleteHook = func() {
+		c.InjectOrphans(filler)
+	}
+
+	_, err := c.Compact(context.Background(), "ws-partial")
+	require.Error(t, err)
+
+	// The partial-fill branch accepted `space` (2) of the 3 remaining orphans and
+	// dropped 1. The defer may add another orphan (summary.ID) but the queue is
+	// already at cap so it is also dropped. Final count must equal maxPendingOrphans.
+	assert.Equal(t, agent.MaxPendingOrphans, c.PendingOrphanCount(),
+		"partial fill must not exceed cap; count must equal maxPendingOrphans")
+}
+
 type lifecycleMemoryStore struct {
 	messages  *lifecycleMessageStore
 	summaries *lifecycleSummaryStore
@@ -1033,8 +1146,9 @@ type lifecycleVectorStore struct {
 	storeErr        error
 	searchErr       error
 	deleteErr       error
-	deleteErrOnCall int // if > 0, return deleteErr only on this specific call number (1-indexed)
-	deleteCalls     int // total number of Delete calls made
+	deleteErrOnCall int    // if > 0, return deleteErr only on this specific call number (1-indexed)
+	deleteCalls     int    // total number of Delete calls made
+	deleteHook      func() // called once after the first delete attempt, then cleared
 }
 
 func newLifecycleVectorStore() *lifecycleVectorStore {
@@ -1060,6 +1174,11 @@ func (v *lifecycleVectorStore) Search(_ context.Context, _ []float32, _ int, _ m
 
 func (v *lifecycleVectorStore) Delete(_ context.Context, ids []string) error {
 	v.deleteCalls++
+	if v.deleteHook != nil {
+		h := v.deleteHook
+		v.deleteHook = nil // fire once then clear
+		h()
+	}
 	if v.deleteErr != nil {
 		// If deleteErrOnCall is set, fail only on that specific call number.
 		// If deleteErrOnCall is zero, fail on every call.

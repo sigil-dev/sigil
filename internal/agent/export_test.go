@@ -36,3 +36,6 @@ var TruncateField = truncateField
 
 // MaxFactFieldLen exposes maxFactFieldLen for white-box testing.
 const MaxFactFieldLen = maxFactFieldLen
+
+// MaxPendingOrphans exposes maxPendingOrphans for white-box testing.
+const MaxPendingOrphans = maxPendingOrphans
