@@ -276,7 +276,7 @@ func (m *MessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids 
 	}
 	defer func() {
 		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-			slog.Error("DeleteByIDs rollback failed", "error", rbErr)
+			slog.ErrorContext(ctx, "DeleteByIDs rollback failed", "error", rbErr)
 		}
 	}()
 

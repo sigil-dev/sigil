@@ -124,6 +124,9 @@ type ToolDispatcherConfig struct {
 	PluginManager  PluginExecutor
 	AuditStore     store.AuditStore
 	DefaultTimeout time.Duration
+	// Logger is the structured logger the ToolDispatcher will use for audit
+	// failure logging. When nil, slog.Default() is used.
+	Logger *slog.Logger
 }
 
 // turnBudget tracks call count for a single turn.
@@ -137,6 +140,7 @@ type ToolDispatcher struct {
 	pluginManager  PluginExecutor
 	auditStore     store.AuditStore
 	defaultTimeout time.Duration
+	logger         *slog.Logger
 
 	// turnBudgets tracks per-turn call counts keyed by TurnID.
 	turnBudgets sync.Map // map[string]*turnBudget
@@ -161,11 +165,17 @@ func NewToolDispatcher(cfg ToolDispatcherConfig) (*ToolDispatcher, error) {
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "PluginManager is required")
 	}
 
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+
 	return &ToolDispatcher{
 		enforcer:       cfg.Enforcer,
 		pluginManager:  cfg.PluginManager,
 		auditStore:     cfg.AuditStore,
 		defaultTimeout: cfg.DefaultTimeout,
+		logger:         log,
 	}, nil
 }
 
@@ -311,7 +321,7 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 			// failures have occurred overall, even across success-interspersed sequences.
 			attrs = append(attrs, slog.Int64("total_failures", cumulative))
 		}
-		logAuditFailure(ctx, slog.Default(), consecutive, "audit store append failed", attrs...)
+		logAuditFailure(ctx, d.logger, consecutive, "audit store append failed", attrs...)
 	} else {
 		// Reset consecutive counter; auditFailTotal tracks cumulative failures for operator visibility.
 		d.auditFailCount.Store(0)

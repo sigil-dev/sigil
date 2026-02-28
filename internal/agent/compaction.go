@@ -59,6 +59,11 @@ type CompactorConfig struct {
 	Embedder      Embedder
 	FactExtractor FactExtractor
 	BatchSize     int
+	// Logger is the structured logger the Compactor will use for all internal
+	// log output. When nil, slog.Default() is used. Setting an explicit logger
+	// avoids mutating the process-global default and makes log capture in tests
+	// safe for parallel execution.
+	Logger *slog.Logger
 }
 
 // pendingFactEntry groups fact IDs with their workspace for deferred retry.
@@ -71,6 +76,10 @@ type pendingFactEntry struct {
 // long-term storage and (in Phase 6) summarising and extracting facts.
 type Compactor struct {
 	cfg CompactorConfig
+	// log is the structured logger for all internal log output. Always
+	// non-nil after NewCompactor; defaults to slog.Default() when not
+	// supplied via CompactorConfig.Logger.
+	log *slog.Logger
 
 	// mu guards pendingOrphans and pendingFacts for concurrent access.
 	mu sync.Mutex
@@ -120,7 +129,7 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 		if err != nil {
 			// Note: workspace_id reflects the current compaction context, not
 			// necessarily the workspace where the orphaned embedding originated.
-			slog.ErrorContext(ctx, "compaction: orphan vector cleanup retry failed",
+			c.log.ErrorContext(ctx, "compaction: orphan vector cleanup retry failed",
 				"workspace_id", workspaceID,
 				"embedding_id", id,
 				"error", err,
@@ -129,7 +138,7 @@ func (c *Compactor) drainOrphans(ctx context.Context, workspaceID string) {
 		} else {
 			// Note: workspace_id reflects the current compaction context, not
 			// necessarily the workspace where the orphaned embedding originated.
-			slog.InfoContext(ctx, "compaction: cleaned up orphaned vector embedding",
+			c.log.InfoContext(ctx, "compaction: cleaned up orphaned vector embedding",
 				"workspace_id", workspaceID,
 				"embedding_id", id,
 			)
@@ -184,14 +193,14 @@ func (c *Compactor) drainPendingFacts(ctx context.Context) {
 		err := c.cfg.MemoryStore.Knowledge().DeleteFactsByIDs(deleteCtx, entry.workspaceID, entry.factIDs)
 		cancel()
 		if err != nil {
-			slog.ErrorContext(ctx, "compaction: pending fact cleanup retry failed",
+			c.log.ErrorContext(ctx, "compaction: pending fact cleanup retry failed",
 				"workspace_id", entry.workspaceID,
 				"fact_ids", entry.factIDs,
 				"error", err,
 			)
 			remaining = append(remaining, entry)
 		} else {
-			slog.InfoContext(ctx, "compaction: cleaned up orphaned facts",
+			c.log.InfoContext(ctx, "compaction: cleaned up orphaned facts",
 				"workspace_id", entry.workspaceID,
 				"fact_count", len(entry.factIDs),
 			)
@@ -216,7 +225,7 @@ func (c *Compactor) appendPendingFactsLocked(ctx context.Context, entries []pend
 	for _, entry := range entries {
 		space := maxPendingFacts - currentCount
 		if space <= 0 {
-			slog.WarnContext(ctx, "compaction: pendingFacts cap reached, dropping fact IDs",
+			c.log.WarnContext(ctx, "compaction: pendingFacts cap reached, dropping fact IDs",
 				"workspace_id", entry.workspaceID,
 				"dropped", len(entry.factIDs),
 				"cap", maxPendingFacts,
@@ -233,7 +242,7 @@ func (c *Compactor) appendPendingFactsLocked(ctx context.Context, entries []pend
 			})
 			dropped := len(entry.factIDs) - space
 			currentCount += space
-			slog.WarnContext(ctx, "compaction: pendingFacts cap reached, dropping fact IDs",
+			c.log.WarnContext(ctx, "compaction: pendingFacts cap reached, dropping fact IDs",
 				"workspace_id", entry.workspaceID,
 				"dropped", dropped,
 				"cap", maxPendingFacts,
@@ -254,7 +263,7 @@ func (c *Compactor) appendOrphansLocked(ctx context.Context, workspaceID string,
 		c.pendingOrphans = append(c.pendingOrphans, ids[:space]...)
 	}
 	dropped := len(ids) - space
-	slog.WarnContext(ctx, "compaction: pendingOrphans cap reached, dropping orphan IDs",
+	c.log.WarnContext(ctx, "compaction: pendingOrphans cap reached, dropping orphan IDs",
 		"workspace_id", workspaceID,
 		"dropped", dropped,
 		"cap", maxPendingOrphans,
@@ -300,7 +309,11 @@ func NewCompactor(cfg CompactorConfig) (*Compactor, error) {
 	if cfg.Embedder == nil {
 		return nil, sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "CompactorConfig.Embedder must not be nil")
 	}
-	return &Compactor{cfg: cfg}, nil
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Compactor{cfg: cfg, log: log}, nil
 }
 
 // RollMessage appends a message to Tier 1 (message store) and stores a
@@ -387,7 +400,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 			defer cancel()
 			if embeddingStored {
 				if vecErr := c.cfg.VectorStore.Delete(cleanupCtx, []string{summary.ID}); vecErr != nil {
-					slog.ErrorContext(cleanupCtx, "compaction: failed to clean up summary vector embedding, queuing for retry",
+					c.log.ErrorContext(cleanupCtx, "compaction: failed to clean up summary vector embedding, queuing for retry",
 						"workspace_id", workspaceID,
 						"embedding_id", summary.ID,
 						"error", vecErr,
@@ -399,7 +412,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 			}
 			if len(storedFactIDs) > 0 {
 				if factErr := c.cfg.MemoryStore.Knowledge().DeleteFactsByIDs(cleanupCtx, workspaceID, storedFactIDs); factErr != nil {
-					slog.ErrorContext(cleanupCtx, "compaction: failed to roll back committed facts, queuing for retry",
+					c.log.ErrorContext(cleanupCtx, "compaction: failed to roll back committed facts, queuing for retry",
 						"workspace_id", workspaceID,
 						"summary_id", summary.ID,
 						"fact_ids", storedFactIDs,
@@ -414,7 +427,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 				}
 			}
 			if delErr := c.cfg.MemoryStore.Summaries().Delete(cleanupCtx, workspaceID, summary.ID); delErr != nil {
-				slog.ErrorContext(cleanupCtx, "compaction: failed to clean up pending summary",
+				c.log.ErrorContext(cleanupCtx, "compaction: failed to clean up pending summary",
 					"workspace_id", workspaceID,
 					"summary_id", summary.ID,
 					"error", delErr,
@@ -513,7 +526,7 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 	}
 
 	if len(facts) > maxFactsPerCompaction {
-		slog.WarnContext(ctx, "compaction: fact count exceeds cap, truncating",
+		c.log.WarnContext(ctx, "compaction: fact count exceeds cap, truncating",
 			"workspace_id", workspaceID,
 			"summary_id", summaryID,
 			"extracted", len(facts),
@@ -531,7 +544,7 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 
 		// Validate untrusted text fields before building the sanitized fact.
 		if fact.EntityID == "" {
-			slog.WarnContext(ctx, "compaction: skipping fact with empty entity ID",
+			c.log.WarnContext(ctx, "compaction: skipping fact with empty entity ID",
 				"workspace_id", workspaceID,
 				"summary_id", summaryID,
 				"index", i,
@@ -562,7 +575,7 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 	}
 
 	if len(facts) > 0 && len(sanitized) == 0 {
-		slog.WarnContext(ctx, "compaction: all extracted facts discarded by sanitization",
+		c.log.WarnContext(ctx, "compaction: all extracted facts discarded by sanitization",
 			"workspace_id", workspaceID,
 			"summary_id", summaryID,
 			"raw_count", len(facts),
