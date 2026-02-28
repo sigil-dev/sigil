@@ -235,6 +235,9 @@ ORDER BY created_at ASC`
 
 // GetOldest returns the n oldest messages for the workspace, sorted by created_at ASC.
 func (m *MessageStore) GetOldest(ctx context.Context, workspaceID string, n int) ([]*store.Message, error) {
+	if n <= 0 {
+		return nil, sigilerr.New(sigilerr.CodeStoreInvalidInput, "GetOldest: n must be positive")
+	}
 	const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
 FROM memory_messages
 WHERE workspace_id = ?

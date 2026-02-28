@@ -915,7 +915,7 @@ func (m *lifecycleMessageStore) GetOldest(_ context.Context, workspaceID string,
 		return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
 	})
 	if n <= 0 {
-		return []*store.Message{}, nil
+		return nil, fmt.Errorf("GetOldest: n must be positive, got %d", n)
 	}
 	if n < len(sorted) {
 		sorted = sorted[:n]
