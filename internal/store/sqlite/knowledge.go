@@ -481,7 +481,11 @@ func (k *KnowledgeStore) PutFacts(ctx context.Context, workspaceID string, facts
 	}
 	defer func() {
 		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-			slog.ErrorContext(ctx, "PutFacts rollback failed", "error", rbErr)
+			slog.ErrorContext(ctx, "PutFacts rollback failed",
+				"workspace_id", workspaceID,
+				"fact_count", len(facts),
+				"error", rbErr,
+			)
 		}
 	}()
 

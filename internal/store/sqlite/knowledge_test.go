@@ -418,6 +418,36 @@ func TestKnowledgeStore_DeleteFactsByIDs(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, remaining, 1, "no-op should leave all facts intact")
 	})
+
+	t.Run("workspace isolation — delete in ws-1 does not affect ws-2", func(t *testing.T) {
+		db := testDBPath(t, "knowledge-delete-by-ids-ws-isolation")
+		ks, err := sqlite.NewKnowledgeStore(db)
+		require.NoError(t, err)
+		defer func() { _ = ks.Close() }()
+
+		// Insert facts in two workspaces.
+		require.NoError(t, ks.PutFacts(ctx, "ws-1", []*store.Fact{
+			{ID: "f-1", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "role", Value: "engineer", Source: "compaction", CreatedAt: time.Now()},
+		}))
+		require.NoError(t, ks.PutFacts(ctx, "ws-2", []*store.Fact{
+			{ID: "f-2", WorkspaceID: "ws-2", EntityID: "e1", Predicate: "role", Value: "designer", Source: "compaction", CreatedAt: time.Now()},
+		}))
+
+		// Delete ws-1's fact — ws-2 must be untouched.
+		err = ks.DeleteFactsByIDs(ctx, "ws-1", []string{"f-1"})
+		require.NoError(t, err)
+
+		// ws-1 should be empty.
+		remaining1, err := ks.FindFacts(ctx, "ws-1", store.FactQuery{})
+		require.NoError(t, err)
+		assert.Empty(t, remaining1, "ws-1 fact should be deleted")
+
+		// ws-2 should still have its fact.
+		remaining2, err := ks.FindFacts(ctx, "ws-2", store.FactQuery{})
+		require.NoError(t, err)
+		require.Len(t, remaining2, 1, "ws-2 fact must survive")
+		assert.Equal(t, "f-2", remaining2[0].ID)
+	})
 }
 
 // TestKnowledgeStore_Traverse_StartNotFound tests that Traverse returns ErrNotFound

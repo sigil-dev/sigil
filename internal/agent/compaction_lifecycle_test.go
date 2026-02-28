@@ -1798,6 +1798,115 @@ func TestCompaction_drainOrphans_CrossWorkspace(t *testing.T) {
 	assert.GreaterOrEqual(t, vec.deleteCalls, 2, "Delete must be called for each orphan ID")
 }
 
+func TestCompaction_drainPendingSummaries_RetrySuccess(t *testing.T) {
+	// When a pending summary exists and Delete succeeds, the summary
+	// should be removed from the queue.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{0.1},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	c.InjectPendingSummaries("ws-1", "sum-1")
+	assert.Equal(t, 1, c.PendingSummaryOrphanCount())
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, c.PendingSummaryOrphanCount(), "pending summary should be drained after successful Delete")
+	assert.Contains(t, mem.summaries.deletedIDs, "sum-1")
+}
+
+func TestCompaction_drainPendingSummaries_PersistentFailure(t *testing.T) {
+	// When Delete persistently fails, the summary should be re-queued.
+	mem := newLifecycleMemoryStore()
+	mem.summaries.deleteErr = fmt.Errorf("storage unavailable")
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{0.1},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	c.InjectPendingSummaries("ws-1", "sum-1")
+	assert.Equal(t, 1, c.PendingSummaryOrphanCount())
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, c.PendingSummaryOrphanCount(), "failed summary should be re-queued")
+}
+
+func TestCompaction_AppendPendingSummaryOrphansLocked_CapOverflow(t *testing.T) {
+	// Verify that when pendingSummaryOrphans is already at capacity (maxPendingSummaryOrphans=1000),
+	// appendPendingSummaryOrphansLocked drops new entries and keeps the count at 1000.
+	//
+	// Scenario:
+	// 1. InjectPendingSummaries fills the queue to maxPendingSummaryOrphans.
+	// 2. SummaryStore.deleteErr is set so all drain attempts fail → all 1000 re-queued.
+	// 3. VectorStore.Delete fails on call #1 (batchIDs) so Compact returns error with
+	//    confirmed=false. The defer calls SummaryStore.Delete which also fails, triggering
+	//    appendPendingSummaryOrphansLocked. Queue is at 1000 — new entry dropped.
+	// 4. PendingSummaryOrphanCount() remains 1000.
+
+	mem := newLifecycleMemoryStore()
+	mem.summaries.deleteErr = fmt.Errorf("summary delete always fails")
+	vec := newLifecycleVectorStore()
+	// Fail VectorStore.Delete on call #1 so Compact returns before Confirm (confirmed=false).
+	vec.deleteErr = fmt.Errorf("vector delete fails")
+	vec.deleteErrOnCall = 1
+
+	p := &mockCompactionProvider{
+		summary:   "summary for overflow test",
+		embedding: []float32{0.1},
+	}
+
+	appendMessages(t, mem.messages, "ws-overflow", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// Fill queue to cap via InjectPendingSummaries (bypasses cap check).
+	for i := 0; i < agent.MaxPendingSummaryOrphans; i++ {
+		c.InjectPendingSummaries("ws-overflow", fmt.Sprintf("sum-%d", i))
+	}
+	require.Equal(t, agent.MaxPendingSummaryOrphans, c.PendingSummaryOrphanCount(), "precondition: queue must be at cap")
+
+	// Compact: drainPendingSummaries clears + re-appends 1000 (all delete-fail).
+	// Defer appends new summary but queue is at cap — it must be dropped.
+	_, err := c.Compact(context.Background(), "ws-overflow")
+	require.Error(t, err)
+
+	assert.Equal(t, agent.MaxPendingSummaryOrphans, c.PendingSummaryOrphanCount(),
+		"PendingSummaryOrphanCount must stay at cap when new entry is dropped")
+}
+
 func TestCompaction_Compact_FactsRollbackFailure(t *testing.T) {
 	// Scenario: facts are stored (factsStored=true), then VectorStore.Delete fails
 	// on the batch-IDs delete (call #1), triggering the defer cleanup path with

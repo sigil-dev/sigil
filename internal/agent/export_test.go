@@ -42,3 +42,6 @@ const MaxPendingOrphans = maxPendingOrphans
 
 // MaxPendingFacts exposes maxPendingFacts for white-box testing.
 const MaxPendingFacts = maxPendingFacts
+
+// MaxPendingSummaryOrphans exposes maxPendingSummaryOrphans for white-box testing.
+const MaxPendingSummaryOrphans = maxPendingSummaryOrphans
