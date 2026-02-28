@@ -1985,10 +1985,9 @@ func TestAgentLoop_AuditStoreConsecutiveFailures(t *testing.T) {
 // and security-scan paths).
 func TestAgentLoop_AuditBlockedInputConsecutiveFailures(t *testing.T) {
 	// Capture slog output so we can assert the escalation from Warn to Error.
+	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
+	// process-global logger, making this test safe for parallel execution.
 	logHandler := &testLogHandler{}
-	origLogger := slog.Default()
-	slog.SetDefault(slog.New(logHandler))
-	t.Cleanup(func() { slog.SetDefault(origLogger) })
 
 	sm := newMockSessionManager()
 	ctx := context.Background()
@@ -2002,6 +2001,7 @@ func TestAgentLoop_AuditBlockedInputConsecutiveFailures(t *testing.T) {
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.AuditStore = failingAuditStore
+	cfg.Logger = slog.New(logHandler)
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -7617,10 +7617,9 @@ func TestLoop_ProcessMessage_Compaction(t *testing.T) {
 // the warning log includes the partial_commit, summary_id, message_ids_count,
 // and message_ids fields so operators can recover the orphaned messages.
 func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
+	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
+	// process-global logger, making this test safe for parallel execution.
 	logHandler := &testLogHandler{}
-	origLogger := slog.Default()
-	slog.SetDefault(slog.New(logHandler))
-	t.Cleanup(func() { slog.SetDefault(origLogger) })
 
 	sm := newMockSessionManager()
 	ctx := context.Background()
@@ -7641,6 +7640,7 @@ func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.Compactor = mc
+	cfg.Logger = slog.New(logHandler)
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -7690,10 +7690,9 @@ func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 // is emitted at Warn level and does NOT contain partial_commit, summary_id, or
 // message_ids fields (those are reserved for the PartialCommit recovery path).
 func TestLoop_ProcessMessage_Compaction_NonPartialError(t *testing.T) {
+	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
+	// process-global logger, making this test safe for parallel execution.
 	logHandler := &testLogHandler{}
-	origLogger := slog.Default()
-	slog.SetDefault(slog.New(logHandler))
-	t.Cleanup(func() { slog.SetDefault(origLogger) })
 
 	sm := newMockSessionManager()
 	ctx := context.Background()
@@ -7710,6 +7709,7 @@ func TestLoop_ProcessMessage_Compaction_NonPartialError(t *testing.T) {
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.Compactor = mc
+	cfg.Logger = slog.New(logHandler)
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 

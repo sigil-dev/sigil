@@ -151,6 +151,11 @@ type LoopConfig struct {
 	// RESPOND step: "trigger compaction if needed").
 	// Accepts *Compactor or any implementation of compactorRunner (e.g. test mocks).
 	Compactor compactorRunner
+	// Logger is the structured logger the Loop will use for all internal log
+	// output. When nil, slog.Default() is used. Setting an explicit logger
+	// avoids mutating the process-global default and makes log capture in tests
+	// safe for parallel execution.
+	Logger *slog.Logger
 }
 
 // compactorRunner is the minimal interface the Loop requires from a Compactor.
@@ -192,6 +197,10 @@ type Loop struct {
 	hooks                  *LoopHooks
 	scanner                scanner.Scanner
 	scannerModes           ScannerModes
+	// logger is the structured logger for all internal log output. Always
+	// non-nil after NewLoop; defaults to slog.Default() when not supplied
+	// via LoopConfig.Logger.
+	logger                 *slog.Logger
 	// auditFailCount tracks consecutive audit-write failures for escalating log levels.
 	// Resets to 0 on each successful append so that intermittent failures do not
 	// permanently elevate the log level. See auditFailTotal for a counter that never resets.
@@ -235,6 +244,11 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		toolContentScanSize = defaultMaxToolContentScanSize
 	}
 
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+
 	return &Loop{
 		sessions:               cfg.SessionManager,
 		enforcer:               cfg.Enforcer,
@@ -248,6 +262,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		hooks:                  orDefaultHooks(cfg.Hooks),
 		scanner:                cfg.Scanner,
 		scannerModes:           cfg.ScannerModes,
+		logger:                 log,
 		compactor:              cfg.Compactor,
 	}, nil
 }
@@ -367,9 +382,9 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 					"message_ids_count", len(compactResult.MessageIDs),
 					"message_ids", compactResult.MessageIDs,
 				)
-				slog.ErrorContext(ctx, "compaction partial commit: summary committed but messages not deleted (operator action required)", fields...)
+				l.logger.ErrorContext(ctx, "compaction partial commit: summary committed but messages not deleted (operator action required)", fields...)
 			} else {
-				slog.WarnContext(ctx, "compaction trigger failed (best-effort)", fields...)
+				l.logger.WarnContext(ctx, "compaction trigger failed (best-effort)", fields...)
 			}
 		}
 	}
@@ -1261,7 +1276,7 @@ func (l *Loop) appendAuditEntry(ctx context.Context, entry *store.AuditEntry, co
 			// failures have occurred overall, even across success-interspersed sequences.
 			extra = append(extra, slog.Int64("total_failures", cumulative))
 		}
-		logAuditFailure(ctx, consecutive, logMsg, extra...)
+		logAuditFailure(ctx, l.logger, consecutive, logMsg, extra...)
 	} else {
 		// Reset consecutive counter; auditFailTotal tracks cumulative failures for operator visibility.
 		counter.Store(0)

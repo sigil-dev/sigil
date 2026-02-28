@@ -311,7 +311,7 @@ func (d *ToolDispatcher) auditToolExecution(ctx context.Context, req ToolCallReq
 			// failures have occurred overall, even across success-interspersed sequences.
 			attrs = append(attrs, slog.Int64("total_failures", cumulative))
 		}
-		logAuditFailure(ctx, consecutive, "audit store append failed", attrs...)
+		logAuditFailure(ctx, slog.Default(), consecutive, "audit store append failed", attrs...)
 	} else {
 		// Reset consecutive counter; auditFailTotal tracks cumulative failures for operator visibility.
 		d.auditFailCount.Store(0)
