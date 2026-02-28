@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -150,7 +151,15 @@ func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryI
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: beginning transaction: %w", summaryID, err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			slog.ErrorContext(ctx, "Confirm rollback failed",
+				"summary_id", summaryID,
+				"workspace_id", workspaceID,
+				"error", rbErr,
+			)
+		}
+	}()
 
 	const q = `UPDATE summaries SET status = ? WHERE id = ? AND workspace_id = ? AND status = ?`
 	res, err := tx.ExecContext(ctx, q, summaryStatusCommitted, summaryID, workspaceID, summaryStatusPending)
