@@ -236,6 +236,10 @@ func (m *mockKnowledgeStore) DeleteFactsBySource(ctx context.Context, workspaceI
 	return nil
 }
 
+func (m *mockKnowledgeStore) DeleteFactsByIDs(ctx context.Context, workspaceID string, ids []string) error {
+	return nil
+}
+
 func (m *mockKnowledgeStore) Traverse(ctx context.Context, startID string, depth int, filter store.TraversalFilter) (*store.Graph, error) {
 	return nil, nil
 }

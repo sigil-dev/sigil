@@ -817,6 +817,10 @@ func (m *mockKnowledgeStore) DeleteFactsBySource(_ context.Context, _ string, so
 	return nil
 }
 
+func (m *mockKnowledgeStore) DeleteFactsByIDs(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+
 func (m *mockKnowledgeStore) Traverse(_ context.Context, _ string, _ int, _ store.TraversalFilter) (*store.Graph, error) {
 	return nil, nil
 }

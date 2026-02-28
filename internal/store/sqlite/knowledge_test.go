@@ -375,6 +375,51 @@ func TestKnowledgeStore_DeleteFactsBySource(t *testing.T) {
 	}
 }
 
+// TestKnowledgeStore_DeleteFactsByIDs verifies that DeleteFactsByIDs removes only
+// the facts with matching IDs in the given workspace.
+func TestKnowledgeStore_DeleteFactsByIDs(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("deletes specified IDs, keeps others", func(t *testing.T) {
+		db := testDBPath(t, "knowledge-delete-by-ids-basic")
+		ks, err := sqlite.NewKnowledgeStore(db)
+		require.NoError(t, err)
+		defer func() { _ = ks.Close() }()
+
+		require.NoError(t, ks.PutFacts(ctx, "ws-1", []*store.Fact{
+			{ID: "f-1", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "role", Value: "engineer", Source: "compaction", CreatedAt: time.Now()},
+			{ID: "f-2", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "city", Value: "SF", Source: "compaction", CreatedAt: time.Now()},
+			{ID: "f-3", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "team", Value: "infra", Source: "compaction", CreatedAt: time.Now()},
+		}))
+
+		err = ks.DeleteFactsByIDs(ctx, "ws-1", []string{"f-1", "f-3"})
+		require.NoError(t, err)
+
+		remaining, err := ks.FindFacts(ctx, "ws-1", store.FactQuery{})
+		require.NoError(t, err)
+		require.Len(t, remaining, 1)
+		assert.Equal(t, "f-2", remaining[0].ID)
+	})
+
+	t.Run("empty IDs slice is no-op", func(t *testing.T) {
+		db := testDBPath(t, "knowledge-delete-by-ids-empty")
+		ks, err := sqlite.NewKnowledgeStore(db)
+		require.NoError(t, err)
+		defer func() { _ = ks.Close() }()
+
+		require.NoError(t, ks.PutFacts(ctx, "ws-1", []*store.Fact{
+			{ID: "f-1", WorkspaceID: "ws-1", EntityID: "e1", Predicate: "role", Value: "v", Source: "compaction", CreatedAt: time.Now()},
+		}))
+
+		err = ks.DeleteFactsByIDs(ctx, "ws-1", []string{})
+		require.NoError(t, err)
+
+		remaining, err := ks.FindFacts(ctx, "ws-1", store.FactQuery{})
+		require.NoError(t, err)
+		assert.Len(t, remaining, 1, "no-op should leave all facts intact")
+	})
+}
+
 // TestKnowledgeStore_Traverse_StartNotFound tests that Traverse returns ErrNotFound
 // when the starting entity doesn't exist.
 func TestKnowledgeStore_Traverse_StartNotFound(t *testing.T) {

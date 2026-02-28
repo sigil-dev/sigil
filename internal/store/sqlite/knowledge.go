@@ -522,6 +522,27 @@ func (k *KnowledgeStore) DeleteFactsBySource(ctx context.Context, workspaceID st
 	return nil
 }
 
+// DeleteFactsByIDs removes specific facts (triples) in a workspace by their IDs.
+// An empty ids slice is a no-op. Used for precise rollback during compaction cleanup,
+// targeting only the facts written in the current pass.
+func (k *KnowledgeStore) DeleteFactsByIDs(ctx context.Context, workspaceID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	q := `DELETE FROM triples WHERE workspace = ? AND json_extract(metadata, '$.fact_id') IN (` + placeholders + `)`
+	args := make([]any, 0, 1+len(ids))
+	args = append(args, workspaceID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	if _, err := k.db.ExecContext(ctx, q, args...); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting facts by IDs: %w", err)
+	}
+	return nil
+}
+
 // FindFacts searches for facts by workspace with optional entity and predicate filters.
 // Facts are triples where the predicate is not a reserved entity predicate (type, name, prop:*).
 func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, query store.FactQuery) ([]*store.Fact, error) {

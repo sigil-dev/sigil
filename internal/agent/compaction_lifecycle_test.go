@@ -415,15 +415,16 @@ func TestCompaction_Compact_VectorDeleteFailure(t *testing.T) {
 	assert.Nil(t, result)
 
 	// Defer cleanup removed the pending summary (SummaryStore.Delete succeeds)
-	// and rolled back committed facts (DeleteFactsBySource succeeds).
+	// and rolled back committed facts (DeleteFactsByIDs succeeds).
 	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
 	assert.Empty(t, mem.summaries.summaries, "pending summary cleaned up by defer")
-	assert.Empty(t, mem.knowledge.facts, "facts rolled back by defer via DeleteFactsBySource")
+	assert.Empty(t, mem.knowledge.facts, "facts rolled back by defer via DeleteFactsByIDs")
 
-	// vec.deleteErr affects ALL Delete calls — the defer's VectorStore.Delete also
-	// fails, so the summary embedding remains and its ID is queued to pendingOrphans.
+	// vec.deleteErr affects ALL Delete calls — the per-message placeholder Delete
+	// fails (queuing 5 batchIDs as orphans), and the defer's summary Delete also
+	// fails (queuing 1 summary ID), for a total of 6 orphans.
 	assert.Len(t, vec.vectors, 1, "summary embedding remains — VectorStore.Delete failed")
-	assert.Equal(t, 1, c.PendingOrphanCount(), "failed embedding cleanup queued for retry")
+	assert.Equal(t, 6, c.PendingOrphanCount(), "batchIDs (5) + summary embedding (1) queued for retry")
 
 	// Messages were not trimmed (DeleteByIDs was not reached).
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
@@ -1086,6 +1087,7 @@ type lifecycleKnowledgeStore struct {
 	facts                  []*store.Fact
 	putFactErr             error
 	deleteFactsBySourceErr error
+	deleteFactsByIDsErr    error
 }
 
 func (k *lifecycleKnowledgeStore) PutEntity(_ context.Context, _ string, _ *store.Entity) error { return nil }
@@ -1127,6 +1129,24 @@ func (k *lifecycleKnowledgeStore) DeleteFactsBySource(_ context.Context, _ strin
 	var kept []*store.Fact
 	for _, f := range k.facts {
 		if f.Source != source {
+			kept = append(kept, f)
+		}
+	}
+	k.facts = kept
+	return nil
+}
+
+func (k *lifecycleKnowledgeStore) DeleteFactsByIDs(_ context.Context, _ string, ids []string) error {
+	if k.deleteFactsByIDsErr != nil {
+		return k.deleteFactsByIDsErr
+	}
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	var kept []*store.Fact
+	for _, f := range k.facts {
+		if !idSet[f.ID] {
 			kept = append(kept, f)
 		}
 	}
@@ -1678,12 +1698,12 @@ func TestCompaction_drainOrphans_PartialFailure(t *testing.T) {
 func TestCompaction_Compact_FactsRollbackFailure(t *testing.T) {
 	// Scenario: facts are stored (factsStored=true), then VectorStore.Delete fails
 	// on the batch-IDs delete (call #1), triggering the defer cleanup path with
-	// confirmed=false. The defer calls DeleteFactsBySource which also fails. The
+	// confirmed=false. The defer calls DeleteFactsByIDs which also fails. The
 	// primary error (vector delete) must be returned and facts must remain in the
 	// store (rollback failed).
 	mem := newLifecycleMemoryStore()
-	// DeleteFactsBySource will fail when called from the defer rollback.
-	mem.knowledge.deleteFactsBySourceErr = fmt.Errorf("facts rollback failed")
+	// DeleteFactsByIDs will fail when called from the defer rollback.
+	mem.knowledge.deleteFactsByIDsErr = fmt.Errorf("facts rollback failed")
 
 	vec := newLifecycleVectorStore()
 	// Fail only call #1 (the batch-IDs VectorStore.Delete). Call #2 (the defer
@@ -1720,7 +1740,7 @@ func TestCompaction_Compact_FactsRollbackFailure(t *testing.T) {
 	assert.NotContains(t, err.Error(), "facts rollback failed", "rollback error must not replace primary error")
 
 	// Facts must remain in the store — rollback failed.
-	assert.NotEmpty(t, mem.knowledge.facts, "facts must remain when DeleteFactsBySource fails")
+	assert.NotEmpty(t, mem.knowledge.facts, "facts must remain when DeleteFactsByIDs fails")
 
 	// Summary cleanup (Delete) must still have been attempted.
 	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called to clean up pending summary")

@@ -51,6 +51,7 @@ type KnowledgeStore interface {
 	PutFacts(ctx context.Context, workspaceID string, facts []*Fact) error
 	FindFacts(ctx context.Context, workspaceID string, query FactQuery) ([]*Fact, error)
 	DeleteFactsBySource(ctx context.Context, workspaceID string, source string) error
+	DeleteFactsByIDs(ctx context.Context, workspaceID string, ids []string) error
 
 	Traverse(ctx context.Context, startID string, depth int, filter TraversalFilter) (*Graph, error)
 

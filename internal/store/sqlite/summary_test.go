@@ -229,7 +229,7 @@ func TestSummaryStore_Confirm_WrongWorkspace_ReturnsNotFound(t *testing.T) {
 	assert.Empty(t, results, "summary in ws-1 should still be pending after failed Confirm")
 }
 
-func TestSummaryStore_Confirm_AlreadyCommitted_ReturnsNotFound(t *testing.T) {
+func TestSummaryStore_Confirm_AlreadyCommitted_ReturnsConflict(t *testing.T) {
 	ctx := context.Background()
 	db := testDBPath(t, "summaries-confirm-already-committed")
 	ss, err := sqlite.NewSummaryStore(db)
@@ -254,11 +254,12 @@ func TestSummaryStore_Confirm_AlreadyCommitted_ReturnsNotFound(t *testing.T) {
 	err = ss.Confirm(ctx, "ws-1", "sum-pending")
 	require.NoError(t, err, "first Confirm should succeed")
 
-	// Second Confirm — must return not-found because status is no longer 'pending'.
-	// Documents that Confirm is NOT idempotent: double-confirm returns an error.
+	// Second Confirm — must return conflict because status is 'committed', not 'pending'.
+	// Documents that Confirm is NOT idempotent: double-confirm returns a conflict error.
 	err = ss.Confirm(ctx, "ws-1", "sum-pending")
 	require.Error(t, err, "second Confirm on already-committed summary should return error")
-	assert.True(t, sigilerr.IsNotFound(err), "expected CodeStoreEntityNotFound on double-confirm, got: %v", err)
+	assert.True(t, sigilerr.IsConflict(err), "expected CodeStoreConflict on double-confirm, got: %v", err)
+	assert.Contains(t, err.Error(), "expected status pending, got committed")
 }
 
 func TestSummaryStore_GetByRange_ExcludesPendingSummaries(t *testing.T) {

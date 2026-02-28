@@ -140,7 +140,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	return nil
 }
 
-// Confirm promotes a pending summary to committed status.
+// Confirm promotes a pending summary to committed, making it visible to GetByRange and GetLatest.
+// Returns CodeStoreEntityNotFound if the summary does not exist, or CodeStoreConflict if it is
+// not in the pending state (e.g. already committed).
 func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryID string) error {
 	const q = `UPDATE summaries SET status = ? WHERE id = ? AND workspace_id = ? AND status = ?`
 	res, err := s.db.ExecContext(ctx, q, summaryStatusCommitted, summaryID, workspaceID, summaryStatusPending)
@@ -152,7 +154,22 @@ func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryI
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: rows affected: %w", summaryID, err)
 	}
 	if n == 0 {
-		return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound, "confirming summary %s: not found in workspace %s", summaryID, workspaceID)
+		// Disambiguate: summary not found vs wrong state.
+		var status string
+		checkErr := s.db.QueryRowContext(ctx,
+			"SELECT status FROM summaries WHERE id = ? AND workspace_id = ?", summaryID, workspaceID,
+		).Scan(&status)
+		if checkErr == sql.ErrNoRows {
+			return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound,
+				"confirming summary %s: not found in workspace %s", summaryID, workspaceID)
+		}
+		if checkErr != nil {
+			return sigilerr.Wrapf(checkErr, sigilerr.CodeStoreDatabaseFailure,
+				"checking summary %s state in workspace %s", summaryID, workspaceID)
+		}
+		// Row exists but not in pending state.
+		return sigilerr.Errorf(sigilerr.CodeStoreConflict,
+			"confirming summary %s: expected status pending, got %s", summaryID, status)
 	}
 	return nil
 }

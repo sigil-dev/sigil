@@ -265,7 +265,7 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	// if any subsequent step fails.
 	confirmed := false
 	embeddingStored := false
-	factsStored := false
+	var storedFactIDs []string
 	defer func() {
 		if !confirmed {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -282,8 +282,8 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 					c.mu.Unlock()
 				}
 			}
-			if factsStored {
-				if factErr := c.cfg.MemoryStore.Knowledge().DeleteFactsBySource(cleanupCtx, workspaceID, "compaction"); factErr != nil {
+			if len(storedFactIDs) > 0 {
+				if factErr := c.cfg.MemoryStore.Knowledge().DeleteFactsByIDs(cleanupCtx, workspaceID, storedFactIDs); factErr != nil {
 					slog.ErrorContext(cleanupCtx, "compaction: failed to roll back committed facts",
 						"workspace_id", workspaceID,
 						"summary_id", summary.ID,
@@ -305,11 +305,11 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 	result.MessagesProcessed = len(batch)
 
 	if c.cfg.FactExtractor != nil {
-		n, err := c.storeFacts(ctx, workspaceID, summary.ID, summaryText, batch, now)
+		n, factIDs, err := c.storeFacts(ctx, workspaceID, summary.ID, summaryText, batch, now)
 		if err != nil {
 			return nil, err
 		}
-		factsStored = n > 0
+		storedFactIDs = factIDs
 		result.FactsExtracted = n
 	}
 
@@ -330,6 +330,9 @@ func (c *Compactor) Compact(ctx context.Context, workspaceID string) (*Compactio
 
 	// Clean up per-message placeholder vectors from RollMessage.
 	if err := c.cfg.VectorStore.Delete(ctx, batchIDs); err != nil {
+		c.mu.Lock()
+		c.appendOrphansLocked(ctx, workspaceID, batchIDs)
+		c.mu.Unlock()
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "deleting compacted message vectors for workspace %s", workspaceID)
 	}
 
@@ -379,13 +382,21 @@ const maxFactFieldLen = 4096
 // All provider-supplied fields are validated and sanitized — LLM output is untrusted.
 // Facts are persisted via PutFacts for all-or-nothing semantics: if any write fails,
 // no facts from this batch are committed to the store.
-func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summaryText string, batch []*store.Message, now time.Time) (int, error) {
+// Returns the count of stored facts, the IDs of the stored facts (for targeted rollback),
+// and any error.
+func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summaryText string, batch []*store.Message, now time.Time) (int, []string, error) {
 	facts, err := c.cfg.FactExtractor.ExtractFacts(ctx, summaryText, batch)
 	if err != nil {
-		return 0, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "extracting facts for workspace %s", workspaceID)
+		return 0, nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "extracting facts for workspace %s", workspaceID)
 	}
 
 	if len(facts) > maxFactsPerCompaction {
+		slog.WarnContext(ctx, "compaction: fact count exceeds cap, truncating",
+			"workspace_id", workspaceID,
+			"summary_id", summaryID,
+			"extracted", len(facts),
+			"cap", maxFactsPerCompaction,
+		)
 		facts = facts[:maxFactsPerCompaction]
 	}
 
@@ -438,9 +449,14 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 
 	// Second pass: persist all sanitized facts atomically.
 	if err := c.cfg.MemoryStore.Knowledge().PutFacts(ctx, workspaceID, sanitized); err != nil {
-		return 0, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing extracted facts for workspace %s", workspaceID)
+		return 0, nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "storing extracted facts for workspace %s", workspaceID)
 	}
-	return len(sanitized), nil
+
+	ids := make([]string, len(sanitized))
+	for i, f := range sanitized {
+		ids[i] = f.ID
+	}
+	return len(sanitized), ids, nil
 }
 
 func truncateField(s string, maxLen int) string {
