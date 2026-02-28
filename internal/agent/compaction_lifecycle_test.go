@@ -2197,6 +2197,60 @@ func TestCompaction_AppendPendingFactsLocked_PartialFill(t *testing.T) {
 		"partial fill must not exceed cap; count must equal maxPendingFacts")
 }
 
+func TestCompaction_Compact_ConcurrentCalls(t *testing.T) {
+	// Concurrent Compact() calls on the same workspace are not prevented by
+	// the Compactor's mutex (which only protects retry queues). Two callers
+	// may both load the same batch, create duplicate summaries, and attempt
+	// to delete the same messages. This test documents that behavior:
+	// no panic, no data race, at-most duplicate summaries.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	p := &mockCompactionProvider{
+		summary:   "concurrent-summary",
+		embedding: []float32{1.0},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+
+	c, err := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, err)
+
+	type compactResult struct {
+		result *agent.CompactionResult
+		err    error
+	}
+
+	ch := make(chan compactResult, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			r, e := c.Compact(context.Background(), "ws-1")
+			ch <- compactResult{result: r, err: e}
+		}()
+	}
+
+	var results []compactResult
+	for i := 0; i < 2; i++ {
+		results = append(results, <-ch)
+	}
+
+	// Neither call should panic or return a data race error.
+	// At least one should succeed or return a PartialCommitError
+	// (if both try to delete the same messages).
+	completedCount := 0
+	for _, r := range results {
+		if r.err == nil {
+			completedCount++
+		}
+	}
+	assert.GreaterOrEqual(t, completedCount, 1, "at least one concurrent call should complete without error")
+}
+
 func appendMessages(t *testing.T, ms *lifecycleMessageStore, workspaceID string, n int, startIndex ...int) {
 	t.Helper()
 
