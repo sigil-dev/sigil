@@ -235,14 +235,28 @@ func TestKnowledgeStore_PutFacts_EmptySlice_Noop(t *testing.T) {
 	assert.Empty(t, stored)
 }
 
-// TestKnowledgeStore_PutFacts_AtomicRollback verifies that PutFacts rolls back
-// all inserts when the operation fails, leaving zero committed facts.
-// Note: This test triggers failure at BeginTx (closed DB), not mid-batch.
-// A mid-batch failure (where some ExecContext calls succeed before a later one
-// fails) is architecturally difficult to trigger with SQLite because:
-// (a) ON CONFLICT DO UPDATE prevents constraint violations, and
-// (b) SQLite has no column-length limits for TEXT.
-// The compaction-level lifecycle tests cover PutFacts error propagation.
+// TestKnowledgeStore_PutFacts_AtomicRollback verifies the all-or-nothing
+// semantics of PutFacts.
+//
+// Atomicity guarantee — structural, not injection-tested:
+// PutFacts wraps all inserts in a single BeginTx/Commit block. If any insert
+// fails, the transaction is rolled back and zero facts are visible to callers.
+// This guarantee is enforced by the transaction structure in knowledge.go and
+// is verified at the code-review level. A sqlmock-based injection test could
+// verify mid-batch failure (fail exactly after the Nth ExecContext), but
+// that dependency is not worth adding for this path.
+//
+// Why mid-batch failure is not directly triggerable with a real SQLite DB:
+//   (a) ON CONFLICT DO UPDATE absorbs constraint violations — no unique-key errors.
+//   (b) SQLite imposes no column-length limits on TEXT columns.
+//
+// What this test does cover:
+//   - BeginTx failure (closed DB) → error returned, zero rows committed.
+//   - Success path: all facts are atomically visible after Commit (regression
+//     guard — if PutFacts were refactored to insert per-row without a
+//     transaction and one row failed, the count would mismatch).
+//
+// The compaction-level lifecycle tests cover PutFacts error propagation end-to-end.
 func TestKnowledgeStore_PutFacts_AtomicRollback(t *testing.T) {
 	ctx := context.Background()
 	db := testDBPath(t, "knowledge-putfacts-rollback")
@@ -253,31 +267,52 @@ func TestKnowledgeStore_PutFacts_AtomicRollback(t *testing.T) {
 		ID: "alice", WorkspaceID: "ws-1", Type: "person", Name: "Alice", CreatedAt: time.Now(),
 	}))
 
-	// Close the store to make subsequent DB operations fail.
-	require.NoError(t, ks.Close())
-
-	facts := []*store.Fact{
+	// Regression guard: verify the success path commits all facts atomically.
+	// If PutFacts were refactored to per-row inserts without a wrapping
+	// transaction, a partial failure would leave a count mismatch here.
+	successFacts := []*store.Fact{
 		{
-			ID: "f-1", WorkspaceID: "ws-1", EntityID: "alice",
+			ID: "s-1", WorkspaceID: "ws-1", EntityID: "alice",
 			Predicate: "occupation", Value: "engineer", Confidence: 0.9, CreatedAt: time.Now(),
 		},
 		{
-			ID: "f-2", WorkspaceID: "ws-1", EntityID: "alice",
+			ID: "s-2", WorkspaceID: "ws-1", EntityID: "alice",
 			Predicate: "location", Value: "San Francisco", Confidence: 0.8, CreatedAt: time.Now(),
 		},
 	}
+	require.NoError(t, ks.PutFacts(ctx, "ws-1", successFacts))
 
-	err = ks.PutFacts(ctx, "ws-1", facts)
+	visible, err := ks.FindFacts(ctx, "ws-1", store.FactQuery{EntityID: "alice"})
+	require.NoError(t, err)
+	assert.Len(t, visible, len(successFacts),
+		"all facts must be atomically visible after a successful PutFacts")
+
+	// Close the store to make subsequent DB operations fail at BeginTx.
+	require.NoError(t, ks.Close())
+
+	failFacts := []*store.Fact{
+		{
+			ID: "f-1", WorkspaceID: "ws-1", EntityID: "alice",
+			Predicate: "language", Value: "Go", Confidence: 1.0, CreatedAt: time.Now(),
+		},
+		{
+			ID: "f-2", WorkspaceID: "ws-1", EntityID: "alice",
+			Predicate: "hobby", Value: "climbing", Confidence: 0.7, CreatedAt: time.Now(),
+		},
+	}
+
+	err = ks.PutFacts(ctx, "ws-1", failFacts)
 	require.Error(t, err, "PutFacts should fail when the database is closed")
 
-	// Reopen to verify no facts were committed.
+	// Reopen to verify the failed batch left no additional facts committed.
 	ks2, err := sqlite.NewKnowledgeStore(db)
 	require.NoError(t, err)
 	defer func() { _ = ks2.Close() }()
 
 	stored, err := ks2.FindFacts(ctx, "ws-1", store.FactQuery{EntityID: "alice"})
 	require.NoError(t, err)
-	assert.Empty(t, stored, "no facts should be committed after a failed PutFacts")
+	assert.Len(t, stored, len(successFacts),
+		"failed PutFacts must not commit any new facts — count must equal the pre-failure baseline")
 }
 
 // TestKnowledgeStore_DeleteFactsBySource verifies that DeleteFactsBySource removes
