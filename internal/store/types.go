@@ -167,7 +167,7 @@ type Summary struct {
 	Content     string
 	MessageIDs  []string
 	CreatedAt   time.Time
-	Status SummaryStatus
+	Status      SummaryStatus
 }
 
 // SummaryStatus represents the two-phase commit state of a compaction summary.

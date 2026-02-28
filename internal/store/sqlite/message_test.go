@@ -578,13 +578,13 @@ func TestMessageStore_GetOldest(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name       string
-		setup      func(ms *sqlite.MessageStore)
-		workspace  string
-		n          int
-		wantLen    int
-		wantFirst  string // expected ID of first returned message
-		wantLast   string // expected ID of last returned message
+		name      string
+		setup     func(ms *sqlite.MessageStore)
+		workspace string
+		n         int
+		wantLen   int
+		wantFirst string // expected ID of first returned message
+		wantLast  string // expected ID of last returned message
 	}{
 		{
 			name: "ordering_oldest_first",

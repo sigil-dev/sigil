@@ -200,7 +200,7 @@ type Loop struct {
 	// logger is the structured logger for all internal log output. Always
 	// non-nil after NewLoop; defaults to slog.Default() when not supplied
 	// via LoopConfig.Logger.
-	logger                 *slog.Logger
+	logger *slog.Logger
 	// auditFailCount tracks consecutive audit-write failures for escalating log levels.
 	// Resets to 0 on each successful append so that intermittent failures do not
 	// permanently elevate the log level. See auditFailTotal for a counter that never resets.

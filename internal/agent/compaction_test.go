@@ -154,14 +154,13 @@ func TestCompaction_RollMessage(t *testing.T) {
 	ms := newMockMemoryStore()
 	vs := newMockVectorStore()
 
-
 	c, err := agent.NewCompactor(agent.CompactorConfig{
-		MemoryStore:  ms,
-		VectorStore:  vs,
+		MemoryStore: ms,
+		VectorStore: vs,
 
-		Summarizer:   noopSummarizer{},
-		Embedder:     noopEmbedder{},
-		BatchSize:    50,
+		Summarizer: noopSummarizer{},
+		Embedder:   noopEmbedder{},
+		BatchSize:  50,
 	})
 	require.NoError(t, err)
 
@@ -190,14 +189,13 @@ func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
 	}
 	vs := newMockVectorStore()
 
-
 	c, err := agent.NewCompactor(agent.CompactorConfig{
-		MemoryStore:  memStoreErr,
-		VectorStore:  vs,
+		MemoryStore: memStoreErr,
+		VectorStore: vs,
 
-		Summarizer:   noopSummarizer{},
-		Embedder:     noopEmbedder{},
-		BatchSize:    50,
+		Summarizer: noopSummarizer{},
+		Embedder:   noopEmbedder{},
+		BatchSize:  50,
 	})
 	require.NoError(t, err)
 
@@ -225,14 +223,13 @@ func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
 		storeErr:        expectedErr,
 	}
 
-
 	c, err := agent.NewCompactor(agent.CompactorConfig{
-		MemoryStore:  ms,
-		VectorStore:  vs,
+		MemoryStore: ms,
+		VectorStore: vs,
 
-		Summarizer:   noopSummarizer{},
-		Embedder:     noopEmbedder{},
-		BatchSize:    50,
+		Summarizer: noopSummarizer{},
+		Embedder:   noopEmbedder{},
+		BatchSize:  50,
 	})
 	require.NoError(t, err)
 

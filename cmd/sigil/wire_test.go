@@ -1241,12 +1241,15 @@ type statusStubProvider struct {
 	ctxAware  bool
 }
 
-func (s *statusStubProvider) Name() string                                               { return s.name }
-func (s *statusStubProvider) Available(_ context.Context) bool                           { return s.status.Available }
-func (s *statusStubProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) { return nil, nil }
+func (s *statusStubProvider) Name() string                     { return s.name }
+func (s *statusStubProvider) Available(_ context.Context) bool { return s.status.Available }
+func (s *statusStubProvider) ListModels(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
 func (s *statusStubProvider) Chat(_ context.Context, _ provider.ChatRequest) (<-chan provider.ChatEvent, error) {
 	return nil, nil
 }
+
 func (s *statusStubProvider) Status(ctx context.Context) (provider.ProviderStatus, error) {
 	if s.ctxAware {
 		if err := ctx.Err(); err != nil {
