@@ -643,17 +643,27 @@ func (m *mockMemoryStore) Close() error                    { return nil }
 // --- mockMessageStore ---
 
 type mockMessageStore struct {
-	msgs []*store.Message
+	msgs map[string][]*store.Message
 }
 
-func (m *mockMessageStore) Append(_ context.Context, _ string, msg *store.Message) error {
-	m.msgs = append(m.msgs, msg)
+func (m *mockMessageStore) msgsFor(workspaceID string) []*store.Message {
+	if m.msgs == nil {
+		return nil
+	}
+	return m.msgs[workspaceID]
+}
+
+func (m *mockMessageStore) Append(_ context.Context, workspaceID string, msg *store.Message) error {
+	if m.msgs == nil {
+		m.msgs = make(map[string][]*store.Message)
+	}
+	m.msgs[workspaceID] = append(m.msgs[workspaceID], msg)
 	return nil
 }
 
-func (m *mockMessageStore) Search(_ context.Context, _ string, query string, _ store.SearchOpts) ([]*store.Message, error) {
+func (m *mockMessageStore) Search(_ context.Context, workspaceID string, query string, _ store.SearchOpts) ([]*store.Message, error) {
 	var results []*store.Message
-	for _, msg := range m.msgs {
+	for _, msg := range m.msgsFor(workspaceID) {
 		if strings.Contains(msg.Content, query) {
 			results = append(results, msg)
 		}
@@ -665,22 +675,23 @@ func (m *mockMessageStore) GetRange(_ context.Context, _ string, _, _ time.Time,
 	return nil, nil
 }
 
-func (m *mockMessageStore) GetOldest(_ context.Context, _ string, n int) ([]*store.Message, error) {
-	if n <= 0 || len(m.msgs) == 0 {
+func (m *mockMessageStore) GetOldest(_ context.Context, workspaceID string, n int) ([]*store.Message, error) {
+	msgs := m.msgsFor(workspaceID)
+	if n <= 0 || len(msgs) == 0 {
 		return nil, nil
 	}
 	end := n
-	if end > len(m.msgs) {
-		end = len(m.msgs)
+	if end > len(msgs) {
+		end = len(msgs)
 	}
-	return m.msgs[:end], nil
+	return msgs[:end], nil
 }
 
-func (m *mockMessageStore) Count(_ context.Context, _ string) (int64, error) {
-	return int64(len(m.msgs)), nil
+func (m *mockMessageStore) Count(_ context.Context, workspaceID string) (int64, error) {
+	return int64(len(m.msgsFor(workspaceID))), nil
 }
 
-func (m *mockMessageStore) DeleteByIDs(_ context.Context, _ string, ids []string) (int64, error) {
+func (m *mockMessageStore) DeleteByIDs(_ context.Context, workspaceID string, ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -690,16 +701,20 @@ func (m *mockMessageStore) DeleteByIDs(_ context.Context, _ string, ids []string
 		idSet[id] = struct{}{}
 	}
 
-	filtered := m.msgs[:0]
+	msgs := m.msgsFor(workspaceID)
+	filtered := msgs[:0]
 	var deleted int64
-	for _, msg := range m.msgs {
+	for _, msg := range msgs {
 		if _, ok := idSet[msg.ID]; ok {
 			deleted++
 			continue
 		}
 		filtered = append(filtered, msg)
 	}
-	m.msgs = filtered
+	if m.msgs == nil {
+		m.msgs = make(map[string][]*store.Message)
+	}
+	m.msgs[workspaceID] = filtered
 
 	return deleted, nil
 }
@@ -789,6 +804,17 @@ func (m *mockKnowledgeStore) FindFacts(_ context.Context, _ string, query store.
 		results = append(results, f)
 	}
 	return results, nil
+}
+
+func (m *mockKnowledgeStore) DeleteFactsBySource(_ context.Context, _ string, source string) error {
+	var kept []*store.Fact
+	for _, f := range m.facts {
+		if f.Source != source {
+			kept = append(kept, f)
+		}
+	}
+	m.facts = kept
+	return nil
 }
 
 func (m *mockKnowledgeStore) Traverse(_ context.Context, _ string, _ int, _ store.TraversalFilter) (*store.Graph, error) {

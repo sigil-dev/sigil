@@ -237,6 +237,12 @@ func TestKnowledgeStore_PutFacts_EmptySlice_Noop(t *testing.T) {
 
 // TestKnowledgeStore_PutFacts_AtomicRollback verifies that PutFacts rolls back
 // all inserts when the operation fails, leaving zero committed facts.
+// Note: This test triggers failure at BeginTx (closed DB), not mid-batch.
+// A mid-batch failure (where some ExecContext calls succeed before a later one
+// fails) is architecturally difficult to trigger with SQLite because:
+// (a) ON CONFLICT DO UPDATE prevents constraint violations, and
+// (b) SQLite has no column-length limits for TEXT.
+// The compaction-level lifecycle tests cover PutFacts error propagation.
 func TestKnowledgeStore_PutFacts_AtomicRollback(t *testing.T) {
 	ctx := context.Background()
 	db := testDBPath(t, "knowledge-putfacts-rollback")

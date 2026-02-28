@@ -76,8 +76,8 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 	// Capture expected batch timestamps before compaction deletes the messages.
 	// appendMessages creates messages in order: CreatedAt = now + i*minute for i in [0,n).
 	// The batch size is 5, so msgs[0] and msgs[4] bound the compacted range.
-	expectedFromTime := mem.messages.msgs[0].CreatedAt
-	expectedToTime := mem.messages.msgs[4].CreatedAt
+	expectedFromTime := mem.messages.msgsFor("ws-1")[0].CreatedAt
+	expectedToTime := mem.messages.msgsFor("ws-1")[4].CreatedAt
 
 	c, newErr := agent.NewCompactor(agent.CompactorConfig{
 		MemoryStore:           mem,
@@ -280,10 +280,10 @@ func TestCompaction_Compact_FactExtractionProviderFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Equal(t, 1, p.extractCalls)
-	assert.Len(t, mem.summaries.summaries, 1, "summary is stored before extraction stage")
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
+	assert.Empty(t, mem.summaries.summaries, "pending summary cleaned up by defer")
 	assert.Len(t, mem.knowledge.facts, 0)
 	assert.Len(t, vec.vectors, 0)
-	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
 }
 
 func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
@@ -315,10 +315,10 @@ func TestCompaction_Compact_KnowledgeStoreFailure(t *testing.T) {
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
 	assert.Nil(t, result)
-	assert.Len(t, mem.summaries.summaries, 1)
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
+	assert.Empty(t, mem.summaries.summaries, "pending summary cleaned up by defer")
 	assert.Len(t, mem.knowledge.facts, 0)
 	assert.Len(t, vec.vectors, 0)
-	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
 }
 
 func TestCompaction_Compact_EmbeddingProviderFailure(t *testing.T) {
@@ -346,9 +346,9 @@ func TestCompaction_Compact_EmbeddingProviderFailure(t *testing.T) {
 	result, err := c.Compact(context.Background(), "ws-1")
 	require.Error(t, err)
 	assert.Nil(t, result)
-	assert.Len(t, mem.summaries.summaries, 1)
-	assert.Len(t, vec.vectors, 0)
 	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
+	assert.Empty(t, mem.summaries.summaries, "pending summary cleaned up by defer")
+	assert.Len(t, vec.vectors, 0)
 }
 
 func TestCompaction_Compact_VectorStoreFailure(t *testing.T) {
@@ -414,20 +414,21 @@ func TestCompaction_Compact_VectorDeleteFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 
-	// Summary and facts were committed before Delete was called.
-	assert.Len(t, mem.summaries.summaries, 1, "summary should be stored before Delete is called")
-	assert.Len(t, mem.knowledge.facts, 1, "facts should be stored before Delete is called")
+	// Defer cleanup removed the pending summary (SummaryStore.Delete succeeds)
+	// and rolled back committed facts (DeleteFactsBySource succeeds).
+	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
+	assert.Empty(t, mem.summaries.summaries, "pending summary cleaned up by defer")
+	assert.Empty(t, mem.knowledge.facts, "facts rolled back by defer via DeleteFactsBySource")
 
-	// The summary embedding was stored before Delete was called; it should be present.
-	// The message placeholder vectors (from RollMessage) are not in this test setup,
-	// but Delete was not called so no vectors were removed.
-	assert.Len(t, vec.vectors, 1, "summary embedding should be stored; Delete did not run so no removal occurred")
+	// vec.deleteErr affects ALL Delete calls — the defer's VectorStore.Delete also
+	// fails, so the summary embedding remains and its ID is queued to pendingOrphans.
+	assert.Len(t, vec.vectors, 1, "summary embedding remains — VectorStore.Delete failed")
+	assert.Equal(t, 1, c.PendingOrphanCount(), "failed embedding cleanup queued for retry")
 
 	// Messages were not trimmed (DeleteByIDs was not reached).
 	count, countErr := mem.messages.Count(context.Background(), "ws-1")
 	require.NoError(t, countErr)
 	assert.Equal(t, int64(5), count, "messages should not be trimmed when vector Delete fails")
-	assert.Len(t, mem.summaries.deletedIDs, 1, "Delete must be called once to clean up pending summary")
 }
 
 func TestCompaction_Compact_DeleteCleanupFailure(t *testing.T) {
@@ -493,6 +494,8 @@ func TestCompaction_Compact_DeleteByIDsFailure(t *testing.T) {
 	// DeleteByIDs failed after Confirm — partial commit with recovery data.
 	require.NotNil(t, result)
 	assert.True(t, result.PartialCommit)
+	assert.Equal(t, 1, result.SummariesCreated, "summary was created before DeleteByIDs failed")
+	assert.Equal(t, 5, result.MessagesProcessed, "all 5 messages were processed")
 	assert.Equal(t, mem.summaries.summaries[0].ID, result.SummaryID, "SummaryID must match the committed summary")
 	assert.ElementsMatch(t, []string{"msg-0", "msg-1", "msg-2", "msg-3", "msg-4"}, result.MessageIDs, "MessageIDs must contain the exact batch message IDs")
 	// Summary is committed (Confirm succeeded before DeleteByIDs was reached).
@@ -529,12 +532,9 @@ func TestCompaction_Compact_ConfirmFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 
-	// Summary was stored (as pending) before Confirm was called, but the
-	// pending record remains (SummaryStore.Delete tracks the ID, not removal from slice).
-	assert.Len(t, mem.summaries.summaries, 1, "summary should be stored before Confirm is called")
-
-	// Defer cleanup called SummaryStore.Delete to remove the orphaned pending summary.
+	// Defer cleanup removed the pending summary via SummaryStore.Delete.
 	assert.Len(t, mem.summaries.deletedIDs, 1, "defer should delete orphaned pending summary")
+	assert.Empty(t, mem.summaries.summaries, "pending summary cleaned up by defer")
 
 	// Defer cleanup called VectorStore.Delete — embedding removed from store.
 	assert.Len(t, vec.vectors, 0, "defer should remove orphaned vector embedding")
@@ -741,7 +741,8 @@ func (m *lifecycleMemoryStore) Knowledge() store.KnowledgeStore { return m.knowl
 func (m *lifecycleMemoryStore) Close() error                    { return nil }
 
 type lifecycleMessageStore struct {
-	msgs               []*store.Message
+	msgs               map[string][]*store.Message
+	countOverride      *int64
 	countErr           error
 	getRangeErr        error
 	getOldestErr       error
@@ -749,8 +750,18 @@ type lifecycleMessageStore struct {
 	appendBeforeDelete func() error
 }
 
-func (m *lifecycleMessageStore) Append(_ context.Context, _ string, msg *store.Message) error {
-	m.msgs = append(m.msgs, msg)
+func (m *lifecycleMessageStore) msgsFor(workspaceID string) []*store.Message {
+	if m.msgs == nil {
+		return nil
+	}
+	return m.msgs[workspaceID]
+}
+
+func (m *lifecycleMessageStore) Append(_ context.Context, workspaceID string, msg *store.Message) error {
+	if m.msgs == nil {
+		m.msgs = make(map[string][]*store.Message)
+	}
+	m.msgs[workspaceID] = append(m.msgs[workspaceID], msg)
 	return nil
 }
 
@@ -758,12 +769,12 @@ func (m *lifecycleMessageStore) Search(_ context.Context, _ string, _ string, _ 
 	return nil, nil
 }
 
-func (m *lifecycleMessageStore) GetRange(_ context.Context, _ string, from, to time.Time, limit ...int) ([]*store.Message, error) {
+func (m *lifecycleMessageStore) GetRange(_ context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*store.Message, error) {
 	if m.getRangeErr != nil {
 		return nil, m.getRangeErr
 	}
 	var inRange []*store.Message
-	for _, msg := range m.msgs {
+	for _, msg := range m.msgsFor(workspaceID) {
 		if (msg.CreatedAt.Equal(from) || msg.CreatedAt.After(from)) && msg.CreatedAt.Before(to) {
 			inRange = append(inRange, msg)
 		}
@@ -781,12 +792,13 @@ func (m *lifecycleMessageStore) GetRange(_ context.Context, _ string, from, to t
 	return inRange, nil
 }
 
-func (m *lifecycleMessageStore) GetOldest(_ context.Context, _ string, n int) ([]*store.Message, error) {
+func (m *lifecycleMessageStore) GetOldest(_ context.Context, workspaceID string, n int) ([]*store.Message, error) {
 	if m.getOldestErr != nil {
 		return nil, m.getOldestErr
 	}
-	sorted := make([]*store.Message, len(m.msgs))
-	copy(sorted, m.msgs)
+	msgs := m.msgsFor(workspaceID)
+	sorted := make([]*store.Message, len(msgs))
+	copy(sorted, msgs)
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
 	})
@@ -799,32 +811,42 @@ func (m *lifecycleMessageStore) GetOldest(_ context.Context, _ string, n int) ([
 	return sorted, nil
 }
 
-func (m *lifecycleMessageStore) Count(_ context.Context, _ string) (int64, error) {
+func (m *lifecycleMessageStore) Count(ctx context.Context, workspaceID string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if m.countErr != nil {
 		return 0, m.countErr
 	}
-	return int64(len(m.msgs)), nil
+	if m.countOverride != nil {
+		return *m.countOverride, nil
+	}
+	return int64(len(m.msgsFor(workspaceID))), nil
 }
 
-func (m *lifecycleMessageStore) Trim(_ context.Context, _ string, keepLast int) (int64, error) {
+func (m *lifecycleMessageStore) Trim(_ context.Context, workspaceID string, keepLast int) (int64, error) {
 	if keepLast < 0 {
 		keepLast = 0
 	}
 
-	sort.Slice(m.msgs, func(i, j int) bool {
-		return m.msgs[i].CreatedAt.Before(m.msgs[j].CreatedAt)
+	msgs := m.msgsFor(workspaceID)
+	sort.Slice(msgs, func(i, j int) bool {
+		return msgs[i].CreatedAt.Before(msgs[j].CreatedAt)
 	})
 
-	if keepLast >= len(m.msgs) {
+	if keepLast >= len(msgs) {
 		return 0, nil
 	}
 
-	toTrim := len(m.msgs) - keepLast
-	m.msgs = append([]*store.Message(nil), m.msgs[toTrim:]...)
+	toTrim := len(msgs) - keepLast
+	if m.msgs == nil {
+		m.msgs = make(map[string][]*store.Message)
+	}
+	m.msgs[workspaceID] = append([]*store.Message(nil), msgs[toTrim:]...)
 	return int64(toTrim), nil
 }
 
-func (m *lifecycleMessageStore) DeleteByIDs(_ context.Context, _ string, ids []string) (int64, error) {
+func (m *lifecycleMessageStore) DeleteByIDs(_ context.Context, workspaceID string, ids []string) (int64, error) {
 	if m.deleteErr != nil {
 		return 0, m.deleteErr
 	}
@@ -846,14 +868,17 @@ func (m *lifecycleMessageStore) DeleteByIDs(_ context.Context, _ string, ids []s
 
 	var kept []*store.Message
 	var deleted int64
-	for _, msg := range m.msgs {
+	for _, msg := range m.msgsFor(workspaceID) {
 		if _, ok := idSet[msg.ID]; ok {
 			deleted++
 			continue
 		}
 		kept = append(kept, msg)
 	}
-	m.msgs = kept
+	if m.msgs == nil {
+		m.msgs = make(map[string][]*store.Message)
+	}
+	m.msgs[workspaceID] = kept
 	return deleted, nil
 }
 
@@ -930,7 +955,16 @@ func (s *lifecycleSummaryStore) Confirm(_ context.Context, _ string, summaryID s
 
 func (s *lifecycleSummaryStore) Delete(_ context.Context, _ string, id string) error {
 	s.deletedIDs = append(s.deletedIDs, id)
-	return s.deleteErr
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	for i, summary := range s.summaries {
+		if summary.ID == id {
+			s.summaries = append(s.summaries[:i], s.summaries[i+1:]...)
+			break
+		}
+	}
+	return nil
 }
 
 func (s *lifecycleSummaryStore) Close() error { return nil }
@@ -970,6 +1004,17 @@ func (k *lifecycleKnowledgeStore) PutFacts(_ context.Context, _ string, facts []
 
 func (k *lifecycleKnowledgeStore) FindFacts(_ context.Context, _ string, _ store.FactQuery) ([]*store.Fact, error) {
 	return k.facts, nil
+}
+
+func (k *lifecycleKnowledgeStore) DeleteFactsBySource(_ context.Context, _ string, source string) error {
+	var kept []*store.Fact
+	for _, f := range k.facts {
+		if f.Source != source {
+			kept = append(kept, f)
+		}
+	}
+	k.facts = kept
+	return nil
 }
 
 func (k *lifecycleKnowledgeStore) Traverse(_ context.Context, _ string, _ int, _ store.TraversalFilter) (*store.Graph, error) {
@@ -1339,6 +1384,138 @@ func TestCompaction_Compact_LoadBatchFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "loading compaction batch")
+}
+
+func TestCompaction_Compact_CountExceedsButGetOldestEmpty(t *testing.T) {
+	// TOCTOU race: Count() returns >= batchSize (messages exist at check time),
+	// but a concurrent delete removes all messages before GetOldest runs,
+	// causing GetOldest to return an empty batch. Compact should return a
+	// zero result without error.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	// Count reports 10 messages, but the store is actually empty.
+	countVal := int64(10)
+	mem.messages.countOverride = &countVal
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{1.0},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err, "empty batch after ShouldCompact should not be an error")
+	assert.NotNil(t, result)
+	assert.Equal(t, 0, result.SummariesCreated)
+	assert.Equal(t, 0, result.MessagesProcessed)
+	assert.Equal(t, 0, p.summarizeCalls, "Summarize should not be called when batch is empty")
+}
+
+func TestCompaction_Compact_SingleMessageBatch(t *testing.T) {
+	// When the batch contains a single message, summary.FromTime == summary.ToTime.
+	// This should work correctly and not produce degenerate results.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "single message summary",
+		embedding: []float32{0.1},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 1)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   1,
+	})
+	require.NoError(t, newErr)
+
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.SummariesCreated)
+	assert.Equal(t, 1, result.MessagesProcessed)
+	assert.Equal(t, 1, result.MessagesTrimmed)
+
+	require.Len(t, mem.summaries.summaries, 1)
+	summary := mem.summaries.summaries[0]
+	assert.Equal(t, summary.FromTime, summary.ToTime, "single-message batch should have equal From/To times")
+}
+
+func TestCompaction_Compact_ContextCancellation(t *testing.T) {
+	// Compact should propagate context cancellation.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{0.1},
+	}
+
+	appendMessages(t, mem.messages, "ws-1", 5)
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	_, err := c.Compact(ctx, "ws-1")
+	require.Error(t, err, "Compact should fail with cancelled context")
+}
+
+func TestCompaction_drainOrphans_PartialFailure(t *testing.T) {
+	// When drainOrphans has multiple orphans and some succeed while others fail,
+	// only the failures should be re-queued.
+	mem := newLifecycleMemoryStore()
+	vec := newLifecycleVectorStore()
+	// Fail Delete only on call #2 of 3.
+	vec.deleteErr = fmt.Errorf("transient failure")
+	vec.deleteErrOnCall = 2
+
+	p := &mockCompactionProvider{
+		summary:   "summary",
+		embedding: []float32{0.1},
+	}
+
+	c, newErr := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: mem,
+		VectorStore: vec,
+		Summarizer:  p,
+		Embedder:    p,
+		BatchSize:   5,
+	})
+	require.NoError(t, newErr)
+
+	// Manually inject 3 orphan IDs.
+	c.InjectOrphans([]string{"orphan-1", "orphan-2", "orphan-3"})
+	assert.Equal(t, 3, c.PendingOrphanCount())
+
+	// Trigger drainOrphans via Compact (count < batchSize → no-op, but drainOrphans runs).
+	result, err := c.Compact(context.Background(), "ws-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.SummariesCreated, "no compaction should happen")
+
+	// orphan-1 succeeded (call #1), orphan-2 failed (call #2), orphan-3 succeeded (call #3).
+	assert.Equal(t, 1, c.PendingOrphanCount(), "only the failed orphan should remain")
 }
 
 func appendMessages(t *testing.T, ms *lifecycleMessageStore, workspaceID string, n int, startIndex ...int) {

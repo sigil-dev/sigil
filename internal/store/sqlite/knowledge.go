@@ -511,6 +511,17 @@ ON CONFLICT(workspace, subject, predicate, object) DO UPDATE SET
 	return nil
 }
 
+// DeleteFactsBySource removes all facts (triples) in a workspace whose metadata
+// source field matches the given value. Used to roll back facts when compaction
+// fails after storeFacts has already committed.
+func (k *KnowledgeStore) DeleteFactsBySource(ctx context.Context, workspaceID string, source string) error {
+	const q = `DELETE FROM triples WHERE workspace = ? AND json_extract(metadata, '$.source') = ?`
+	if _, err := k.db.ExecContext(ctx, q, workspaceID, source); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting facts by source %q: %w", source, err)
+	}
+	return nil
+}
+
 // FindFacts searches for facts by workspace with optional entity and predicate filters.
 // Facts are triples where the predicate is not a reserved entity predicate (type, name, prop:*).
 func (k *KnowledgeStore) FindFacts(ctx context.Context, workspaceID string, query store.FactQuery) ([]*store.Fact, error) {
