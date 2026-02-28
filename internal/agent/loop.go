@@ -378,11 +378,16 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 				// PartialCommit means the summary is durably committed but source
 				// messages were NOT deleted. This is a persistent data integrity
 				// issue requiring operator action — log at Error, not Warn.
+				const maxLoggedIDs = 10
+				logIDs := pce.MessageIDs
+				if len(logIDs) > maxLoggedIDs {
+					logIDs = logIDs[:maxLoggedIDs]
+				}
 				fields = append(fields,
 					"partial_commit", true,
 					"summary_id", pce.SummaryID,
 					"message_ids_count", len(pce.MessageIDs),
-					"message_ids", pce.MessageIDs,
+					"message_ids_sample", logIDs,
 				)
 				l.logger.ErrorContext(ctx, "compaction partial commit: summary committed but messages not deleted (operator action required)", fields...)
 			} else {
