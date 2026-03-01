@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -679,7 +680,7 @@ func (c *Compactor) storeFacts(ctx context.Context, workspaceID, summaryID, summ
 		// Build a new struct with sanitized values — do not mutate FactExtractor-owned objects.
 		// Always override identity and scoping — do not trust provider-returned values.
 		sanitized = append(sanitized, &store.Fact{
-			ID:          fmt.Sprintf("%s-fact-%d", summaryID, i),
+			ID:          factID(summaryID, fact.EntityID, fact.Predicate, fact.Value),
 			WorkspaceID: workspaceID,
 			CreatedAt:   now,
 			Source:      "compaction",
@@ -731,6 +732,20 @@ func generateSummaryID(t time.Time) (string, error) {
 		return "", sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "generating summary ID: crypto/rand unavailable")
 	}
 	return fmt.Sprintf("sum-%d-%s", t.UnixNano(), hex.EncodeToString(b)), nil
+}
+
+// factID derives a content-addressable fact identifier from the summary and
+// fact content. The hash removes any implication of extraction ordering.
+func factID(summaryID, entityID, predicate, value string) string {
+	h := sha256.New()
+	h.Write([]byte(summaryID))
+	h.Write([]byte{0})
+	h.Write([]byte(entityID))
+	h.Write([]byte{0})
+	h.Write([]byte(predicate))
+	h.Write([]byte{0})
+	h.Write([]byte(value))
+	return fmt.Sprintf("%s-fact-%s", summaryID, hex.EncodeToString(h.Sum(nil))[:12])
 }
 
 func messageIDs(messages []*store.Message) []string {

@@ -676,8 +676,11 @@ func (m *mockMessageStore) GetRange(_ context.Context, _ string, _, _ time.Time,
 }
 
 func (m *mockMessageStore) GetOldest(_ context.Context, workspaceID string, n int) ([]*store.Message, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("GetOldest: n must be > 0, got %d", n)
+	}
 	msgs := m.msgsFor(workspaceID)
-	if n <= 0 || len(msgs) == 0 {
+	if len(msgs) == 0 {
 		return nil, nil
 	}
 	end := n

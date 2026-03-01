@@ -124,10 +124,10 @@ func TestCompaction_Compact_FullLifecycle_ExtractFactsEnabled(t *testing.T) {
 	// Verify identity fields are overridden by compaction — not taken from the provider.
 	// The summary ID follows the pattern "sum-<ts>-<hex>", so fact IDs must be
 	// "<sumID>-fact-<index>" which matches "sum-<digits>-<hex>-fact-<index>".
-	factIDPattern := regexp.MustCompile(`^sum-\d+-[0-9a-f]+-fact-\d+$`)
+	factIDPattern := regexp.MustCompile(`^sum-\d+-[0-9a-f]+-fact-[0-9a-f]{12}$`)
 	for i, fact := range mem.knowledge.facts {
 		assert.Regexp(t, factIDPattern, fact.ID,
-			"fact[%d].ID must follow sum-<ts>-<hex>-fact-<index> pattern, got %q", i, fact.ID)
+			"fact[%d].ID must follow sum-<ts>-<hex>-fact-<content-hash> pattern, got %q", i, fact.ID)
 		assert.NotEqual(t, fmt.Sprintf("fact-%d", i+1), fact.ID,
 			"fact[%d].ID must not be the provider-supplied value", i)
 		assert.Equal(t, "compaction", fact.Source,
@@ -2186,9 +2186,9 @@ func TestCompaction_AppendPendingFactsLocked_PartialFill(t *testing.T) {
 	// 1. InjectPendingFacts pre-seeds 999 IDs (space=1 remaining to cap of 1000).
 	// 2. deleteFactsByIDsErr is set so drain fails → all 999 re-queued (back at 999).
 	//    At this point space is still 1.
-	// 3. Compact with facts extracted: storedFactIDs = ["overflow-fact-0", "overflow-fact-1"]
-	//    (2 IDs). Defer fires with confirmed=false, calls appendPendingFactsLocked with 2 IDs.
-	//    space=1 < 2=len(factIDs) → only "overflow-fact-0" accepted, "overflow-fact-1" dropped.
+	// 3. Compact with facts extracted: storedFactIDs contains 2 content-addressable IDs.
+	//    Defer fires with confirmed=false, calls appendPendingFactsLocked with 2 IDs.
+	//    space=1 < 2=len(factIDs) → only the first is accepted, the second is dropped.
 	// 4. PendingFactCount() == 1000 (999 drained + 1 from defer).
 
 	mem := newLifecycleMemoryStore()
