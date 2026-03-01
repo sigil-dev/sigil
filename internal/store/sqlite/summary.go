@@ -31,6 +31,7 @@ var _ store.SummaryStore = (*SummaryStore)(nil)
 type SummaryStore struct {
 	db     *sql.DB
 	ownsDB bool // if true, Close() will close the underlying db connection
+	logger *slog.Logger
 }
 
 // NewSummaryStore opens (or creates) a SQLite database at dbPath and
@@ -51,7 +52,7 @@ func NewSummaryStore(dbPath string) (*SummaryStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating summary tables: %w", err)
 	}
 
-	return &SummaryStore{db: db, ownsDB: true}, nil
+	return &SummaryStore{db: db, ownsDB: true, logger: slog.Default()}, nil
 }
 
 // NewSummaryStoreWithDB creates a SummaryStore using an existing database connection.
@@ -61,7 +62,7 @@ func NewSummaryStoreWithDB(db *sql.DB) (*SummaryStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating summary tables: %w", err)
 	}
 
-	return &SummaryStore{db: db, ownsDB: false}, nil
+	return &SummaryStore{db: db, ownsDB: false, logger: slog.Default()}, nil
 }
 
 func migrateSummaries(db *sql.DB) error {
@@ -153,7 +154,7 @@ func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryI
 	}
 	defer func() {
 		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-			slog.ErrorContext(ctx, "Confirm rollback failed",
+			s.logger.ErrorContext(ctx, "Confirm rollback failed",
 				"summary_id", summaryID,
 				"workspace_id", workspaceID,
 				"error", rbErr,

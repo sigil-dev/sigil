@@ -7614,7 +7614,7 @@ func TestLoop_ProcessMessage_Compaction(t *testing.T) {
 
 // TestLoop_ProcessMessage_Compaction_PartialCommit verifies that when Compact
 // returns a PartialCommitError, the error log includes the partial_commit,
-// summary_id, message_ids_count, and message_ids fields so operators can
+// summary_id, message_ids_count, and message_ids_sample fields so operators can
 // recover the orphaned messages.
 func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
@@ -7680,15 +7680,15 @@ func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
 	assert.Equal(t, "sum-partial", attrMap["summary_id"], "log record must contain summary_id")
 	assert.Equal(t, int64(2), attrMap["message_ids_count"], "log record must contain message_ids_count=2")
 
-	msgIDs, ok := attrMap["message_ids"]
-	assert.True(t, ok, "log record must contain message_ids field")
-	assert.Equal(t, []string{"m-1", "m-2"}, msgIDs, "message_ids must match the partial commit IDs")
+	msgIDs, ok := attrMap["message_ids_sample"]
+	assert.True(t, ok, "log record must contain message_ids_sample field")
+	assert.Equal(t, []string{"m-1", "m-2"}, msgIDs, "message_ids_sample must match the partial commit IDs")
 }
 
 // TestLoop_ProcessMessage_Compaction_NonPartialError verifies that when Compact
 // returns (nil, error) — the ordinary non-partial failure path — the log record
 // is emitted at Warn level and does NOT contain partial_commit, summary_id, or
-// message_ids fields (those are reserved for the PartialCommitError recovery path).
+// message_ids_sample fields (those are reserved for the PartialCommitError recovery path).
 func TestLoop_ProcessMessage_Compaction_NonPartialError(t *testing.T) {
 	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
 	// process-global logger, making this test safe for parallel execution.
@@ -7749,7 +7749,7 @@ func TestLoop_ProcessMessage_Compaction_NonPartialError(t *testing.T) {
 	// Partial-commit recovery fields must NOT be present.
 	assert.NotContains(t, attrMap, "partial_commit", "non-partial error log must NOT contain partial_commit field")
 	assert.NotContains(t, attrMap, "summary_id", "non-partial error log must NOT contain summary_id field")
-	assert.NotContains(t, attrMap, "message_ids", "non-partial error log must NOT contain message_ids field")
+	assert.NotContains(t, attrMap, "message_ids_sample", "non-partial error log must NOT contain message_ids_sample field")
 }
 
 // ---------------------------------------------------------------------------

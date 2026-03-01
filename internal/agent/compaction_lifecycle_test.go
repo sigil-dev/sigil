@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -853,6 +854,7 @@ func (m *lifecycleMemoryStore) Knowledge() store.KnowledgeStore { return m.knowl
 func (m *lifecycleMemoryStore) Close() error                    { return nil }
 
 type lifecycleMessageStore struct {
+	mu                 sync.Mutex
 	msgs               map[string][]*store.Message
 	countOverride      *int64
 	countErr           error
@@ -870,6 +872,8 @@ func (m *lifecycleMessageStore) msgsFor(workspaceID string) []*store.Message {
 }
 
 func (m *lifecycleMessageStore) Append(_ context.Context, workspaceID string, msg *store.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.msgs == nil {
 		m.msgs = make(map[string][]*store.Message)
 	}
@@ -882,6 +886,8 @@ func (m *lifecycleMessageStore) Search(_ context.Context, _ string, _ string, _ 
 }
 
 func (m *lifecycleMessageStore) GetRange(_ context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*store.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.getRangeErr != nil {
 		return nil, m.getRangeErr
 	}
@@ -905,6 +911,8 @@ func (m *lifecycleMessageStore) GetRange(_ context.Context, workspaceID string, 
 }
 
 func (m *lifecycleMessageStore) GetOldest(_ context.Context, workspaceID string, n int) ([]*store.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.getOldestErr != nil {
 		return nil, m.getOldestErr
 	}
@@ -927,6 +935,8 @@ func (m *lifecycleMessageStore) Count(ctx context.Context, workspaceID string) (
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.countErr != nil {
 		return 0, m.countErr
 	}
@@ -937,6 +947,8 @@ func (m *lifecycleMessageStore) Count(ctx context.Context, workspaceID string) (
 }
 
 func (m *lifecycleMessageStore) Trim(_ context.Context, workspaceID string, keepLast int) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if keepLast < 0 {
 		keepLast = 0
 	}
@@ -959,15 +971,24 @@ func (m *lifecycleMessageStore) Trim(_ context.Context, workspaceID string, keep
 }
 
 func (m *lifecycleMessageStore) DeleteByIDs(_ context.Context, workspaceID string, ids []string) (int64, error) {
-	if m.deleteErr != nil {
-		return 0, m.deleteErr
+	// Run the hook outside the lock to avoid deadlock when the hook calls Append.
+	m.mu.Lock()
+	hook := m.appendBeforeDelete
+	m.appendBeforeDelete = nil
+	deleteErr := m.deleteErr
+	m.mu.Unlock()
+
+	if deleteErr != nil {
+		return 0, deleteErr
 	}
-	if m.appendBeforeDelete != nil {
-		if err := m.appendBeforeDelete(); err != nil {
+	if hook != nil {
+		if err := hook(); err != nil {
 			return 0, err
 		}
-		m.appendBeforeDelete = nil
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if len(ids) == 0 {
 		return 0, nil
@@ -1178,6 +1199,7 @@ type lifecycleVector struct {
 }
 
 type lifecycleVectorStore struct {
+	mu              sync.Mutex
 	vectors         map[string]lifecycleVector
 	storeErr        error
 	searchErr       error
@@ -1194,6 +1216,8 @@ func newLifecycleVectorStore() *lifecycleVectorStore {
 }
 
 func (v *lifecycleVectorStore) Store(_ context.Context, id string, embedding []float32, metadata map[string]any) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	if v.storeErr != nil {
 		return v.storeErr
 	}
@@ -1202,6 +1226,8 @@ func (v *lifecycleVectorStore) Store(_ context.Context, id string, embedding []f
 }
 
 func (v *lifecycleVectorStore) Search(_ context.Context, _ []float32, _ int, _ map[string]any) ([]store.VectorResult, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	if v.searchErr != nil {
 		return nil, v.searchErr
 	}
@@ -1209,6 +1235,8 @@ func (v *lifecycleVectorStore) Search(_ context.Context, _ []float32, _ int, _ m
 }
 
 func (v *lifecycleVectorStore) Delete(_ context.Context, ids []string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.deleteCalls++
 	if v.deleteHook != nil {
 		h := v.deleteHook
@@ -1231,6 +1259,7 @@ func (v *lifecycleVectorStore) Delete(_ context.Context, ids []string) error {
 func (v *lifecycleVectorStore) Close() error { return nil }
 
 type mockCompactionProvider struct {
+	mu      sync.Mutex
 	summary string
 	facts   []*store.Fact
 
@@ -1248,19 +1277,26 @@ type mockCompactionProvider struct {
 }
 
 func (m *mockCompactionProvider) Summarize(_ context.Context, _ []*store.Message) (string, error) {
+	m.mu.Lock()
 	m.summarizeCalls++
-	if m.summarizeHook != nil {
-		if err := m.summarizeHook(); err != nil {
+	hook := m.summarizeHook
+	summarizeErr := m.summarizeErr
+	summary := m.summary
+	m.mu.Unlock()
+	if hook != nil {
+		if err := hook(); err != nil {
 			return "", err
 		}
 	}
-	if m.summarizeErr != nil {
-		return "", m.summarizeErr
+	if summarizeErr != nil {
+		return "", summarizeErr
 	}
-	return m.summary, nil
+	return summary, nil
 }
 
 func (m *mockCompactionProvider) ExtractFacts(_ context.Context, _ string, _ []*store.Message) ([]*store.Fact, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.extractCalls++
 	if m.extractErr != nil {
 		return nil, m.extractErr
@@ -1269,6 +1305,8 @@ func (m *mockCompactionProvider) ExtractFacts(_ context.Context, _ string, _ []*
 }
 
 func (m *mockCompactionProvider) Embed(_ context.Context, _ string) ([]float32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.embedCalls++
 	if m.embedErr != nil {
 		return nil, m.embedErr
