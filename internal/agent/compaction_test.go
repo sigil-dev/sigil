@@ -6,6 +6,7 @@ package agent_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/sigil-dev/sigil/internal/agent"
@@ -35,18 +36,133 @@ func TestCompaction_ShouldTrigger(t *testing.T) {
 	}
 }
 
+func TestTruncateField(t *testing.T) {
+	maxLen := agent.MaxFactFieldLen // 4096
+
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{
+			name:   "empty string",
+			input:  "",
+			maxLen: maxLen,
+			want:   "",
+		},
+		{
+			name:   "shorter than maxLen",
+			input:  "hello",
+			maxLen: maxLen,
+			want:   "hello",
+		},
+		{
+			name:   "exactly maxLen ASCII",
+			input:  strings.Repeat("a", maxLen),
+			maxLen: maxLen,
+			want:   strings.Repeat("a", maxLen),
+		},
+		{
+			name:   "ASCII exceeding maxLen",
+			input:  strings.Repeat("x", maxLen+100),
+			maxLen: maxLen,
+			want:   strings.Repeat("x", maxLen),
+		},
+		{
+			name: "multi-byte rune at boundary not split",
+			// 4095 ASCII chars + one 3-byte UTF-8 rune (€ = U+20AC, 3 bytes).
+			// The rune starts at byte 4095 and would end at byte 4097, exceeding
+			// maxLen=4096. truncateField must not split it; result is 4095 chars.
+			input:  strings.Repeat("a", maxLen-1) + "€",
+			maxLen: maxLen,
+			want:   strings.Repeat("a", maxLen-1),
+		},
+		{
+			name: "all multi-byte characters truncated at rune boundary",
+			// Each '€' is 3 bytes. 1366 runes = 4098 bytes > 4096.
+			// truncateField must stop before exceeding maxLen bytes,
+			// so it returns 1365 runes (4095 bytes).
+			input:  strings.Repeat("€", 1366),
+			maxLen: maxLen,
+			want:   strings.Repeat("€", 1365),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agent.TruncateField(tt.input, tt.maxLen)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestNewCompactor_Validation(t *testing.T) {
+	ms := newMockMemoryStore()
+	vs := newMockVectorStore()
+
+	sum := noopSummarizer{}
+	emb := noopEmbedder{}
+
+	tests := []struct {
+		name    string
+		cfg     agent.CompactorConfig
+		wantErr string
+	}{
+		{
+			name:    "nil MemoryStore",
+			cfg:     agent.CompactorConfig{VectorStore: vs, Summarizer: sum, Embedder: emb, BatchSize: 5},
+			wantErr: "MemoryStore must not be nil",
+		},
+		{
+			name:    "nil VectorStore",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, Summarizer: sum, Embedder: emb, BatchSize: 5},
+			wantErr: "VectorStore must not be nil",
+		},
+		{
+			name:    "zero BatchSize",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, Summarizer: sum, Embedder: emb, BatchSize: 0},
+			wantErr: "BatchSize must be positive",
+		},
+		{
+			name:    "negative BatchSize",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, Summarizer: sum, Embedder: emb, BatchSize: -1},
+			wantErr: "BatchSize must be positive",
+		},
+		{
+			name:    "nil Summarizer",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, Embedder: emb, BatchSize: 5},
+			wantErr: "Summarizer must not be nil",
+		},
+		{
+			name:    "nil Embedder",
+			cfg:     agent.CompactorConfig{MemoryStore: ms, VectorStore: vs, Summarizer: sum, BatchSize: 5},
+			wantErr: "Embedder must not be nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := agent.NewCompactor(tt.cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestCompaction_RollMessage(t *testing.T) {
 	ms := newMockMemoryStore()
 	vs := newMockVectorStore()
-	ss := newMockSessionStore()
 
-	c := agent.NewCompactor(agent.CompactorConfig{
-		MemoryStore:  ms,
-		VectorStore:  vs,
-		SessionStore: ss,
-		BatchSize:    50,
-		WindowSize:   20,
+	c, err := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: ms,
+		VectorStore: vs,
+
+		Summarizer: noopSummarizer{},
+		Embedder:   noopEmbedder{},
+		BatchSize:  50,
 	})
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	msg := &store.Message{
@@ -55,7 +171,7 @@ func TestCompaction_RollMessage(t *testing.T) {
 		Content: "Hello, world",
 	}
 
-	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
+	err = c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.NoError(t, err)
 
 	count, err := ms.Messages().Count(ctx, "ws-1")
@@ -72,15 +188,16 @@ func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
 		knowledge: &mockKnowledgeStore{},
 	}
 	vs := newMockVectorStore()
-	ss := newMockSessionStore()
 
-	c := agent.NewCompactor(agent.CompactorConfig{
-		MemoryStore:  memStoreErr,
-		VectorStore:  vs,
-		SessionStore: ss,
-		BatchSize:    50,
-		WindowSize:   20,
+	c, err := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: memStoreErr,
+		VectorStore: vs,
+
+		Summarizer: noopSummarizer{},
+		Embedder:   noopEmbedder{},
+		BatchSize:  50,
 	})
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	msg := &store.Message{
@@ -89,9 +206,10 @@ func TestCompaction_RollMessage_MemoryStoreFailure(t *testing.T) {
 		Content: "Test message",
 	}
 
-	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
+	err = c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.Error(t, err)
-	assert.Equal(t, expectedErr, err)
+	assert.ErrorIs(t, err, expectedErr)
+	assert.Contains(t, err.Error(), "rolling message for workspace")
 
 	// Verify VectorStore.Store was NOT called
 	assert.Empty(t, vs.vectors, "VectorStore should not have been called after message append error")
@@ -104,15 +222,16 @@ func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
 		mockVectorStore: mockVectorStore{vectors: make(map[string]mockVector)},
 		storeErr:        expectedErr,
 	}
-	ss := newMockSessionStore()
 
-	c := agent.NewCompactor(agent.CompactorConfig{
-		MemoryStore:  ms,
-		VectorStore:  vs,
-		SessionStore: ss,
-		BatchSize:    50,
-		WindowSize:   20,
+	c, err := agent.NewCompactor(agent.CompactorConfig{
+		MemoryStore: ms,
+		VectorStore: vs,
+
+		Summarizer: noopSummarizer{},
+		Embedder:   noopEmbedder{},
+		BatchSize:  50,
 	})
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	msg := &store.Message{
@@ -121,9 +240,10 @@ func TestCompaction_RollMessage_VectorStoreFailure(t *testing.T) {
 		Content: "Test message",
 	}
 
-	err := c.RollMessage(ctx, "ws-1", "sess-1", msg)
+	err = c.RollMessage(ctx, "ws-1", "sess-1", msg)
 	require.Error(t, err)
-	assert.Equal(t, expectedErr, err)
+	assert.ErrorIs(t, err, expectedErr)
+	assert.Contains(t, err.Error(), "storing placeholder vector for message")
 
 	// Verify message WAS appended to memory store (before vector store error)
 	count, err := ms.Messages().Count(ctx, "ws-1")

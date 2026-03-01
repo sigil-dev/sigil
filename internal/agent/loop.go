@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -146,6 +147,22 @@ type LoopConfig struct {
 	// MaxToolContentScanSize is the truncation target for oversized tool results
 	// before re-scanning. When <= 0, defaults to 512KB.
 	MaxToolContentScanSize int
+	// Compactor is an optional memory compactor. When non-nil, the loop triggers
+	// best-effort compaction after persisting assistant responses (design doc 08,
+	// RESPOND step: "trigger compaction if needed").
+	// Accepts *Compactor or any implementation of compactorRunner (e.g. test mocks).
+	Compactor compactorRunner
+	// Logger is the structured logger the Loop will use for all internal log
+	// output. When nil, slog.Default() is used. Setting an explicit logger
+	// avoids mutating the process-global default and makes log capture in tests
+	// safe for parallel execution.
+	Logger *slog.Logger
+}
+
+// compactorRunner is the minimal interface the Loop requires from a Compactor.
+// *Compactor satisfies this interface; tests may use a lightweight mock.
+type compactorRunner interface {
+	Compact(ctx context.Context, workspaceID string) (*CompactionResult, error)
 }
 
 // Validate checks that all required fields in LoopConfig are set.
@@ -181,6 +198,10 @@ type Loop struct {
 	hooks                  *LoopHooks
 	scanner                scanner.Scanner
 	scannerModes           ScannerModes
+	// logger is the structured logger for all internal log output. Always
+	// non-nil after NewLoop; defaults to slog.Default() when not supplied
+	// via LoopConfig.Logger.
+	logger *slog.Logger
 	// auditFailCount tracks consecutive audit-write failures for escalating log levels.
 	// Resets to 0 on each successful append so that intermittent failures do not
 	// permanently elevate the log level. See auditFailTotal for a counter that never resets.
@@ -197,6 +218,8 @@ type Loop struct {
 	// audit-write failures across the lifetime of this Loop. Unlike auditSecurityFailCount,
 	// it is not reset on success, so intermittent failure patterns remain visible to operators.
 	auditSecurityFailTotal atomic.Int64
+	// compactor is an optional memory compactor wired into the RESPOND step.
+	compactor compactorRunner
 }
 
 // NewLoop creates a Loop with the given dependencies.
@@ -222,6 +245,11 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		toolContentScanSize = defaultMaxToolContentScanSize
 	}
 
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+
 	return &Loop{
 		sessions:               cfg.SessionManager,
 		enforcer:               cfg.Enforcer,
@@ -235,6 +263,8 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		hooks:                  orDefaultHooks(cfg.Hooks),
 		scanner:                cfg.Scanner,
 		scannerModes:           cfg.ScannerModes,
+		logger:                 log,
+		compactor:              cfg.Compactor,
 	}, nil
 }
 
@@ -332,6 +362,39 @@ func (l *Loop) ProcessMessage(ctx context.Context, msg InboundMessage) (*Outboun
 		return nil, sigilerr.Wrapf(err, sigilerr.CodeAgentLoopFailure, "respond: session %s", msg.SessionID)
 	}
 	l.fireHook(l.hooks.OnRespond)
+
+	// Best-effort compaction: trigger if message count exceeds batch threshold.
+	// Compaction failures are logged but do not fail the response.
+	if l.compactor != nil {
+		_, compactErr := l.compactor.Compact(ctx, msg.WorkspaceID)
+		if compactErr != nil {
+			fields := []any{
+				"workspace_id", msg.WorkspaceID,
+				"session_id", msg.SessionID,
+				"error", compactErr,
+			}
+			var pce *PartialCommitError
+			if errors.As(compactErr, &pce) {
+				// PartialCommit means the summary is durably committed but source
+				// messages were NOT deleted. This is a persistent data integrity
+				// issue requiring operator action — log at Error, not Warn.
+				const maxLoggedIDs = 10
+				logIDs := pce.MessageIDs
+				if len(logIDs) > maxLoggedIDs {
+					logIDs = logIDs[:maxLoggedIDs]
+				}
+				fields = append(fields,
+					"partial_commit", true,
+					"summary_id", pce.SummaryID,
+					"message_ids_count", len(pce.MessageIDs),
+					"message_ids_sample", logIDs,
+				)
+				l.logger.ErrorContext(ctx, "compaction partial commit: summary committed but messages not deleted (operator action required)", fields...)
+			} else {
+				l.logger.WarnContext(ctx, "compaction trigger failed (best-effort)", fields...)
+			}
+		}
+	}
 
 	// Step 7: AUDIT — log the interaction, including threat metadata if detected.
 	l.audit(ctx, msg, out, outputThreat)
@@ -1220,7 +1283,7 @@ func (l *Loop) appendAuditEntry(ctx context.Context, entry *store.AuditEntry, co
 			// failures have occurred overall, even across success-interspersed sequences.
 			extra = append(extra, slog.Int64("total_failures", cumulative))
 		}
-		logAuditFailure(ctx, consecutive, logMsg, extra...)
+		logAuditFailure(ctx, l.logger, consecutive, logMsg, extra...)
 	} else {
 		// Reset consecutive counter; auditFailTotal tracks cumulative failures for operator visibility.
 		counter.Store(0)

@@ -25,7 +25,8 @@ var _ store.KnowledgeStore = (*KnowledgeStore)(nil)
 // storing entities, relationships, and facts as RDF-style triples
 // in a single unified table.
 type KnowledgeStore struct {
-	db *sql.DB
+	db     *sql.DB
+	logger *slog.Logger
 }
 
 // NewKnowledgeStore opens (or creates) a SQLite database at dbPath and
@@ -46,7 +47,7 @@ func NewKnowledgeStore(dbPath string) (*KnowledgeStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating knowledge tables: %w", err)
 	}
 
-	return &KnowledgeStore{db: db}, nil
+	return &KnowledgeStore{db: db, logger: slog.Default()}, nil
 }
 
 func migrateKnowledge(db *sql.DB) error {
@@ -465,6 +466,88 @@ ON CONFLICT(workspace, subject, predicate, object) DO UPDATE SET
 	)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "putting fact %s: %w", fact.ID, err)
+	}
+	return nil
+}
+
+// PutFacts inserts multiple facts atomically using a database transaction.
+// If any insert fails, all prior inserts in the batch are rolled back.
+func (k *KnowledgeStore) PutFacts(ctx context.Context, workspaceID string, facts []*store.Fact) error {
+	if len(facts) == 0 {
+		return nil
+	}
+	tx, err := k.db.BeginTx(ctx, nil)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning fact transaction: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			k.logger.ErrorContext(ctx, "PutFacts rollback failed",
+				"workspace_id", workspaceID,
+				"fact_count", len(facts),
+				"error", rbErr,
+			)
+		}
+	}()
+
+	const q = `INSERT INTO triples (subject, predicate, object, workspace, metadata, created)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(workspace, subject, predicate, object) DO UPDATE SET
+	metadata = excluded.metadata,
+	created = excluded.created`
+
+	for _, fact := range facts {
+		fm := factTripleMetadata{
+			FactID:     fact.ID,
+			Confidence: fact.Confidence,
+			Source:     fact.Source,
+		}
+		metaJSON, err := json.Marshal(fm)
+		if err != nil {
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling fact metadata: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, q,
+			fact.EntityID, fact.Predicate, fact.Value,
+			workspaceID, string(metaJSON), formatTime(fact.CreatedAt),
+		); err != nil {
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "putting fact %s: %w", fact.ID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "committing fact transaction: %w", err)
+	}
+	return nil
+}
+
+// DeleteFactsBySource removes all facts (triples) in a workspace whose metadata
+// source field matches the given value. Used to roll back facts when compaction
+// fails after storeFacts has already committed.
+func (k *KnowledgeStore) DeleteFactsBySource(ctx context.Context, workspaceID string, source string) error {
+	const q = `DELETE FROM triples WHERE workspace = ? AND json_extract(metadata, '$.source') = ?`
+	if _, err := k.db.ExecContext(ctx, q, workspaceID, source); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting facts by source %q: %w", source, err)
+	}
+	return nil
+}
+
+// DeleteFactsByIDs removes specific facts (triples) in a workspace by their IDs.
+// An empty ids slice is a no-op. Used for precise rollback during compaction cleanup,
+// targeting only the facts written in the current pass.
+func (k *KnowledgeStore) DeleteFactsByIDs(ctx context.Context, workspaceID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	q := `DELETE FROM triples WHERE workspace = ? AND json_extract(metadata, '$.fact_id') IN (` + placeholders + `)`
+	args := make([]any, 0, 1+len(ids))
+	args = append(args, workspaceID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	if _, err := k.db.ExecContext(ctx, q, args...); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting facts by IDs: %w", err)
 	}
 	return nil
 }

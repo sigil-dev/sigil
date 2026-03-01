@@ -60,15 +60,15 @@ func TestNewServices(t *testing.T) {
 	prov := &stubProviderService{}
 
 	tests := []struct {
-		name            string
-		ws              WorkspaceService
-		plugins         PluginService
-		sessions        SessionService
-		users           UserService
-		providers       []ProviderService
-		wantErr         bool
-		errContain      string
-		wantProviders   ProviderService
+		name          string
+		ws            WorkspaceService
+		plugins       PluginService
+		sessions      SessionService
+		users         UserService
+		providers     []ProviderService
+		wantErr       bool
+		errContain    string
+		wantProviders ProviderService
 	}{
 		{
 			name:          "all valid no providers",

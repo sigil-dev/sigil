@@ -150,11 +150,19 @@ func (m *mockMessageStore) Search(ctx context.Context, workspaceID string, query
 	return nil, nil
 }
 
-func (m *mockMessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*store.Message, error) {
+func (m *mockMessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*store.Message, error) {
+	return nil, nil
+}
+
+func (m *mockMessageStore) GetOldest(ctx context.Context, workspaceID string, n int) ([]*store.Message, error) {
 	return nil, nil
 }
 
 func (m *mockMessageStore) Count(ctx context.Context, workspaceID string) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockMessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error) {
 	return 0, nil
 }
 
@@ -177,6 +185,14 @@ func (m *mockSummaryStore) GetByRange(ctx context.Context, workspaceID string, f
 
 func (m *mockSummaryStore) GetLatest(ctx context.Context, workspaceID string, n int) ([]*store.Summary, error) {
 	return nil, nil
+}
+
+func (m *mockSummaryStore) Confirm(ctx context.Context, workspaceID string, summaryID string) error {
+	return nil
+}
+
+func (m *mockSummaryStore) Delete(ctx context.Context, workspaceID string, summaryID string) error {
+	return nil
 }
 
 // mockKnowledgeStore implements KnowledgeStore with configurable Close error.
@@ -208,8 +224,20 @@ func (m *mockKnowledgeStore) PutFact(ctx context.Context, workspaceID string, fa
 	return nil
 }
 
+func (m *mockKnowledgeStore) PutFacts(ctx context.Context, workspaceID string, facts []*store.Fact) error {
+	return nil
+}
+
 func (m *mockKnowledgeStore) FindFacts(ctx context.Context, workspaceID string, query store.FactQuery) ([]*store.Fact, error) {
 	return nil, nil
+}
+
+func (m *mockKnowledgeStore) DeleteFactsBySource(ctx context.Context, workspaceID string, source string) error {
+	return nil
+}
+
+func (m *mockKnowledgeStore) DeleteFactsByIDs(ctx context.Context, workspaceID string, ids []string) error {
+	return nil
 }
 
 func (m *mockKnowledgeStore) Traverse(ctx context.Context, startID string, depth int, filter store.TraversalFilter) (*store.Graph, error) {

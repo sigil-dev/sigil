@@ -4,6 +4,7 @@
 package plugin_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -56,9 +57,14 @@ execution:
   tier: process
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "type")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "type")
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+		"top-level ParseManifest error should have CodePluginManifestValidateInvalid")
+	var joinErr interface{ Unwrap() []error }
+	require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+	subErrs := joinErr.Unwrap()
+	assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"manifest type validation error should have CodePluginManifestValidateInvalid")
 }
 
@@ -70,8 +76,11 @@ execution:
   tier: process
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
-	assert.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+	require.Error(t, err)
+	var joinErr interface{ Unwrap() []error }
+	require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+	subErrs := joinErr.Unwrap()
+	assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"missing name error should have CodePluginManifestValidateInvalid")
 }
 
@@ -84,8 +93,11 @@ execution:
   tier: quantum
 `
 	_, err := plugin.ParseManifest([]byte(yaml))
-	assert.Error(t, err)
-	assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid),
+	require.Error(t, err)
+	var joinErr interface{ Unwrap() []error }
+	require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+	subErrs := joinErr.Unwrap()
+	assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid),
 		"invalid tier error should have CodePluginManifestValidateInvalid")
 }
 
@@ -125,8 +137,11 @@ capabilities:
 `
 		_, err := plugin.ParseManifest([]byte(yaml))
 		require.Error(t, err)
-		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, err.Error(), "execution.image")
+		var joinErr interface{ Unwrap() []error }
+		require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+		subErrs := joinErr.Unwrap()
+		assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid))
+		assert.ErrorContains(t, err, "execution.image")
 	})
 
 	t.Run("missing memory limit", func(t *testing.T) {
@@ -143,8 +158,11 @@ capabilities:
 `
 		_, err := plugin.ParseManifest([]byte(yaml))
 		require.Error(t, err)
-		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, err.Error(), "execution.memory_limit")
+		var joinErr interface{ Unwrap() []error }
+		require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+		subErrs := joinErr.Unwrap()
+		assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid))
+		assert.ErrorContains(t, err, "execution.memory_limit")
 	})
 
 	t.Run("invalid network mode", func(t *testing.T) {
@@ -162,8 +180,11 @@ capabilities:
 `
 		_, err := plugin.ParseManifest([]byte(yaml))
 		require.Error(t, err)
-		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, err.Error(), "execution.network")
+		var joinErr interface{ Unwrap() []error }
+		require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+		subErrs := joinErr.Unwrap()
+		assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid))
+		assert.ErrorContains(t, err, "execution.network")
 	})
 
 	t.Run("image with embedded tab character", func(t *testing.T) {
@@ -228,8 +249,11 @@ capabilities:
 `
 		_, err := plugin.ParseManifest([]byte(yaml))
 		require.Error(t, err)
-		assert.True(t, sigilerr.HasCode(err, sigilerr.CodePluginManifestValidateInvalid))
-		assert.Contains(t, err.Error(), "execution.image")
+		var joinErr interface{ Unwrap() []error }
+		require.True(t, errors.As(err, &joinErr), "expected joinable error, got %T", err)
+		subErrs := joinErr.Unwrap()
+		assert.True(t, sigilerr.HasCode(subErrs[0], sigilerr.CodePluginManifestValidateInvalid))
+		assert.ErrorContains(t, err, "execution.image")
 	})
 }
 

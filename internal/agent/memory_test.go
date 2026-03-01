@@ -58,6 +58,7 @@ func TestMemoryTools_GetSummary(t *testing.T) {
 		FromTime: now.Add(-1 * time.Hour),
 		ToTime:   now,
 		Content:  "Summary of recent conversation",
+		Status:   store.SummaryStatusCommitted,
 	})
 	require.NoError(t, err)
 

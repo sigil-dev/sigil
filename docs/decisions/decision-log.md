@@ -1362,3 +1362,145 @@ Validation: all must be 64KB–10MB. Cross-field: `max_tool_content_scan_size` <
 **Rationale:** Optional registration handles the case where Sigil runs without any providers configured (e.g., channel-only deployments). The admin:providers capability follows the existing ABAC pattern. The adapter pattern matches the existing service adapters (workspaceServiceAdapter, pluginServiceAdapter, etc.).
 
 **Ref:** PR #28, sigil-cv7y review epic, sigil-kqd.307, `docs/design/07-provider-system.md`
+
+---
+
+## D085: DeleteByIDs Replaces Trim for Concurrent-Append Race Safety
+
+**Status:** Decided (2026-02-27)
+
+**Question:** Should compaction remove processed messages using `Trim(keepLast)` as specified in the plan, or using `DeleteByIDs` targeting only the captured batch?
+
+**Context:** The plan doc (docs/plans/06-phase-6-advanced-features.md Task 4, Step 3, point 7) specified "Trim processed messages from Tier 1." The implementation uses `DeleteByIDs` instead. This was a deliberate deviation to fix a concurrent-append race condition: `Trim(keepLast)` could delete messages appended after the compaction window was captured, whereas `DeleteByIDs` targets only the exact IDs captured in the batch.
+
+**Options considered:**
+
+1. Trim with pre-computed keepLast accounting for post-batch appends — Complex to compute correctly, still racy under high concurrency.
+2. DeleteByIDs targeting captured batch IDs — Targets exact messages, immune to concurrent appends. Requires adding DeleteByIDs to MessageStore interface.
+3. Trim within a transaction lock — Prevents concurrent appends during trim but adds lock contention.
+
+**Decision:** Option 2. `DeleteByIDs` was added to the `store.MessageStore` interface. The compaction method `Compact()` collects batch message IDs during `loadBatch()`, then passes those exact IDs to `DeleteByIDs` after summarization. This also addresses the interface cohesion concern — `DeleteByIDs` serves a distinct purpose (targeted deletion of known IDs) vs `Trim` (retain last N).
+
+Two additional `MessageStore` methods were added alongside `DeleteByIDs`. `GetOldest(ctx, workspaceID, limit)` enables ordered batch loading for the compaction `loadBatch` path — it returns the oldest N messages by created-at, providing the compaction window without requiring callers to manage cursor state. `GetRange` had its signature extended from `GetRange(ctx, workspaceID, from, to time.Time)` to `GetRange(ctx, workspaceID, from, to time.Time, limit ...int)`, adding a variadic limit parameter to enable pagination without introducing a separate method; all existing callers remain source-compatible since the variadic argument is optional.
+
+**Rationale:** Correctness over spec adherence. The race condition is a real data-loss risk in production where messages can arrive while compaction runs. The ID-based approach is deterministic and auditable (the exact IDs deleted are logged). `GetOldest` and the `GetRange` variadic limit are minor supporting additions that complete the compaction interface without requiring a separate decision record.
+
+**Ref:** PR #29, `internal/agent/compaction.go`, `internal/store/memory.go`
+
+---
+
+## D086: WindowSize Removed from CompactorConfig
+
+**Status:** Decided (2026-02-27)
+
+**Question:** Should `CompactorConfig` expose both `BatchSize` and `WindowSize` parameters as specified in the plan, or only `BatchSize`?
+
+**Context:** The plan doc specified both `BatchSize` and `WindowSize` parameters for `CompactorConfig`. The implementation uses only `BatchSize` as the sole pagination parameter for compaction batches.
+
+**Options considered:**
+
+1. Keep both BatchSize and WindowSize — More flexible but adds configuration complexity without a clear use case.
+2. Use only BatchSize — Simpler, single knob. The "window" concept is implicit in BatchSize (process the oldest N messages).
+3. Add WindowSize later when time-based windowing is needed — YAGNI principle.
+
+**Decision:** Option 2. `BatchSize` serves as both the trigger threshold (via `ShouldCompact`) and the batch size for `loadBatch`. `WindowSize` was removed as unnecessary complexity with no distinct semantic difference from `BatchSize` in the current implementation.
+
+**Rationale:** YAGNI. Adding a second size parameter without a concrete use case increases configuration surface area. If time-based windowing becomes needed (e.g., "compact messages older than 24 hours"), it can be added as a distinct parameter with clear semantics rather than overloading the existing one.
+
+**Ref:** PR #29, `internal/agent/compaction.go`, `docs/plans/06-phase-6-advanced-features.md`
+
+---
+
+## D087: Summarizer and Embedder as Explicit Interface Boundaries
+
+**Status:** Decided (2026-02-27)
+
+**Question:** Where should the `Summarizer` and `Embedder` interfaces introduced by the Phase 6 compaction system be documented?
+
+**Context:** The compaction system introduces two new interfaces — `Summarizer` (text summarization) and `Embedder` (vector embedding) — that form a boundary between the agent loop and the LLM provider layer. These interfaces are not documented in the design docs but represent an emergent architectural boundary.
+
+**Options considered:**
+
+1. Document interfaces in the design doc — Modify `docs/design/08-agent-core.md`. But design docs are immutable per project convention.
+2. Document interfaces in decision log only — Record the design rationale here.
+3. Add a dedicated interface spec document — Overkill for two small interfaces.
+
+**Decision:** Option 2. The `Summarizer` and `Embedder` interfaces are documented here as part of the Phase 6 memory compaction system. `Summarizer` transforms a batch of messages into a text summary. `Embedder` converts text to a vector embedding for similarity search. Both are injected into `CompactorConfig` and validated at construction time. A separate `FactExtractor` interface handles optional fact extraction from summaries.
+
+**Rationale:** Design docs are immutable specs. The decision log is the appropriate place to document emergent interfaces that arise during implementation. These interfaces follow the project's "accept interfaces, return structs" pattern and serve as the provider abstraction boundary for the compaction subsystem.
+
+**Ref:** PR #29, `internal/agent/compaction.go`, `docs/design/08-agent-core.md`
+
+---
+
+## D088: SessionStore Removed from CompactorConfig
+
+**Status:** Decided (2026-02-27)
+
+**Question:** Should `CompactorConfig` include `SessionStore` as specified in the plan, or omit it?
+
+**Context:** The plan doc (docs/plans/06-phase-6-advanced-features.md, Task 4, Step 1) includes `SessionStore: ss` in the CompactorConfig test scaffold, implying SessionStore was a planned dependency. The implementation removed SessionStore entirely.
+
+**Options considered:**
+
+1. Include SessionStore — Match plan exactly, even if unused.
+2. Remove SessionStore — Compactor operates on MemoryStore.Messages() directly and has no use for session-level state.
+
+**Decision:** Option 2. SessionStore was removed because the Compactor processes Tier 1 memory messages (via `MemoryStore.Messages()`), not active session messages. The compaction lifecycle is workspace-scoped, not session-scoped.
+
+**Rationale:** YAGNI. Adding a dependency with no callers violates interface segregation. If session-aware compaction is needed later, SessionStore can be added with a clear use case.
+
+**Ref:** PR #29, `internal/agent/compaction.go`
+
+---
+
+## D088a: SummaryStore.Confirm and KnowledgeStore.PutFacts Interface Additions
+
+**Status:** Decided (2026-02-27)
+
+**Question:** How should the new `SummaryStore.Confirm()` and `KnowledgeStore.PutFacts()` methods be documented as deviations from Section 11?
+
+**Context:** The design spec (docs/design/11-storage-interfaces.md) defines the canonical SummaryStore and KnowledgeStore interfaces. This PR adds two new methods: `SummaryStore.Confirm()` implements the two-phase commit pattern for compaction safety, and `KnowledgeStore.PutFacts()` adds batch atomic fact insertion. D085 documents the `MessageStore.DeleteByIDs` addition but these two were undocumented.
+
+**Options considered:**
+
+1. Extend D085 to cover all interface additions — Groups all store changes together but makes D085 too broad.
+2. Separate decision record — Clear documentation per interface boundary.
+
+**Decision:** Option 2. `SummaryStore.Confirm(ctx, workspaceID, summaryID)` promotes a pending summary to committed status as the final step of the two-phase compaction commit. `KnowledgeStore.PutFacts(ctx, workspaceID, facts)` wraps all fact inserts in a single SQLite transaction for all-or-nothing batch semantics. Both follow the project's existing interface extension pattern. `SummaryStore.Delete(ctx, workspaceID, summaryID)` was also added as the rollback path in the two-phase compaction commit: when compaction fails after `Store()` but before `Confirm()`, the deferred `Delete` call removes the orphaned pending summary to prevent stale data accumulation.
+
+**Rationale:** Each method serves a distinct correctness guarantee — Confirm prevents partial compactions from leaking, PutFacts prevents partial fact batches. Documenting separately from D085 keeps each decision focused.
+
+**Ref:** PR #29, `internal/store/memory.go`, `internal/store/sqlite/summary.go`, `internal/store/sqlite/knowledge.go`
+
+---
+
+## D088b: FactExtractor Interface — Optional Compaction Boundary
+
+**Status:** Decided (2026-02-27)
+
+**Question:** How should the `FactExtractor` interface be documented alongside `Summarizer` and `Embedder`?
+
+**Context:** D087 documents `Summarizer` and `Embedder` as explicit interface boundaries but only mentions `FactExtractor` in passing. `FactExtractor` is a third emergent boundary in the compaction subsystem with distinct injection semantics: it is nil-ok (optional), meaning fact extraction is skipped when no extractor is configured.
+
+**Decision:** The `FactExtractor` interface (`ExtractFacts(ctx, summary string, messages []*store.Message) ([]*store.Fact, error)`) is an optional compaction boundary. When nil, compaction proceeds without fact extraction. When present, LLM output is sanitized before storage (truncation, empty-EntityID filtering) because it is untrusted input. The nil-ok pattern follows the project's convention for optional capabilities.
+
+**Rationale:** Extends D087 with the same reasoning — design docs are immutable, decision log is the appropriate place. The nil-ok semantics are architecturally significant because they allow lightweight compaction (summarize-only) without requiring a fact extraction provider.
+
+**Ref:** PR #29, `internal/agent/compaction.go`
+
+---
+
+## D088c: Test File Named compaction_lifecycle_test.go
+
+**Status:** Decided (2026-02-27)
+
+**Question:** Should the compaction test file follow the plan-specified name `compaction_integration_test.go` or the implemented name `compaction_lifecycle_test.go`?
+
+**Context:** The plan doc specifies `compaction_integration_test.go`. The implementation uses `compaction_lifecycle_test.go`. The tests use in-memory mocks (unit tests), not real SQLite (integration tests), making "lifecycle" more semantically accurate.
+
+**Decision:** Keep `compaction_lifecycle_test.go`. The tests exercise the full compaction lifecycle (load → summarize → extract facts → embed → store → confirm → delete) using mock implementations. "Lifecycle" accurately describes the test scope. "Integration" would be misleading since no real external dependencies are used.
+
+**Rationale:** Naming accuracy over plan conformance. The plan's naming assumed integration tests; the implementation chose unit-level lifecycle tests for faster execution and deterministic behavior.
+
+**Ref:** PR #29, `internal/agent/compaction_lifecycle_test.go`

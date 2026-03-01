@@ -111,6 +111,15 @@ uv run           # Run Python commands in the project venv
 | **MUST NOT** use `--no-verify`     | Fix the underlying issue, don't skip hooks           |
 | **MUST NOT** force push            | Use `--force-with-lease` only with user confirmation |
 
+### Worktree Agent Safety
+
+| Requirement                                 | Description                                                                                           |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **MUST** commit between agent rounds        | Worktree agents can corrupt main HEAD and destroy uncommitted work                                    |
+| **MUST** verify `git branch --show-current` | After each worktree agent round — agents may hijack the PR branch                                     |
+| **MUST** verify findings against HEAD       | Before fixing review findings — later-turn findings may be false positives against already-fixed code |
+| **MUST** scope fix prompts tightly          | Fix-worker agents go beyond scope without explicit constraints (e.g., "change ONLY line X")           |
+
 ---
 
 ## Claude Code Configuration
@@ -347,6 +356,14 @@ There are TWO separate SQLite message stores with independent schemas:
 | `MessageStore` | `memory_messages` | FTS5 search + memory retrieval                             | `internal/store/sqlite/message.go` |
 
 **MUST** update BOTH when adding/removing columns from message schema.
+
+### Summary Store Two-Phase Commit
+
+Summaries use a two-phase commit pattern: stored as `status='pending'`, promoted to `'committed'` via `SummaryStore.Confirm()` **before** message deletion (`DeleteByIDs`). This ordering ensures Confirm failure is reversible (no messages deleted yet) while DeleteByIDs failure after Confirm produces recoverable duplicate data. `GetByRange`/`GetLatest` filter `WHERE status = 'committed'` so incomplete compactions are invisible. The defer block cleans up both orphaned pending summaries and vector embeddings using a background context with 5s timeout.
+
+### Transactional Fact Persistence
+
+`KnowledgeStore.PutFacts()` wraps all fact inserts in a single SQLite transaction for all-or-nothing semantics. The `storeFacts` method separates sanitization (first pass) from persistence (single `PutFacts` call) so no partial writes occur on validation failure.
 
 ### Shared Health Package
 

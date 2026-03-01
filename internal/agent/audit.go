@@ -14,10 +14,13 @@ import (
 // Warn for the first (security.AuditLogEscalationThreshold - 1) consecutive
 // failures, Error thereafter. This gives operators visibility into persistent
 // audit failures without flooding the error log on transient blips.
-func logAuditFailure(ctx context.Context, consecutive int64, msg string, attrs ...slog.Attr) {
+//
+// log must be non-nil; callers that do not have an injected logger should pass
+// slog.Default().
+func logAuditFailure(ctx context.Context, log *slog.Logger, consecutive int64, msg string, attrs ...slog.Attr) {
 	logLevel := slog.LevelWarn
 	if consecutive >= security.AuditLogEscalationThreshold {
 		logLevel = slog.LevelError
 	}
-	slog.LogAttrs(ctx, logLevel, msg, attrs...)
+	log.LogAttrs(ctx, logLevel, msg, attrs...)
 }

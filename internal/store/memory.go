@@ -20,8 +20,12 @@ type MemoryStore interface {
 type MessageStore interface {
 	Append(ctx context.Context, workspaceID string, msg *Message) error
 	Search(ctx context.Context, workspaceID string, query string, opts SearchOpts) ([]*Message, error)
-	GetRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*Message, error)
+	GetRange(ctx context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*Message, error)
+	// GetOldest returns the n oldest messages for a workspace, ordered by creation
+	// time ascending. Returns an error if n <= 0.
+	GetOldest(ctx context.Context, workspaceID string, n int) ([]*Message, error)
 	Count(ctx context.Context, workspaceID string) (int64, error)
+	DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error)
 	Trim(ctx context.Context, workspaceID string, keepLast int) (int64, error)
 	Close() error
 }
@@ -29,6 +33,8 @@ type MessageStore interface {
 // SummaryStore manages Tier 2: LLM-generated compaction summaries.
 type SummaryStore interface {
 	Store(ctx context.Context, workspaceID string, summary *Summary) error
+	Confirm(ctx context.Context, workspaceID string, summaryID string) error
+	Delete(ctx context.Context, workspaceID string, summaryID string) error
 	GetByRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*Summary, error)
 	GetLatest(ctx context.Context, workspaceID string, n int) ([]*Summary, error)
 	Close() error
@@ -44,7 +50,10 @@ type KnowledgeStore interface {
 	GetRelationships(ctx context.Context, entityID string, opts RelOpts) ([]*Relationship, error)
 
 	PutFact(ctx context.Context, workspaceID string, fact *Fact) error
+	PutFacts(ctx context.Context, workspaceID string, facts []*Fact) error
 	FindFacts(ctx context.Context, workspaceID string, query FactQuery) ([]*Fact, error)
+	DeleteFactsBySource(ctx context.Context, workspaceID string, source string) error
+	DeleteFactsByIDs(ctx context.Context, workspaceID string, ids []string) error
 
 	Traverse(ctx context.Context, startID string, depth int, filter TraversalFilter) (*Graph, error)
 

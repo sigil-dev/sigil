@@ -1985,10 +1985,9 @@ func TestAgentLoop_AuditStoreConsecutiveFailures(t *testing.T) {
 // and security-scan paths).
 func TestAgentLoop_AuditBlockedInputConsecutiveFailures(t *testing.T) {
 	// Capture slog output so we can assert the escalation from Warn to Error.
+	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
+	// process-global logger, making this test safe for parallel execution.
 	logHandler := &testLogHandler{}
-	origLogger := slog.Default()
-	slog.SetDefault(slog.New(logHandler))
-	t.Cleanup(func() { slog.SetDefault(origLogger) })
 
 	sm := newMockSessionManager()
 	ctx := context.Background()
@@ -2002,6 +2001,7 @@ func TestAgentLoop_AuditBlockedInputConsecutiveFailures(t *testing.T) {
 	cfg := newTestLoopConfig(t)
 	cfg.SessionManager = sm
 	cfg.AuditStore = failingAuditStore
+	cfg.Logger = slog.New(logHandler)
 	loop, err := agent.NewLoop(cfg)
 	require.NoError(t, err)
 
@@ -7532,6 +7532,224 @@ func TestAgentLoop_RealScanner_CancelledContext_InputStage(t *testing.T) {
 		"cancellation must not be misclassified as CodeSecurityScannerFailure")
 	assert.False(t, sigilerr.HasCode(err, sigilerr.CodeAgentLoopFailure),
 		"cancellation must not be swallowed by CodeAgentLoopFailure")
+}
+
+// ---------------------------------------------------------------------------
+// Compaction integration tests
+// ---------------------------------------------------------------------------
+
+// TestLoop_ProcessMessage_Compaction verifies that the best-effort compaction
+// path in ProcessMessage behaves correctly in all three cases:
+//   - compaction succeeds: response is returned normally
+//   - compaction errors: error is logged but NOT propagated (best-effort)
+//   - compactor is nil: no panic, response is returned normally
+func TestLoop_ProcessMessage_Compaction(t *testing.T) {
+	tests := []struct {
+		name        string
+		compactor   *mockCompactor
+		wantErr     bool
+		wantContent string
+	}{
+		{
+			name:        "compaction_succeeds",
+			compactor:   &mockCompactor{compactErr: nil},
+			wantErr:     false,
+			wantContent: "Hello, world!",
+		},
+		{
+			name:        "compaction_error_is_best_effort",
+			compactor:   &mockCompactor{compactErr: fmt.Errorf("compaction failed")},
+			wantErr:     false,
+			wantContent: "Hello, world!",
+		},
+		{
+			name:        "compaction_nil_compactor",
+			compactor:   nil,
+			wantErr:     false,
+			wantContent: "Hello, world!",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := newMockSessionManager()
+			ctx := context.Background()
+
+			session, err := sm.Create(ctx, "ws-compact", "user-1")
+			require.NoError(t, err)
+
+			cfg := newTestLoopConfig(t)
+			cfg.SessionManager = sm
+			if tt.compactor != nil {
+				cfg.Compactor = tt.compactor
+			}
+			loop, err := agent.NewLoop(cfg)
+			require.NoError(t, err)
+
+			out, err := loop.ProcessMessage(ctx, agent.InboundMessage{
+				SessionID:   session.ID,
+				WorkspaceID: "ws-compact",
+				UserID:      "user-1",
+				Content:     "trigger compaction test",
+			})
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Contains(t, out.Content, tt.wantContent,
+				"ProcessMessage must return the response regardless of compaction outcome")
+
+			if tt.compactor != nil {
+				assert.Equal(t, 1, tt.compactor.compactCalls,
+					"Compact must be called exactly once per ProcessMessage when compactor is set")
+				assert.Equal(t, "ws-compact", tt.compactor.lastWorkspaceID,
+					"Compact must receive the workspace ID from the inbound message")
+			}
+		})
+	}
+}
+
+// TestLoop_ProcessMessage_Compaction_PartialCommit verifies that when Compact
+// returns a PartialCommitError, the error log includes the partial_commit,
+// summary_id, message_ids_count, and message_ids_sample fields so operators can
+// recover the orphaned messages.
+func TestLoop_ProcessMessage_Compaction_PartialCommit(t *testing.T) {
+	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
+	// process-global logger, making this test safe for parallel execution.
+	logHandler := &testLogHandler{}
+
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-compact-partial", "user-1")
+	require.NoError(t, err)
+
+	partialResult := &agent.CompactionResult{}
+	mc := &mockCompactor{
+		compactErr: agent.NewPartialCommitError(
+			fmt.Errorf("delete failed"),
+			"sum-partial",
+			[]string{"m-1", "m-2"},
+		),
+		compactResult: partialResult,
+	}
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Compactor = mc
+	cfg.Logger = slog.New(logHandler)
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-compact-partial",
+		UserID:      "user-1",
+		Content:     "trigger partial commit test",
+	})
+
+	// Compaction failure is best-effort: response is still returned.
+	require.NoError(t, procErr)
+	require.NotNil(t, out)
+	assert.Equal(t, 1, mc.compactCalls, "Compact must be called exactly once")
+
+	// Find the compaction warning log and verify all partial-commit fields are present.
+	var warnRec *slog.Record
+	for _, rec := range logHandler.Records() {
+		if rec.Level == slog.LevelError && strings.Contains(rec.Message, "compaction partial commit") {
+			r := rec
+			warnRec = &r
+			break
+		}
+	}
+	require.NotNil(t, warnRec, "expected a slog.LevelError record for compaction partial commit")
+
+	attrMap := make(map[string]any)
+	warnRec.Attrs(func(a slog.Attr) bool {
+		attrMap[a.Key] = a.Value.Any()
+		return true
+	})
+
+	v, ok := attrMap["partial_commit"]
+	assert.True(t, ok, "log record must contain partial_commit field")
+	assert.Equal(t, true, v, "partial_commit must be true")
+
+	assert.Equal(t, "sum-partial", attrMap["summary_id"], "log record must contain summary_id")
+	assert.Equal(t, int64(2), attrMap["message_ids_count"], "log record must contain message_ids_count=2")
+
+	msgIDs, ok := attrMap["message_ids_sample"]
+	assert.True(t, ok, "log record must contain message_ids_sample field")
+	assert.Equal(t, []string{"m-1", "m-2"}, msgIDs, "message_ids_sample must match the partial commit IDs")
+}
+
+// TestLoop_ProcessMessage_Compaction_NonPartialError verifies that when Compact
+// returns (nil, error) — the ordinary non-partial failure path — the log record
+// is emitted at Warn level and does NOT contain partial_commit, summary_id, or
+// message_ids_sample fields (those are reserved for the PartialCommitError recovery path).
+func TestLoop_ProcessMessage_Compaction_NonPartialError(t *testing.T) {
+	// Using cfg.Logger instead of slog.SetDefault avoids mutating the
+	// process-global logger, making this test safe for parallel execution.
+	logHandler := &testLogHandler{}
+
+	sm := newMockSessionManager()
+	ctx := context.Background()
+
+	session, err := sm.Create(ctx, "ws-compact-nopartial", "user-1")
+	require.NoError(t, err)
+
+	// Return (nil, error) — the typical non-partial error path.
+	mc := &mockCompactor{
+		compactErr:    fmt.Errorf("compaction failed"),
+		compactResult: nil,
+	}
+
+	cfg := newTestLoopConfig(t)
+	cfg.SessionManager = sm
+	cfg.Compactor = mc
+	cfg.Logger = slog.New(logHandler)
+	loop, err := agent.NewLoop(cfg)
+	require.NoError(t, err)
+
+	out, procErr := loop.ProcessMessage(ctx, agent.InboundMessage{
+		SessionID:   session.ID,
+		WorkspaceID: "ws-compact-nopartial",
+		UserID:      "user-1",
+		Content:     "trigger non-partial compaction error test",
+	})
+
+	// Compaction failure is best-effort: response is still returned.
+	require.NoError(t, procErr)
+	require.NotNil(t, out)
+	assert.Equal(t, 1, mc.compactCalls, "Compact must be called exactly once")
+
+	// Find the Warn-level compaction log record.
+	var warnRec *slog.Record
+	for _, rec := range logHandler.Records() {
+		if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "compaction trigger failed") {
+			r := rec
+			warnRec = &r
+			break
+		}
+	}
+	require.NotNil(t, warnRec, "expected a slog.LevelWarn record for compaction trigger failed (best-effort)")
+
+	attrMap := make(map[string]any)
+	warnRec.Attrs(func(a slog.Attr) bool {
+		attrMap[a.Key] = a.Value.Any()
+		return true
+	})
+
+	// workspace_id and error must be present.
+	assert.Contains(t, attrMap, "workspace_id", "log record must contain workspace_id field")
+	assert.Contains(t, attrMap, "error", "log record must contain error field")
+
+	// Partial-commit recovery fields must NOT be present.
+	assert.NotContains(t, attrMap, "partial_commit", "non-partial error log must NOT contain partial_commit field")
+	assert.NotContains(t, attrMap, "summary_id", "non-partial error log must NOT contain summary_id field")
+	assert.NotContains(t, attrMap, "message_ids_sample", "non-partial error log must NOT contain message_ids_sample field")
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ var _ store.MessageStore = (*MessageStore)(nil)
 type MessageStore struct {
 	db     *sql.DB
 	ownsDB bool // if true, Close() will close the underlying db connection
+	logger *slog.Logger
 }
 
 // NewMessageStore opens (or creates) a SQLite database at dbPath and
@@ -43,7 +45,7 @@ func NewMessageStore(dbPath string) (*MessageStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating message tables: %w", err)
 	}
 
-	return &MessageStore{db: db, ownsDB: true}, nil
+	return &MessageStore{db: db, ownsDB: true, logger: slog.Default()}, nil
 }
 
 // NewMessageStoreWithDB creates a MessageStore using an existing database connection.
@@ -53,7 +55,7 @@ func NewMessageStoreWithDB(db *sql.DB) (*MessageStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating message tables: %w", err)
 	}
 
-	return &MessageStore{db: db, ownsDB: false}, nil
+	return &MessageStore{db: db, ownsDB: false, logger: slog.Default()}, nil
 }
 
 func migrateMessages(db *sql.DB) error {
@@ -198,15 +200,53 @@ LIMIT ? OFFSET ?`
 }
 
 // GetRange returns messages created between from (inclusive) and to (exclusive).
-func (m *MessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*store.Message, error) {
-	const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
+// An optional limit restricts the number of rows returned; 0 or omitted means unlimited.
+func (m *MessageStore) GetRange(ctx context.Context, workspaceID string, from, to time.Time, limit ...int) ([]*store.Message, error) {
+	n := 0
+	if len(limit) > 0 {
+		n = limit[0]
+	}
+
+	var rows *sql.Rows
+	var err error
+
+	if n > 0 {
+		const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
+FROM memory_messages
+WHERE workspace_id = ? AND created_at >= ? AND created_at < ?
+ORDER BY created_at ASC
+LIMIT ?`
+		rows, err = m.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to), n)
+	} else {
+		const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
 FROM memory_messages
 WHERE workspace_id = ? AND created_at >= ? AND created_at < ?
 ORDER BY created_at ASC`
+		rows, err = m.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
+	}
 
-	rows, err := m.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting message range: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	return scanMessages(rows)
+}
+
+// GetOldest returns the n oldest messages for the workspace, sorted by created_at ASC.
+func (m *MessageStore) GetOldest(ctx context.Context, workspaceID string, n int) ([]*store.Message, error) {
+	if n <= 0 {
+		return nil, sigilerr.New(sigilerr.CodeStoreInvalidInput, "GetOldest: n must be positive")
+	}
+	const q = `SELECT id, workspace_id, session_id, role, content, tool_call_id, tool_name, threat_info, origin, created_at, metadata
+FROM memory_messages
+WHERE workspace_id = ?
+ORDER BY created_at ASC
+LIMIT ?`
+
+	rows, err := m.db.QueryContext(ctx, q, workspaceID, n)
+	if err != nil {
+		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting oldest messages: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -224,6 +264,67 @@ func (m *MessageStore) Count(ctx context.Context, workspaceID string) (int64, er
 		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "counting messages: %w", err)
 	}
 	return count, nil
+}
+
+// DeleteByIDs deletes specific messages by ID within the workspace.
+// Batches deletions to stay within SQLite's variable limit (999).
+// Returns the total number of deleted messages.
+func (m *MessageStore) DeleteByIDs(ctx context.Context, workspaceID string, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "beginning delete transaction: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			m.logger.ErrorContext(ctx, "DeleteByIDs rollback failed",
+				"workspace_id", workspaceID,
+				"id_count", len(ids),
+				"error", rbErr,
+			)
+		}
+	}()
+
+	// SQLite has a 999-variable limit per statement; reserve 1 for workspaceID.
+	const batchLimit = 998
+	var totalDeleted int64
+
+	for start := 0; start < len(ids); start += batchLimit {
+		end := start + batchLimit
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch := ids[start:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, workspaceID)
+
+		for i, id := range batch {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+
+		q := `DELETE FROM memory_messages WHERE workspace_id = ? AND id IN (` + strings.Join(placeholders, ",") + `)`
+		result, err := tx.ExecContext(ctx, q, args...)
+		if err != nil {
+			return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting messages by ids: %w", err)
+		}
+
+		n, err := result.RowsAffected()
+		if err != nil {
+			return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting rows affected: %w", err)
+		}
+		totalDeleted += n
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "committing delete transaction: %w", err)
+	}
+	return totalDeleted, nil
 }
 
 // Trim keeps only the keepLast most recent messages per workspace and

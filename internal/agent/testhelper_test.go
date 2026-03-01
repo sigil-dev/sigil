@@ -643,17 +643,27 @@ func (m *mockMemoryStore) Close() error                    { return nil }
 // --- mockMessageStore ---
 
 type mockMessageStore struct {
-	msgs []*store.Message
+	msgs map[string][]*store.Message
 }
 
-func (m *mockMessageStore) Append(_ context.Context, _ string, msg *store.Message) error {
-	m.msgs = append(m.msgs, msg)
+func (m *mockMessageStore) msgsFor(workspaceID string) []*store.Message {
+	if m.msgs == nil {
+		return nil
+	}
+	return m.msgs[workspaceID]
+}
+
+func (m *mockMessageStore) Append(_ context.Context, workspaceID string, msg *store.Message) error {
+	if m.msgs == nil {
+		m.msgs = make(map[string][]*store.Message)
+	}
+	m.msgs[workspaceID] = append(m.msgs[workspaceID], msg)
 	return nil
 }
 
-func (m *mockMessageStore) Search(_ context.Context, _ string, query string, _ store.SearchOpts) ([]*store.Message, error) {
+func (m *mockMessageStore) Search(_ context.Context, workspaceID string, query string, _ store.SearchOpts) ([]*store.Message, error) {
 	var results []*store.Message
-	for _, msg := range m.msgs {
+	for _, msg := range m.msgsFor(workspaceID) {
 		if strings.Contains(msg.Content, query) {
 			results = append(results, msg)
 		}
@@ -661,12 +671,55 @@ func (m *mockMessageStore) Search(_ context.Context, _ string, query string, _ s
 	return results, nil
 }
 
-func (m *mockMessageStore) GetRange(_ context.Context, _ string, _, _ time.Time) ([]*store.Message, error) {
+func (m *mockMessageStore) GetRange(_ context.Context, _ string, _, _ time.Time, _ ...int) ([]*store.Message, error) {
 	return nil, nil
 }
 
-func (m *mockMessageStore) Count(_ context.Context, _ string) (int64, error) {
-	return int64(len(m.msgs)), nil
+func (m *mockMessageStore) GetOldest(_ context.Context, workspaceID string, n int) ([]*store.Message, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("GetOldest: n must be > 0, got %d", n)
+	}
+	msgs := m.msgsFor(workspaceID)
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	end := n
+	if end > len(msgs) {
+		end = len(msgs)
+	}
+	return msgs[:end], nil
+}
+
+func (m *mockMessageStore) Count(_ context.Context, workspaceID string) (int64, error) {
+	return int64(len(m.msgsFor(workspaceID))), nil
+}
+
+func (m *mockMessageStore) DeleteByIDs(_ context.Context, workspaceID string, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	idSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+
+	msgs := m.msgsFor(workspaceID)
+	var filtered []*store.Message
+	var deleted int64
+	for _, msg := range msgs {
+		if _, ok := idSet[msg.ID]; ok {
+			deleted++
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	if m.msgs == nil {
+		m.msgs = make(map[string][]*store.Message)
+	}
+	m.msgs[workspaceID] = filtered
+
+	return deleted, nil
 }
 
 func (m *mockMessageStore) Trim(_ context.Context, _ string, _ int) (int64, error) {
@@ -699,6 +752,10 @@ func (m *mockSummaryStore) GetByRange(_ context.Context, _ string, from, to time
 func (m *mockSummaryStore) GetLatest(_ context.Context, _ string, _ int) ([]*store.Summary, error) {
 	return nil, nil
 }
+
+func (m *mockSummaryStore) Confirm(_ context.Context, _ string, _ string) error { return nil }
+
+func (m *mockSummaryStore) Delete(_ context.Context, _ string, _ string) error { return nil }
 
 func (m *mockSummaryStore) Close() error { return nil }
 
@@ -733,6 +790,11 @@ func (m *mockKnowledgeStore) PutFact(_ context.Context, _ string, fact *store.Fa
 	return nil
 }
 
+func (m *mockKnowledgeStore) PutFacts(_ context.Context, _ string, facts []*store.Fact) error {
+	m.facts = append(m.facts, facts...)
+	return nil
+}
+
 func (m *mockKnowledgeStore) FindFacts(_ context.Context, _ string, query store.FactQuery) ([]*store.Fact, error) {
 	var results []*store.Fact
 	for _, f := range m.facts {
@@ -745,6 +807,32 @@ func (m *mockKnowledgeStore) FindFacts(_ context.Context, _ string, query store.
 		results = append(results, f)
 	}
 	return results, nil
+}
+
+func (m *mockKnowledgeStore) DeleteFactsBySource(_ context.Context, _ string, source string) error {
+	var kept []*store.Fact
+	for _, f := range m.facts {
+		if f.Source != source {
+			kept = append(kept, f)
+		}
+	}
+	m.facts = kept
+	return nil
+}
+
+func (m *mockKnowledgeStore) DeleteFactsByIDs(_ context.Context, _ string, ids []string) error {
+	idSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		idSet[id] = struct{}{}
+	}
+	var kept []*store.Fact
+	for _, f := range m.facts {
+		if _, ok := idSet[f.ID]; !ok {
+			kept = append(kept, f)
+		}
+	}
+	m.facts = kept
+	return nil
 }
 
 func (m *mockKnowledgeStore) Traverse(_ context.Context, _ string, _ int, _ store.TraversalFilter) (*store.Graph, error) {
@@ -828,6 +916,22 @@ func (m *mockVectorStore) Delete(_ context.Context, ids []string) error {
 }
 
 func (m *mockVectorStore) Close() error { return nil }
+
+// ---------------------------------------------------------------------------
+// Summarizer / Embedder no-op mocks for tests that only exercise RollMessage.
+// ---------------------------------------------------------------------------
+
+type noopSummarizer struct{}
+
+func (noopSummarizer) Summarize(_ context.Context, _ []*store.Message) (string, error) {
+	return "", nil
+}
+
+type noopEmbedder struct{}
+
+func (noopEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	return []float32{0}, nil
+}
 
 // --- Error-returning mock variants ---
 
@@ -1346,4 +1450,28 @@ func (p *mockProviderBatchToolCall) Chat(_ context.Context, _ provider.ChatReque
 	}
 	close(ch)
 	return ch, nil
+}
+
+// ---------------------------------------------------------------------------
+// Compactor mock
+// ---------------------------------------------------------------------------
+
+// mockCompactor implements the compactorRunner interface for testing.
+// Configure compactErr to simulate a Compact failure; leave nil for success.
+// Set compactResult to control the returned *CompactionResult (used to test
+// partial-commit paths where both a result and an error are returned).
+type mockCompactor struct {
+	compactErr      error
+	compactResult   *agent.CompactionResult
+	compactCalls    int
+	lastWorkspaceID string
+}
+
+func (m *mockCompactor) Compact(_ context.Context, workspaceID string) (*agent.CompactionResult, error) {
+	m.compactCalls++
+	m.lastWorkspaceID = workspaceID
+	if m.compactErr != nil {
+		return m.compactResult, m.compactErr
+	}
+	return &agent.CompactionResult{}, nil
 }

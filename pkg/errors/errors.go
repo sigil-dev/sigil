@@ -66,6 +66,7 @@ const (
 	CodeAgentToolBudgetExceeded      Code = "agent.tool.budget_exceeded"
 	CodeAgentToolTimeout             Code = "agent.tool.timeout"
 	CodeAgentSkillParseInvalid       Code = "agent.skill.parse.invalid"
+	CodeAgentLoopPartialCommit       Code = "agent.loop.partial_commit"
 
 	CodeWorkspaceOpenFailure      Code = "workspace.open.failure"
 	CodeWorkspaceMembershipDenied Code = "workspace.membership.denied"

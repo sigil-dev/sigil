@@ -7,12 +7,21 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+)
+
+// SQL-layer constants derived from store.SummaryStatus* typed constants.
+// These provide a single point of truth so SQL queries stay in sync with
+// the Go-layer status values (store.SummaryStatusPending, store.SummaryStatusCommitted).
+const (
+	summaryStatusPending   = string(store.SummaryStatusPending)
+	summaryStatusCommitted = string(store.SummaryStatusCommitted)
 )
 
 // Compile-time interface check.
@@ -22,6 +31,7 @@ var _ store.SummaryStore = (*SummaryStore)(nil)
 type SummaryStore struct {
 	db     *sql.DB
 	ownsDB bool // if true, Close() will close the underlying db connection
+	logger *slog.Logger
 }
 
 // NewSummaryStore opens (or creates) a SQLite database at dbPath and
@@ -42,7 +52,7 @@ func NewSummaryStore(dbPath string) (*SummaryStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating summary tables: %w", err)
 	}
 
-	return &SummaryStore{db: db, ownsDB: true}, nil
+	return &SummaryStore{db: db, ownsDB: true, logger: slog.Default()}, nil
 }
 
 // NewSummaryStoreWithDB creates a SummaryStore using an existing database connection.
@@ -52,7 +62,7 @@ func NewSummaryStoreWithDB(db *sql.DB) (*SummaryStore, error) {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "migrating summary tables: %w", err)
 	}
 
-	return &SummaryStore{db: db, ownsDB: false}, nil
+	return &SummaryStore{db: db, ownsDB: false, logger: slog.Default()}, nil
 }
 
 func migrateSummaries(db *sql.DB) error {
@@ -64,15 +74,30 @@ CREATE TABLE IF NOT EXISTS summaries (
 	to_time      TEXT NOT NULL,
 	content      TEXT NOT NULL DEFAULT '',
 	message_ids  TEXT NOT NULL DEFAULT '[]',
-	created_at   TEXT NOT NULL
+	created_at   TEXT NOT NULL,
+	status       TEXT NOT NULL DEFAULT 'committed' -- store.SummaryStatusCommitted
 );
 
 CREATE INDEX IF NOT EXISTS idx_summaries_workspace ON summaries(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_summaries_workspace_range ON summaries(workspace_id, from_time, to_time);
 CREATE INDEX IF NOT EXISTS idx_summaries_workspace_created ON summaries(workspace_id, created_at);
 `
-	_, err := db.Exec(ddl)
-	return err
+	if _, err := db.Exec(ddl); err != nil {
+		return err
+	}
+
+	// Add status column to existing tables that predate this schema version.
+	// Use PRAGMA table_info to check column existence before ALTER TABLE.
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('summaries') WHERE name='status'").Scan(&count); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "checking summaries schema: %w", err)
+	}
+	if count == 0 {
+		if _, err := db.Exec("ALTER TABLE summaries ADD COLUMN status TEXT NOT NULL DEFAULT 'committed'"); err != nil { // store.SummaryStatusCommitted
+			return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "adding status column to summaries: %w", err)
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database connection if this store owns it.
@@ -85,14 +110,20 @@ func (s *SummaryStore) Close() error {
 }
 
 // Store inserts a summary into the store for the given workspace.
+// The caller must set summary.Status explicitly to either SummaryStatusPending
+// (for two-phase compaction via Confirm) or SummaryStatusCommitted (for immediate use).
 func (s *SummaryStore) Store(ctx context.Context, workspaceID string, summary *store.Summary) error {
+	if summary.Status == "" {
+		return sigilerr.New(sigilerr.CodeAgentLoopInvalidInput, "summary status must be set explicitly")
+	}
+
 	msgIDs, err := json.Marshal(summary.MessageIDs)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "marshalling message IDs: %w", err)
 	}
 
-	const q = `INSERT INTO summaries (id, workspace_id, from_time, to_time, content, message_ids, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)`
+	const q = `INSERT INTO summaries (id, workspace_id, from_time, to_time, content, message_ids, created_at, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err = s.db.ExecContext(ctx, q,
 		summary.ID,
@@ -102,6 +133,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`
 		summary.Content,
 		string(msgIDs),
 		formatTime(summary.CreatedAt),
+		summary.Status,
 	)
 	if err != nil {
 		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "storing summary %s: %w", summary.ID, err)
@@ -109,15 +141,85 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`
 	return nil
 }
 
-// GetByRange returns summaries whose time range falls within [from, to].
+// Confirm promotes a pending summary to committed, making it visible to GetByRange and GetLatest.
+// Returns CodeStoreEntityNotFound if the summary does not exist, or CodeStoreConflict if it is
+// not in the pending state (e.g. already committed).
+//
+// The UPDATE and disambiguating SELECT run inside a single transaction to eliminate the
+// TOCTOU window between the two queries.
+func (s *SummaryStore) Confirm(ctx context.Context, workspaceID string, summaryID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: beginning transaction: %w", summaryID, err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			s.logger.ErrorContext(ctx, "Confirm rollback failed",
+				"summary_id", summaryID,
+				"workspace_id", workspaceID,
+				"error", rbErr,
+			)
+		}
+	}()
+
+	const q = `UPDATE summaries SET status = ? WHERE id = ? AND workspace_id = ? AND status = ?`
+	res, err := tx.ExecContext(ctx, q, summaryStatusCommitted, summaryID, workspaceID, summaryStatusPending)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: %w", summaryID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: rows affected: %w", summaryID, err)
+	}
+	if n == 0 {
+		// Disambiguate within the same transaction: summary not found vs wrong state.
+		var status string
+		checkErr := tx.QueryRowContext(ctx,
+			"SELECT status FROM summaries WHERE id = ? AND workspace_id = ?", summaryID, workspaceID,
+		).Scan(&status)
+		if checkErr == sql.ErrNoRows {
+			return sigilerr.Errorf(sigilerr.CodeStoreEntityNotFound,
+				"confirming summary %s: not found in workspace %s", summaryID, workspaceID)
+		}
+		if checkErr != nil {
+			return sigilerr.Wrapf(checkErr, sigilerr.CodeStoreDatabaseFailure,
+				"checking summary %s state in workspace %s", summaryID, workspaceID)
+		}
+		// Row exists but not in pending state.
+		return sigilerr.Errorf(sigilerr.CodeStoreConflict,
+			"confirming summary %s: expected status pending, got %s", summaryID, status)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "confirming summary %s: committing transaction: %w", summaryID, err)
+	}
+	return nil
+}
+
+// Delete removes a summary by ID within the workspace. Used to clean up
+// orphaned pending summaries when compaction fails after Store.
+// Not-found is intentionally treated as success for idempotent cleanup:
+// if the summary was already removed (concurrent cleanup, crash recovery),
+// the operation succeeds silently rather than returning an error.
+func (s *SummaryStore) Delete(ctx context.Context, workspaceID string, summaryID string) error {
+	const q = `DELETE FROM summaries WHERE id = ? AND workspace_id = ?`
+	_, err := s.db.ExecContext(ctx, q, summaryID, workspaceID)
+	if err != nil {
+		return sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "deleting summary %s: %w", summaryID, err)
+	}
+	return nil
+}
+
+// GetByRange returns committed summaries whose time range falls within [from, to].
 // A summary is included if its from_time >= from AND to_time <= to.
+// Pending summaries are excluded to prevent partially-compacted data from leaking.
 func (s *SummaryStore) GetByRange(ctx context.Context, workspaceID string, from, to time.Time) ([]*store.Summary, error) {
-	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at
+	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at, status
 FROM summaries
-WHERE workspace_id = ? AND from_time >= ? AND to_time <= ?
+WHERE workspace_id = ? AND from_time >= ? AND to_time <= ? AND status = ?
 ORDER BY from_time ASC`
 
-	rows, err := s.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to))
+	rows, err := s.db.QueryContext(ctx, q, workspaceID, formatTime(from), formatTime(to), summaryStatusCommitted)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting summaries by range: %w", err)
 	}
@@ -126,15 +228,16 @@ ORDER BY from_time ASC`
 	return scanSummaries(rows)
 }
 
-// GetLatest returns the n most recent summaries ordered by created_at descending.
+// GetLatest returns the n most recent committed summaries ordered by created_at descending.
+// Pending summaries are excluded to prevent partially-compacted data from leaking.
 func (s *SummaryStore) GetLatest(ctx context.Context, workspaceID string, n int) ([]*store.Summary, error) {
-	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at
+	const q = `SELECT id, workspace_id, from_time, to_time, content, message_ids, created_at, status
 FROM summaries
-WHERE workspace_id = ?
+WHERE workspace_id = ? AND status = ?
 ORDER BY created_at DESC
 LIMIT ?`
 
-	rows, err := s.db.QueryContext(ctx, q, workspaceID, n)
+	rows, err := s.db.QueryContext(ctx, q, workspaceID, summaryStatusCommitted, n)
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "getting latest summaries: %w", err)
 	}
@@ -158,6 +261,7 @@ func scanSummaries(rows *sql.Rows) ([]*store.Summary, error) {
 			&sm.Content,
 			&msgIDsJSON,
 			&createdAt,
+			&sm.Status,
 		); err != nil {
 			return nil, sigilerr.Errorf(sigilerr.CodeStoreDatabaseFailure, "scanning summary row: %w", err)
 		}
