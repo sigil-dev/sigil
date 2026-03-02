@@ -4,6 +4,7 @@
 package node
 
 import (
+	"log/slog"
 	"path"
 	"sort"
 	"strings"
@@ -233,7 +234,11 @@ func qualifiedTool(nodeID, tool string) string {
 // behavior since node IDs are identifiers, not file paths.
 func ruleMatches(pattern, nodeID string) bool {
 	matched, err := path.Match(pattern, nodeID)
-	return err == nil && matched
+	if err != nil {
+		slog.Error("ruleMatches: invalid glob pattern stored", "pattern", pattern, "error", err)
+		return false
+	}
+	return matched
 }
 
 // validatePatterns checks that all patterns are valid path.Match globs and

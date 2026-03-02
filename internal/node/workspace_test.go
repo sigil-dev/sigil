@@ -4,6 +4,7 @@
 package node_test
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -392,4 +393,63 @@ func TestWorkspaceBinderConcurrentAccess(t *testing.T) {
 	wg.Wait()
 
 	assert.True(t, binder.IsAllowed("ws", "node-1"))
+}
+
+func TestWorkspaceBinderCheckLimits(t *testing.T) {
+	t.Run("per-workspace rule limit exceeded", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		// Fill up to the limit with batches.
+		patterns := make([]string, 500)
+		for i := range patterns {
+			patterns[i] = fmt.Sprintf("node-%04d", i)
+		}
+		require.NoError(t, binder.Bind("ws", patterns))
+
+		// One more should fail.
+		err := binder.Bind("ws", []string{"node-overflow"})
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindLimitExceeded))
+	})
+
+	t.Run("BindWithTools also respects per-workspace limit", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		patterns := make([]string, 500)
+		for i := range patterns {
+			patterns[i] = fmt.Sprintf("node-%04d", i)
+		}
+		require.NoError(t, binder.Bind("ws", patterns))
+
+		err := binder.BindWithTools("ws", "node-extra", []string{"tool"})
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindLimitExceeded))
+	})
+
+	t.Run("workspace count limit exceeded", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		for i := 0; i < 1000; i++ {
+			require.NoError(t, binder.Bind(fmt.Sprintf("ws-%04d", i), []string{"node-a"}))
+		}
+
+		err := binder.Bind("ws-overflow", []string{"node-a"})
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindLimitExceeded))
+	})
+
+	t.Run("existing workspace unaffected after limit error", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		patterns := make([]string, 500)
+		for i := range patterns {
+			patterns[i] = fmt.Sprintf("node-%04d", i)
+		}
+		require.NoError(t, binder.Bind("ws", patterns))
+
+		// Overflow attempt fails.
+		err := binder.Bind("ws", []string{"node-overflow"})
+		require.Error(t, err)
+
+		// Original bindings still intact.
+		assert.True(t, binder.IsAllowed("ws", "node-0000"))
+		assert.True(t, binder.IsAllowed("ws", "node-0499"))
+		assert.False(t, binder.IsAllowed("ws", "node-overflow"))
+	})
 }
