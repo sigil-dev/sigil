@@ -457,6 +457,28 @@ func TestWorkspaceBinderCheckLimits(t *testing.T) {
 		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindLimitExceeded))
 	})
 
+	t.Run("duplicate patterns deduplicated against stored rules", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		require.NoError(t, binder.Bind("ws", []string{"node-a", "node-b"}))
+
+		// Re-binding same patterns should be a no-op (no duplicates stored).
+		require.NoError(t, binder.Bind("ws", []string{"node-a"}))
+
+		// node-a should still work and only one rule exists for it.
+		assert.True(t, binder.IsAllowed("ws", "node-a"))
+		assert.True(t, binder.IsAllowed("ws", "node-b"))
+
+		// Fill to near-limit, then verify re-binding existing doesn't fail.
+		patterns := make([]string, 498)
+		for i := range patterns {
+			patterns[i] = fmt.Sprintf("node-%04d", i)
+		}
+		require.NoError(t, binder.Bind("ws", patterns))
+
+		// Re-binding an existing pattern should succeed (dedup makes count 0).
+		require.NoError(t, binder.Bind("ws", []string{"node-a"}))
+	})
+
 	t.Run("existing workspace unaffected after limit error", func(t *testing.T) {
 		binder := node.NewWorkspaceBinder()
 		patterns := make([]string, 500)

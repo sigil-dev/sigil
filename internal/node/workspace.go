@@ -63,11 +63,17 @@ func (b *WorkspaceBinder) Bind(workspaceID string, nodePatterns []string) error 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if err := b.checkLimits(ws, len(normalized)); err != nil {
+	// Deduplicate against already-stored Bind rules (nil tools) for this workspace.
+	newPatterns := b.deduplicatePatterns(ws, normalized)
+	if len(newPatterns) == 0 {
+		return nil // all patterns already bound
+	}
+
+	if err := b.checkLimits(ws, len(newPatterns)); err != nil {
 		return err
 	}
 
-	for _, pattern := range normalized {
+	for _, pattern := range newPatterns {
 		b.rules[ws] = append(b.rules[ws], workspaceRule{pattern: pattern})
 	}
 	return nil
@@ -261,6 +267,25 @@ func validatePatterns(patterns []string) error {
 		}
 	}
 	return nil
+}
+
+// deduplicatePatterns filters out patterns that already exist as Bind rules
+// (nil tools) in the workspace. Must be called with b.mu held.
+func (b *WorkspaceBinder) deduplicatePatterns(ws string, patterns []string) []string {
+	existing := make(map[string]struct{})
+	for _, r := range b.rules[ws] {
+		if len(r.tools) == 0 {
+			existing[r.pattern] = struct{}{}
+		}
+	}
+
+	out := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		if _, ok := existing[p]; !ok {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (b *WorkspaceBinder) checkLimits(ws string, count int) error {
