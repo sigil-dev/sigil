@@ -116,6 +116,9 @@ const (
 	CodeSecretListFailure    Code = "secret.list.failure"
 	CodeSecretInvalidInput   Code = "secret.input.invalid"
 	CodeSecretResolveFailure Code = "secret.resolve.failure"
+
+	CodeNodeBindInvalidInput  Code = "node.bind.invalid_input"
+	CodeNodeBindLimitExceeded Code = "node.bind.limit_exceeded"
 )
 
 // Attr is a structured key/value context attached to an error.

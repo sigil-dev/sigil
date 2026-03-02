@@ -4,10 +4,17 @@
 package node
 
 import (
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 	"sync"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
+)
+
+const (
+	maxWorkspaces        = 1000
+	maxRulesPerWorkspace = 500
 )
 
 type workspaceRule struct {
@@ -16,6 +23,11 @@ type workspaceRule struct {
 }
 
 // WorkspaceBinder binds node ID patterns and tool allowlists to workspaces.
+// Rules are additive: calling Bind or BindWithTools multiple times for the same
+// workspace accumulates rules. AllowedTools merges tool sets across all matching
+// rules at read time.
+//
+// All exported methods are safe for concurrent use.
 type WorkspaceBinder struct {
 	mu    sync.RWMutex
 	rules map[string][]workspaceRule
@@ -27,26 +39,88 @@ func NewWorkspaceBinder() *WorkspaceBinder {
 	}
 }
 
-func (b *WorkspaceBinder) Bind(workspaceID string, nodePatterns []string) {
+// Bind associates node ID patterns with a workspace. All nodes matching any
+// pattern are allowed to access the workspace with unrestricted tool access.
+func (b *WorkspaceBinder) Bind(workspaceID string, nodePatterns []string) error {
 	ws := strings.TrimSpace(workspaceID)
-	if ws == "" || len(nodePatterns) == 0 {
-		return
+	if ws == "" {
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "workspaceID must not be empty")
 	}
 
 	normalized := normalizeStrings(nodePatterns)
 	if len(normalized) == 0 {
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "nodePatterns must contain at least one non-empty value")
+	}
+
+	if err := validatePatterns(normalized); err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if err := b.checkLimits(ws, len(normalized)); err != nil {
+		return err
+	}
+
+	for _, pattern := range normalized {
+		b.rules[ws] = append(b.rules[ws], workspaceRule{pattern: pattern})
+	}
+	return nil
+}
+
+// BindWithTools associates a single node ID pattern with a workspace and
+// restricts the node's tools to the given allowlist.
+func (b *WorkspaceBinder) BindWithTools(workspaceID, nodePattern string, tools []string) error {
+	ws := strings.TrimSpace(workspaceID)
+	pattern := strings.TrimSpace(nodePattern)
+	if ws == "" {
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "workspaceID must not be empty")
+	}
+	if pattern == "" {
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "nodePattern must not be empty")
+	}
+
+	if err := validatePatterns([]string{pattern}); err != nil {
+		return err
+	}
+
+	normalizedTools := normalizeStrings(tools)
+	for _, t := range normalizedTools {
+		if strings.ContainsRune(t, ':') {
+			return sigilerr.Errorf(sigilerr.CodeNodeBindInvalidInput, "tool name %q must not contain ':'", t)
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if err := b.checkLimits(ws, 1); err != nil {
+		return err
+	}
+
+	b.rules[ws] = append(b.rules[ws], workspaceRule{
+		pattern: pattern,
+		tools:   normalizedTools,
+	})
+	return nil
+}
+
+// Unbind removes all rules for a workspace.
+func (b *WorkspaceBinder) Unbind(workspaceID string) {
+	ws := strings.TrimSpace(workspaceID)
+	if ws == "" {
 		return
 	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	for _, pattern := range normalized {
-		b.rules[ws] = append(b.rules[ws], workspaceRule{pattern: pattern})
-	}
+	delete(b.rules, ws)
 }
 
-func (b *WorkspaceBinder) BindWithTools(workspaceID, nodePattern string, tools []string) {
+// UnbindPattern removes all rules matching a specific node pattern from a workspace.
+func (b *WorkspaceBinder) UnbindPattern(workspaceID, nodePattern string) {
 	ws := strings.TrimSpace(workspaceID)
 	pattern := strings.TrimSpace(nodePattern)
 	if ws == "" || pattern == "" {
@@ -56,12 +130,21 @@ func (b *WorkspaceBinder) BindWithTools(workspaceID, nodePattern string, tools [
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.rules[ws] = append(b.rules[ws], workspaceRule{
-		pattern: pattern,
-		tools:   normalizeStrings(tools),
-	})
+	rules := b.rules[ws]
+	filtered := rules[:0]
+	for _, r := range rules {
+		if r.pattern != pattern {
+			filtered = append(filtered, r)
+		}
+	}
+	if len(filtered) == 0 {
+		delete(b.rules, ws)
+	} else {
+		b.rules[ws] = filtered
+	}
 }
 
+// IsAllowed reports whether a node is permitted to access a workspace.
 func (b *WorkspaceBinder) IsAllowed(workspaceID, nodeID string) bool {
 	ws := strings.TrimSpace(workspaceID)
 	node := strings.TrimSpace(nodeID)
@@ -81,6 +164,22 @@ func (b *WorkspaceBinder) IsAllowed(workspaceID, nodeID string) bool {
 	return false
 }
 
+// ValidateWorkspace checks whether a node is permitted in a workspace,
+// satisfying the WorkspaceValidator interface.
+func (b *WorkspaceBinder) ValidateWorkspace(nodeID, workspaceID string) error {
+	if !b.IsAllowed(workspaceID, nodeID) {
+		return sigilerr.New(sigilerr.CodeWorkspaceMembershipDenied, "node not allowed in workspace",
+			sigilerr.Field("node_id", nodeID), sigilerr.FieldWorkspaceID(workspaceID))
+	}
+	return nil
+}
+
+// AllowedTools returns the tools a node is permitted to use in a workspace.
+// Returns nil if the node does not match any rule for the workspace.
+// Returns an empty slice if the node matches but has no tool restrictions
+// (added via Bind without tool allowlists, meaning all tools are allowed).
+// Output uses materialized node IDs in the form "node:<nodeID>:<tool>",
+// never glob patterns.
 func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
 	ws := strings.TrimSpace(workspaceID)
 	node := strings.TrimSpace(nodeID)
@@ -91,18 +190,24 @@ func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	var matched bool
 	allowed := make(map[string]struct{})
 	for _, rule := range b.rules[ws] {
 		if !ruleMatches(rule.pattern, node) {
 			continue
 		}
+		matched = true
 		for _, tool := range rule.tools {
-			allowed["node:"+node+":"+tool] = struct{}{}
+			allowed[qualifiedTool(node, tool)] = struct{}{}
 		}
 	}
 
-	if len(allowed) == 0 {
+	if !matched {
 		return nil
+	}
+
+	if len(allowed) == 0 {
+		return []string{}
 	}
 
 	tools := make([]string, 0, len(allowed))
@@ -113,9 +218,44 @@ func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
 	return tools
 }
 
+// qualifiedTool returns a capability string in the form "node:<nodeID>:<tool>".
+func qualifiedTool(nodeID, tool string) string {
+	return "node:" + nodeID + ":" + tool
+}
+
+// ruleMatches checks if a node ID matches a glob pattern using path.Match.
+// Patterns are validated at bind time, so ErrBadPattern here indicates a bug.
+// path.Match is used instead of filepath.Match for platform-independent
+// behavior since node IDs are identifiers, not file paths.
 func ruleMatches(pattern, nodeID string) bool {
-	matched, err := filepath.Match(pattern, nodeID)
+	matched, err := path.Match(pattern, nodeID)
 	return err == nil && matched
+}
+
+// validatePatterns checks that all patterns are valid path.Match globs and
+// do not contain the ':' separator used in capability strings.
+func validatePatterns(patterns []string) error {
+	for _, p := range patterns {
+		if _, err := path.Match(p, ""); err != nil {
+			return sigilerr.Errorf(sigilerr.CodeNodeBindInvalidInput, "invalid glob pattern %q: %w", p, err)
+		}
+		if strings.ContainsRune(p, ':') {
+			return sigilerr.Errorf(sigilerr.CodeNodeBindInvalidInput, "pattern %q must not contain ':'", p)
+		}
+	}
+	return nil
+}
+
+func (b *WorkspaceBinder) checkLimits(ws string, count int) error {
+	if _, exists := b.rules[ws]; !exists && len(b.rules) >= maxWorkspaces {
+		return sigilerr.Errorf(sigilerr.CodeNodeBindLimitExceeded,
+			"workspace limit exceeded (%d)", maxWorkspaces)
+	}
+	if len(b.rules[ws])+count > maxRulesPerWorkspace {
+		return sigilerr.Errorf(sigilerr.CodeNodeBindLimitExceeded,
+			"rule limit exceeded for workspace %q (%d)", ws, maxRulesPerWorkspace)
+	}
+	return nil
 }
 
 func normalizeStrings(values []string) []string {
