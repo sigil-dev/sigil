@@ -13,6 +13,9 @@ import (
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
+// Compile-time interface satisfaction check.
+var _ WorkspaceValidator = (*WorkspaceBinder)(nil)
+
 const (
 	maxWorkspaces        = 1000
 	maxRulesPerWorkspace = 500

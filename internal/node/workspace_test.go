@@ -376,7 +376,7 @@ func TestWorkspaceBinderConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
-		wg.Add(3)
+		wg.Add(5)
 		go func() {
 			defer wg.Done()
 			_ = binder.Bind("ws", []string{"node-*"})
@@ -388,6 +388,14 @@ func TestWorkspaceBinderConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			binder.AllowedTools("ws", "node-1")
+		}()
+		go func() {
+			defer wg.Done()
+			binder.Unbind("ws-ephemeral")
+		}()
+		go func() {
+			defer wg.Done()
+			binder.UnbindPattern("ws", "node-gone")
 		}()
 	}
 	wg.Wait()
