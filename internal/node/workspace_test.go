@@ -315,24 +315,38 @@ func TestWorkspaceBinderUnbind(t *testing.T) {
 	require.NoError(t, binder.BindWithTools("family", "iphone-*", []string{"camera"}))
 
 	assert.True(t, binder.IsAllowed("homelab", "macbook-pro"))
-	binder.Unbind("homelab")
+	require.NoError(t, binder.Unbind("homelab"))
 	assert.False(t, binder.IsAllowed("homelab", "macbook-pro"))
 
 	// Family workspace unaffected.
 	assert.True(t, binder.IsAllowed("family", "iphone-sean"))
+
+	// Empty workspace returns error.
+	err := binder.Unbind("")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindInvalidInput))
 }
 
 func TestWorkspaceBinderUnbindPattern(t *testing.T) {
 	binder := node.NewWorkspaceBinder()
 	require.NoError(t, binder.Bind("homelab", []string{"macbook-pro", "homelab-server"}))
 
-	binder.UnbindPattern("homelab", "macbook-pro")
+	require.NoError(t, binder.UnbindPattern("homelab", "macbook-pro"))
 	assert.False(t, binder.IsAllowed("homelab", "macbook-pro"))
 	assert.True(t, binder.IsAllowed("homelab", "homelab-server"))
 
 	// Remove last pattern removes workspace entry.
-	binder.UnbindPattern("homelab", "homelab-server")
+	require.NoError(t, binder.UnbindPattern("homelab", "homelab-server"))
 	assert.False(t, binder.IsAllowed("homelab", "homelab-server"))
+
+	// Empty inputs return errors.
+	err := binder.UnbindPattern("", "pattern")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindInvalidInput))
+
+	err = binder.UnbindPattern("ws", "")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindInvalidInput))
 }
 
 func TestWorkspaceBinderValidateWorkspace(t *testing.T) {
@@ -391,11 +405,11 @@ func TestWorkspaceBinderConcurrentAccess(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			binder.Unbind("ws-ephemeral")
+			_ = binder.Unbind("ws-ephemeral")
 		}()
 		go func() {
 			defer wg.Done()
-			binder.UnbindPattern("ws", "node-gone")
+			_ = binder.UnbindPattern("ws", "node-gone")
 		}()
 	}
 	wg.Wait()

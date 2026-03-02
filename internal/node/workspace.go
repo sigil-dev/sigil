@@ -111,24 +111,28 @@ func (b *WorkspaceBinder) BindWithTools(workspaceID, nodePattern string, tools [
 }
 
 // Unbind removes all rules for a workspace.
-func (b *WorkspaceBinder) Unbind(workspaceID string) {
+func (b *WorkspaceBinder) Unbind(workspaceID string) error {
 	ws := strings.TrimSpace(workspaceID)
 	if ws == "" {
-		return
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "workspaceID must not be empty")
 	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	delete(b.rules, ws)
+	return nil
 }
 
 // UnbindPattern removes all rules matching a specific node pattern from a workspace.
-func (b *WorkspaceBinder) UnbindPattern(workspaceID, nodePattern string) {
+func (b *WorkspaceBinder) UnbindPattern(workspaceID, nodePattern string) error {
 	ws := strings.TrimSpace(workspaceID)
 	pattern := strings.TrimSpace(nodePattern)
-	if ws == "" || pattern == "" {
-		return
+	if ws == "" {
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "workspaceID must not be empty")
+	}
+	if pattern == "" {
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "nodePattern must not be empty")
 	}
 
 	b.mu.Lock()
@@ -146,6 +150,7 @@ func (b *WorkspaceBinder) UnbindPattern(workspaceID, nodePattern string) {
 	} else {
 		b.rules[ws] = filtered
 	}
+	return nil
 }
 
 // IsAllowed reports whether a node is permitted to access a workspace.
