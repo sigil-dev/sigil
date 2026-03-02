@@ -268,6 +268,16 @@ func TestWorkspaceBinderAllowedTools(t *testing.T) {
 			want: []string{"node:iphone-sean:camera", "node:iphone-sean:location", "node:iphone-sean:photos"},
 		},
 		{
+			name: "unrestricted Bind supersedes BindWithTools restrictions",
+			setup: func(b *node.WorkspaceBinder) {
+				require.NoError(t, b.Bind("ws", []string{"node-*"}))
+				require.NoError(t, b.BindWithTools("ws", "node-a", []string{"camera"}))
+			},
+			ws:   "ws",
+			node: "node-a",
+			want: []string{},
+		},
+		{
 			name: "empty workspace returns nil",
 			setup: func(b *node.WorkspaceBinder) {
 				require.NoError(t, b.BindWithTools("family", "iphone-*", []string{"camera"}))
@@ -343,10 +353,8 @@ func TestWorkspaceBinderNormalizesInputs(t *testing.T) {
 
 	assert.True(t, binder.IsAllowed("family", "iphone-sean"))
 	assert.False(t, binder.IsAllowed("family", "macbook-pro"))
-	assert.Equal(t, []string{
-		"node:iphone-sean:camera",
-		"node:iphone-sean:location",
-	}, binder.AllowedTools("family", "iphone-sean"))
+	// Unrestricted Bind supersedes BindWithTools restrictions.
+	assert.Equal(t, []string{}, binder.AllowedTools("family", "iphone-sean"))
 }
 
 func TestWorkspaceBinderCrossWorkspaceIsolation(t *testing.T) {

@@ -197,6 +197,10 @@ func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
 			continue
 		}
 		matched = true
+		if len(rule.tools) == 0 {
+			// Unrestricted Bind rule — all tools allowed, supersedes restrictions.
+			return []string{}
+		}
 		for _, tool := range rule.tools {
 			allowed[qualifiedTool(node, tool)] = struct{}{}
 		}
