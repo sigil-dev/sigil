@@ -157,16 +157,20 @@ func TestWorkspaceBinderBindWithTools(t *testing.T) {
 			errCode: sigilerr.CodeNodeBindInvalidInput,
 		},
 		{
-			name:    "empty tools allowed",
+			name:    "empty tools rejected",
 			ws:      "family",
 			pattern: "iphone-*",
 			tools:   []string{},
+			wantErr: true,
+			errCode: sigilerr.CodeNodeBindInvalidInput,
 		},
 		{
-			name:    "nil tools allowed",
+			name:    "nil tools rejected",
 			ws:      "family",
 			pattern: "iphone-*",
 			tools:   nil,
+			wantErr: true,
+			errCode: sigilerr.CodeNodeBindInvalidInput,
 		},
 	}
 
@@ -250,12 +254,13 @@ func TestWorkspaceBinderAllowedTools(t *testing.T) {
 			want: []string{},
 		},
 		{
-			name: "BindWithTools empty tools returns empty slice",
+			name: "BindWithTools before Bind: unrestricted still supersedes",
 			setup: func(b *node.WorkspaceBinder) {
-				require.NoError(t, b.BindWithTools("family", "iphone-*", nil))
+				require.NoError(t, b.BindWithTools("ws", "node-a", []string{"camera"}))
+				require.NoError(t, b.Bind("ws", []string{"node-*"}))
 			},
-			ws:   "family",
-			node: "iphone-sean",
+			ws:   "ws",
+			node: "node-a",
 			want: []string{},
 		},
 		{
@@ -325,6 +330,12 @@ func TestWorkspaceBinderUnbind(t *testing.T) {
 	err := binder.Unbind("")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindInvalidInput))
+
+	// Idempotent: Unbind on never-bound workspace is a no-op.
+	require.NoError(t, binder.Unbind("never-bound"))
+
+	// Idempotent: second Unbind after already removed is a no-op.
+	require.NoError(t, binder.Unbind("homelab"))
 }
 
 func TestWorkspaceBinderUnbindPattern(t *testing.T) {
@@ -347,6 +358,15 @@ func TestWorkspaceBinderUnbindPattern(t *testing.T) {
 	err = binder.UnbindPattern("ws", "")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindInvalidInput))
+
+	// Idempotent: UnbindPattern on never-bound workspace is a no-op.
+	require.NoError(t, binder.UnbindPattern("never-bound", "any-pattern"))
+
+	// Idempotent: UnbindPattern with non-matching pattern preserves existing rules.
+	binder2 := node.NewWorkspaceBinder()
+	require.NoError(t, binder2.Bind("ws", []string{"node-a"}))
+	require.NoError(t, binder2.UnbindPattern("ws", "does-not-exist"))
+	assert.True(t, binder2.IsAllowed("ws", "node-a"))
 }
 
 func TestWorkspaceBinderValidateWorkspace(t *testing.T) {
@@ -355,9 +375,23 @@ func TestWorkspaceBinderValidateWorkspace(t *testing.T) {
 
 	assert.NoError(t, binder.ValidateWorkspace("macbook-pro", "homelab"))
 
+	// Denied node returns correct code and structured fields.
 	err := binder.ValidateWorkspace("unknown-node", "homelab")
 	require.Error(t, err)
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeWorkspaceMembershipDenied))
+	fields := sigilerr.FieldsOf(err)
+	assert.Equal(t, "unknown-node", fields["node_id"])
+	assert.Equal(t, "homelab", fields["workspace_id"])
+
+	// Empty nodeID returns input error, not membership denied.
+	err = binder.ValidateWorkspace("", "homelab")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindInvalidInput))
+
+	// Empty workspaceID returns input error.
+	err = binder.ValidateWorkspace("macbook-pro", "")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindInvalidInput))
 }
 
 func TestWorkspaceBinderNormalizesInputs(t *testing.T) {
@@ -496,4 +530,16 @@ func TestWorkspaceBinderCheckLimits(t *testing.T) {
 		assert.True(t, binder.IsAllowed("ws", "node-0499"))
 		assert.False(t, binder.IsAllowed("ws", "node-overflow"))
 	})
+}
+
+func TestWorkspaceBinderBindWithToolsAccumulation(t *testing.T) {
+	binder := node.NewWorkspaceBinder()
+
+	// Duplicate BindWithTools calls accumulate (additive semantics).
+	require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera"}))
+	require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera", "location"}))
+
+	// AllowedTools merges and deduplicates across accumulated rules.
+	got := binder.AllowedTools("ws", "node-a")
+	assert.Equal(t, []string{"node:node-a:camera", "node:node-a:location"}, got)
 }

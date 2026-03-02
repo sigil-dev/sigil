@@ -96,6 +96,9 @@ func (b *WorkspaceBinder) BindWithTools(workspaceID, nodePattern string, tools [
 	}
 
 	normalizedTools := normalizeStrings(tools)
+	if len(normalizedTools) == 0 {
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "tools must not be empty; use Bind for unrestricted access")
+	}
 	for _, t := range normalizedTools {
 		if strings.ContainsRune(t, ':') {
 			return sigilerr.Errorf(sigilerr.CodeNodeBindInvalidInput, "tool name %q must not contain ':'", t)
@@ -145,7 +148,7 @@ func (b *WorkspaceBinder) UnbindPattern(workspaceID, nodePattern string) error {
 	defer b.mu.Unlock()
 
 	rules := b.rules[ws]
-	filtered := rules[:0]
+	filtered := make([]workspaceRule, 0, len(rules))
 	for _, r := range rules {
 		if r.pattern != pattern {
 			filtered = append(filtered, r)
@@ -182,9 +185,14 @@ func (b *WorkspaceBinder) IsAllowed(workspaceID, nodeID string) bool {
 // ValidateWorkspace checks whether a node is permitted in a workspace,
 // satisfying the WorkspaceValidator interface.
 func (b *WorkspaceBinder) ValidateWorkspace(nodeID, workspaceID string) error {
-	if !b.IsAllowed(workspaceID, nodeID) {
+	node := strings.TrimSpace(nodeID)
+	ws := strings.TrimSpace(workspaceID)
+	if node == "" || ws == "" {
+		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "nodeID and workspaceID must not be empty")
+	}
+	if !b.IsAllowed(ws, node) {
 		return sigilerr.New(sigilerr.CodeWorkspaceMembershipDenied, "node not allowed in workspace",
-			sigilerr.Field("node_id", nodeID), sigilerr.FieldWorkspaceID(workspaceID))
+			sigilerr.Field("node_id", node), sigilerr.FieldWorkspaceID(ws))
 	}
 	return nil
 }
@@ -223,10 +231,6 @@ func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
 
 	if !matched {
 		return nil
-	}
-
-	if len(allowed) == 0 {
-		return []string{}
 	}
 
 	tools := make([]string, 0, len(allowed))
