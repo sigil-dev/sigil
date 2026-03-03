@@ -268,7 +268,7 @@ func IsUnauthorized(err error) bool {
 
 func IsBudgetExceeded(err error) bool {
 	r := reason(CodeOf(err))
-	return r == "exceeded" || r == "budget_exceeded"
+	return r == "exceeded" || r == "budget_exceeded" || r == "limit_exceeded"
 }
 
 func IsTimeout(err error) bool {

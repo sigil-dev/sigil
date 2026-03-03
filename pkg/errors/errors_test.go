@@ -313,6 +313,7 @@ func TestClassificationAndStatusMapping(t *testing.T) {
 		{name: "capability denied", code: sigilerr.CodePluginCapabilityDenied, status: 403, check: sigilerr.IsUnauthorized},
 		{name: "budget exceeded (provider)", code: sigilerr.CodeProviderBudgetExceeded, status: 429, check: sigilerr.IsBudgetExceeded},
 		{name: "budget exceeded (tool)", code: sigilerr.CodeAgentToolBudgetExceeded, status: 429, check: sigilerr.IsBudgetExceeded},
+		{name: "bind limit exceeded (node)", code: sigilerr.CodeNodeBindLimitExceeded, status: 429, check: sigilerr.IsBudgetExceeded},
 		{name: "tool timeout", code: sigilerr.CodeAgentToolTimeout, status: 504, check: sigilerr.IsTimeout},
 		{name: "upstream failure", code: sigilerr.CodeProviderUpstreamFailure, status: 502, check: sigilerr.IsUpstreamFailure},
 		{name: "not implemented", code: sigilerr.CodeServerNotImplemented, status: 501, check: func(_ error) bool { return true }},

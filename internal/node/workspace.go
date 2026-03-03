@@ -108,6 +108,11 @@ func (b *WorkspaceBinder) BindWithTools(workspaceID, nodePattern string, tools [
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// Deduplicate: skip if an identical pattern+tools rule already exists.
+	if b.isDuplicateToolRule(ws, pattern, normalizedTools) {
+		return nil
+	}
+
 	if err := b.checkLimits(ws, 1); err != nil {
 		return err
 	}
@@ -290,6 +295,29 @@ func (b *WorkspaceBinder) deduplicatePatterns(ws string, patterns []string) []st
 		}
 	}
 	return out
+}
+
+// isDuplicateToolRule reports whether a BindWithTools rule with the given
+// pattern and identical tool set already exists. Must be called with b.mu held.
+func (b *WorkspaceBinder) isDuplicateToolRule(ws, pattern string, tools []string) bool {
+	for _, r := range b.rules[ws] {
+		if r.pattern == pattern && len(r.tools) > 0 && slicesEqual(r.tools, tools) {
+			return true
+		}
+	}
+	return false
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *WorkspaceBinder) checkLimits(ws string, count int) error {

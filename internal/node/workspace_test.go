@@ -491,6 +491,17 @@ func TestWorkspaceBinderCheckLimits(t *testing.T) {
 		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindLimitExceeded))
 	})
 
+	t.Run("BindWithTools workspace count limit exceeded", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		for i := 0; i < 1000; i++ {
+			require.NoError(t, binder.Bind(fmt.Sprintf("ws-%04d", i), []string{"node-a"}))
+		}
+
+		err := binder.BindWithTools("ws-overflow", "node-a", []string{"camera"})
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindLimitExceeded))
+	})
+
 	t.Run("duplicate patterns deduplicated against stored rules", func(t *testing.T) {
 		binder := node.NewWorkspaceBinder()
 		require.NoError(t, binder.Bind("ws", []string{"node-a", "node-b"}))
@@ -542,4 +553,36 @@ func TestWorkspaceBinderBindWithToolsAccumulation(t *testing.T) {
 	// AllowedTools merges and deduplicates across accumulated rules.
 	got := binder.AllowedTools("ws", "node-a")
 	assert.Equal(t, []string{"node:node-a:camera", "node:node-a:location"}, got)
+}
+
+func TestWorkspaceBinderBindWithToolsDeduplication(t *testing.T) {
+	t.Run("identical pattern+tools is no-op", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera"}))
+		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera"}))
+
+		got := binder.AllowedTools("ws", "node-a")
+		assert.Equal(t, []string{"node:node-a:camera"}, got)
+	})
+
+	t.Run("different tools still accumulates", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera"}))
+		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"location"}))
+
+		got := binder.AllowedTools("ws", "node-a")
+		assert.ElementsMatch(t, []string{"node:node-a:camera", "node:node-a:location"}, got)
+	})
+
+	t.Run("dedup prevents limit exhaustion", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		// Fill workspace near limit with unique patterns.
+		for i := 0; i < 499; i++ {
+			require.NoError(t, binder.Bind("ws", []string{fmt.Sprintf("node-%04d", i)}))
+		}
+		// Add one BindWithTools rule.
+		require.NoError(t, binder.BindWithTools("ws", "node-last", []string{"camera"}))
+		// Re-adding the same rule should succeed (dedup, no slot consumed).
+		require.NoError(t, binder.BindWithTools("ws", "node-last", []string{"camera"}))
+	})
 }
