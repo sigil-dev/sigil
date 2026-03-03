@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/goleak"
 )
 
 func TestValidateEventType(t *testing.T) {
@@ -58,6 +59,8 @@ func TestValidateEventType(t *testing.T) {
 }
 
 func TestDrainChannel_ClosedBuffered(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	ch := make(chan int, 3)
 	ch <- 1
 	ch <- 2
@@ -65,12 +68,11 @@ func TestDrainChannel_ClosedBuffered(t *testing.T) {
 	close(ch)
 
 	drainChannel(ch)
-
-	// Give the goroutine time to complete.
-	time.Sleep(10 * time.Millisecond)
 }
 
 func TestDrainChannel_ProducerAfterConsumerStops(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	ch := make(chan int, 1)
 
 	drainChannel(ch)
@@ -93,12 +95,11 @@ func TestDrainChannel_ProducerAfterConsumerStops(t *testing.T) {
 }
 
 func TestDrainChannelWithContext_ContextCancellation(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	ch := make(chan int) // never closed
 	ctx, cancel := context.WithCancel(context.Background())
 
 	drainChannelWithContext(ctx, ch)
 	cancel()
-
-	// Goroutine should exit via ctx.Done() without channel close.
-	time.Sleep(10 * time.Millisecond)
 }

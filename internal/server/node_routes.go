@@ -349,6 +349,8 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 			var flusher http.Flusher
 			if f, ok := bw.(http.Flusher); ok {
 				flusher = f
+			} else {
+				slog.Warn("status stream: ResponseWriter does not implement http.Flusher; events will not be flushed")
 			}
 
 			for {

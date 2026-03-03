@@ -300,9 +300,26 @@ func TestNodeRoutes_StatusSubscription(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
-	assert.Contains(t, w.Body.String(), "event: tray_status")
-	assert.Contains(t, w.Body.String(), `"agent_state":"paused"`)
-	assert.Contains(t, w.Body.String(), `"connected_nodes":2`)
+
+	// Validate SSE framing: each event must be "event: <type>\ndata: <json>\n\n".
+	body := w.Body.String()
+	events := strings.Split(strings.TrimRight(body, "\n"), "\n\n")
+	require.NotEmpty(t, events, "expected at least one SSE event")
+
+	for _, event := range events {
+		lines := strings.SplitN(event, "\n", 2)
+		require.Len(t, lines, 2, "SSE event must have event and data lines: %q", event)
+		assert.Equal(t, "event: tray_status", lines[0])
+		assert.True(t, strings.HasPrefix(lines[1], "data: "), "data line must start with 'data: ': %q", lines[1])
+
+		// Verify data is valid JSON.
+		jsonData := strings.TrimPrefix(lines[1], "data: ")
+		var parsed map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(jsonData), &parsed), "SSE data must be valid JSON")
+	}
+
+	assert.Contains(t, body, `"agent_state":"paused"`)
+	assert.Contains(t, body, `"connected_nodes":2`)
 }
 
 func TestNodeRoutes_PauseResumeTransitions(t *testing.T) {
