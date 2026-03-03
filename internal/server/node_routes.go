@@ -22,7 +22,7 @@ type listNodesOutput struct {
 }
 
 type nodeIDInput struct {
-	ID string `path:"id" maxLength:"253" pattern:"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"`
+	ID string `path:"id" minLength:"1" maxLength:"253" pattern:"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"`
 }
 
 type getNodeOutput struct {
@@ -237,10 +237,12 @@ func (s *Server) handleGetNode(ctx context.Context, input *nodeIDInput) (*getNod
 	return &getNodeOutput{Body: *node}, nil
 }
 
-// handleNodeAction is a shared helper for approve/revoke operations that
-// differ only in the service method called and the status returned.
-func (s *Server) handleNodeAction(
+// nodeAction is a standalone helper for approve/revoke operations that differ
+// only in the service method called and the status returned. Requiring a
+// NodeService parameter makes the dependency explicit at compile time.
+func nodeAction(
 	ctx context.Context,
+	nodes NodeService,
 	input *nodeIDInput,
 	action func(context.Context, string) error,
 	status NodeActionStatus,
@@ -262,7 +264,7 @@ func (s *Server) handleApproveNode(ctx context.Context, input *nodeIDInput) (*no
 	if err != nil {
 		return nil, err
 	}
-	return s.handleNodeAction(ctx, input, nodes.Approve, NodeActionApproved, "approving")
+	return nodeAction(ctx, nodes, input, nodes.Approve, NodeActionApproved, "approving")
 }
 
 func (s *Server) handleRevokeNode(ctx context.Context, input *nodeIDInput) (*nodeActionOutput, error) {
@@ -270,7 +272,7 @@ func (s *Server) handleRevokeNode(ctx context.Context, input *nodeIDInput) (*nod
 	if err != nil {
 		return nil, err
 	}
-	return s.handleNodeAction(ctx, input, nodes.Revoke, NodeActionRevoked, "revoking")
+	return nodeAction(ctx, nodes, input, nodes.Revoke, NodeActionRevoked, "revoking")
 }
 
 func (s *Server) handleDeleteNode(ctx context.Context, input *nodeIDInput) (*struct{}, error) {
