@@ -196,6 +196,7 @@ type AgentControlService interface {
 	Pause(ctx context.Context) (AgentState, error)
 	Resume(ctx context.Context) (AgentState, error)
 }
+
 // WorkspaceSummary is the REST representation of a workspace in list results.
 type WorkspaceSummary struct {
 	ID          string `json:"id" doc:"Workspace identifier"`

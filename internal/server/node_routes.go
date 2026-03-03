@@ -227,7 +227,7 @@ func (s *Server) handleGetNode(ctx context.Context, input *nodeIDInput) (*getNod
 
 	node, err := nodes.Get(ctx, input.ID)
 	if err != nil {
-		return nil, notFoundOr500(err,
+		return nil, notFoundOr500(ctx, err,
 			fmt.Sprintf("node %q not found", input.ID),
 			fmt.Sprintf("getting node %q", input.ID))
 	}
@@ -244,7 +244,7 @@ func (s *Server) handleNodeAction(
 	opDesc string,
 ) (*nodeActionOutput, error) {
 	if err := action(ctx, input.ID); err != nil {
-		return nil, notFoundOr500(err,
+		return nil, notFoundOr500(ctx, err,
 			fmt.Sprintf("node %q not found", input.ID),
 			fmt.Sprintf("%s node %q", opDesc, input.ID))
 	}
@@ -277,7 +277,7 @@ func (s *Server) handleDeleteNode(ctx context.Context, input *nodeIDInput) (*str
 	}
 
 	if err := nodes.Delete(ctx, input.ID); err != nil {
-		return nil, notFoundOr500(err,
+		return nil, notFoundOr500(ctx, err,
 			fmt.Sprintf("node %q not found", input.ID),
 			fmt.Sprintf("deleting node %q", input.ID))
 	}

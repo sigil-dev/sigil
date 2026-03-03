@@ -478,6 +478,61 @@ func TestNodeRoutes_AuthEnabled_Returns401(t *testing.T) {
 	}
 }
 
+func TestNodeRoutes_AuthEnabled_Returns403(t *testing.T) {
+	// When auth is enabled but user lacks admin:nodes/admin:agent/admin:status,
+	// all 8 new endpoints must return 403 Forbidden.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": mustNewAuthenticatedUser("user-1", "User", []string{"workspace:read"}),
+		},
+	}
+	services := server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+	).
+		WithNodeService(&mockNodeService{nodes: map[string]server.NodeDetail{}}).
+		WithAgentControlService(&mockAgentControlService{})
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		Services:       services,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
+
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/nodes"},
+		{http.MethodGet, "/api/v1/nodes/test-node"},
+		{http.MethodPost, "/api/v1/nodes/test-node/approve"},
+		{http.MethodPost, "/api/v1/nodes/test-node/revoke"},
+		{http.MethodDelete, "/api/v1/nodes/test-node"},
+		{http.MethodPost, "/api/v1/agent/pause"},
+		{http.MethodPost, "/api/v1/agent/resume"},
+		{http.MethodGet, "/api/v1/status/stream"},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			req := httptest.NewRequest(ep.method, ep.path, nil)
+			req.Header.Set("Authorization", "Bearer user-token")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusForbidden, w.Code)
+		})
+	}
+}
+
 func TestNodeRoutes_StatusStream_ContextCancellation(t *testing.T) {
 	// Use an unbuffered channel so the send blocks until the handler reads,
 	// eliminating the race between context cancellation and event consumption.
