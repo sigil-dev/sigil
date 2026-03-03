@@ -220,11 +220,13 @@ func TestWorkspaceBinderIsAllowed(t *testing.T) {
 
 func TestWorkspaceBinderAllowedTools(t *testing.T) {
 	tests := []struct {
-		name  string
-		setup func(*node.WorkspaceBinder)
-		ws    string
-		node  string
-		want  []string
+		name    string
+		setup   func(*node.WorkspaceBinder)
+		ws      string
+		node    string
+		want    []string
+		wantErr bool
+		errCode sigilerr.Code
 	}{
 		{
 			name: "tools from BindWithTools",
@@ -284,22 +286,24 @@ func TestWorkspaceBinderAllowedTools(t *testing.T) {
 			want: []string{},
 		},
 		{
-			name: "empty workspace returns nil",
+			name: "empty workspace returns error",
 			setup: func(b *node.WorkspaceBinder) {
 				require.NoError(t, b.BindWithTools("family", "iphone-*", []string{"camera"}))
 			},
-			ws:   "",
-			node: "iphone-sean",
-			want: nil,
+			ws:      "",
+			node:    "iphone-sean",
+			wantErr: true,
+			errCode: sigilerr.CodeNodeBindInvalidInput,
 		},
 		{
-			name: "empty nodeID returns nil",
+			name: "empty nodeID returns error",
 			setup: func(b *node.WorkspaceBinder) {
 				require.NoError(t, b.BindWithTools("family", "iphone-*", []string{"camera"}))
 			},
-			ws:   "family",
-			node: "",
-			want: nil,
+			ws:      "family",
+			node:    "",
+			wantErr: true,
+			errCode: sigilerr.CodeNodeBindInvalidInput,
 		},
 	}
 
@@ -308,7 +312,14 @@ func TestWorkspaceBinderAllowedTools(t *testing.T) {
 			binder := node.NewWorkspaceBinder()
 			tt.setup(binder)
 
-			got := binder.AllowedTools(tt.ws, tt.node)
+			got, err := binder.AllowedTools(tt.ws, tt.node)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.errCode))
+				assert.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -403,7 +414,9 @@ func TestWorkspaceBinderNormalizesInputs(t *testing.T) {
 	assert.True(t, binder.IsAllowed("family", "iphone-sean"))
 	assert.False(t, binder.IsAllowed("family", "macbook-pro"))
 	// Unrestricted Bind supersedes BindWithTools restrictions.
-	assert.Equal(t, []string{}, binder.AllowedTools("family", "iphone-sean"))
+	got, err := binder.AllowedTools("family", "iphone-sean")
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, got)
 }
 
 func TestWorkspaceBinderCrossWorkspaceIsolation(t *testing.T) {
@@ -415,8 +428,12 @@ func TestWorkspaceBinderCrossWorkspaceIsolation(t *testing.T) {
 		"node bound to homelab must not appear in family")
 	assert.False(t, binder.IsAllowed("homelab", "iphone-sean"),
 		"node bound to family must not appear in homelab")
-	assert.Nil(t, binder.AllowedTools("family", "macbook-pro"))
-	assert.Nil(t, binder.AllowedTools("homelab", "iphone-sean"))
+	got, err := binder.AllowedTools("family", "macbook-pro")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	got, err = binder.AllowedTools("homelab", "iphone-sean")
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestWorkspaceBinderConcurrentAccess(t *testing.T) {
@@ -435,7 +452,7 @@ func TestWorkspaceBinderConcurrentAccess(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			binder.AllowedTools("ws", "node-1")
+			_, _ = binder.AllowedTools("ws", "node-1")
 		}()
 		go func() {
 			defer wg.Done()
@@ -551,7 +568,8 @@ func TestWorkspaceBinderBindWithToolsAccumulation(t *testing.T) {
 	require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera", "location"}))
 
 	// AllowedTools merges and deduplicates across accumulated rules.
-	got := binder.AllowedTools("ws", "node-a")
+	got, err := binder.AllowedTools("ws", "node-a")
+	require.NoError(t, err)
 	assert.Equal(t, []string{"node:node-a:camera", "node:node-a:location"}, got)
 }
 
@@ -561,7 +579,8 @@ func TestWorkspaceBinderBindWithToolsDeduplication(t *testing.T) {
 		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera"}))
 		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera"}))
 
-		got := binder.AllowedTools("ws", "node-a")
+		got, err := binder.AllowedTools("ws", "node-a")
+		require.NoError(t, err)
 		assert.Equal(t, []string{"node:node-a:camera"}, got)
 	})
 
@@ -570,7 +589,8 @@ func TestWorkspaceBinderBindWithToolsDeduplication(t *testing.T) {
 		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera"}))
 		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"location"}))
 
-		got := binder.AllowedTools("ws", "node-a")
+		got, err := binder.AllowedTools("ws", "node-a")
+		require.NoError(t, err)
 		assert.ElementsMatch(t, []string{"node:node-a:camera", "node:node-a:location"}, got)
 	})
 

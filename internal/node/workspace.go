@@ -203,16 +203,17 @@ func (b *WorkspaceBinder) ValidateWorkspace(nodeID, workspaceID string) error {
 }
 
 // AllowedTools returns the tools a node is permitted to use in a workspace.
-// Returns nil if the node does not match any rule for the workspace.
+// Returns (nil, nil) if the node does not match any rule for the workspace.
 // Returns an empty slice if the node matches but has no tool restrictions
 // (added via Bind without tool allowlists, meaning all tools are allowed).
+// Returns an error if workspaceID or nodeID is empty.
 // Output uses materialized node IDs in the form "node:<nodeID>:<tool>",
 // never glob patterns.
-func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
+func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) ([]string, error) {
 	ws := strings.TrimSpace(workspaceID)
 	node := strings.TrimSpace(nodeID)
 	if ws == "" || node == "" {
-		return nil
+		return nil, sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "workspaceID and nodeID must not be empty")
 	}
 
 	b.mu.RLock()
@@ -227,7 +228,7 @@ func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
 		matched = true
 		if len(rule.tools) == 0 {
 			// Unrestricted Bind rule — all tools allowed, supersedes restrictions.
-			return []string{}
+			return []string{}, nil
 		}
 		for _, tool := range rule.tools {
 			allowed[qualifiedTool(node, tool)] = struct{}{}
@@ -235,7 +236,7 @@ func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
 	}
 
 	if !matched {
-		return nil
+		return nil, nil
 	}
 
 	tools := make([]string, 0, len(allowed))
@@ -243,7 +244,7 @@ func (b *WorkspaceBinder) AllowedTools(workspaceID, nodeID string) []string {
 		tools = append(tools, tool)
 	}
 	sort.Strings(tools)
-	return tools
+	return tools, nil
 }
 
 // qualifiedTool returns a capability string in the form "node:<nodeID>:<tool>".
