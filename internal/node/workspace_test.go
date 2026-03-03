@@ -559,6 +559,21 @@ func TestWorkspaceBinderCheckLimits(t *testing.T) {
 		require.NoError(t, binder.Bind("ws", []string{"node-a"}))
 	})
 
+	t.Run("BindWithTools per-workspace limit exhausted by unique tool sets", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		// Each BindWithTools call with a unique tool set consumes one slot.
+		for i := 0; i < 500; i++ {
+			require.NoError(t, binder.BindWithTools("ws", "node-a", []string{fmt.Sprintf("tool-%04d", i)}))
+		}
+		// 501st call with a new tool set exceeds the limit.
+		err := binder.BindWithTools("ws", "node-a", []string{"tool-overflow"})
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeNodeBindLimitExceeded))
+
+		// Duplicate call (same pattern+tools) should still succeed via dedup.
+		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"tool-0000"}))
+	})
+
 	t.Run("existing workspace unaffected after limit error", func(t *testing.T) {
 		binder := node.NewWorkspaceBinder()
 		patterns := make([]string, 500)
