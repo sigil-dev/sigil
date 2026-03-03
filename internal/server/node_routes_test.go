@@ -382,8 +382,13 @@ func TestNodeRoutes_NilService_Returns503(t *testing.T) {
 		path   string
 	}{
 		{http.MethodGet, "/api/v1/nodes"},
+		{http.MethodGet, "/api/v1/nodes/test-node"},
+		{http.MethodPost, "/api/v1/nodes/test-node/approve"},
+		{http.MethodPost, "/api/v1/nodes/test-node/revoke"},
+		{http.MethodDelete, "/api/v1/nodes/test-node"},
 		{http.MethodGet, "/api/v1/status/stream"},
 		{http.MethodPost, "/api/v1/agent/pause"},
+		{http.MethodPost, "/api/v1/agent/resume"},
 	}
 
 	for _, tt := range tests {

@@ -222,7 +222,7 @@ func notFoundOr500(ctx context.Context, err error, notFoundMsg, contextStr strin
 	if IsNotFound(err) {
 		return huma.Error404NotFound(notFoundMsg)
 	}
-	slog.Error("internal error", "context", contextStr, "error", err, "user_id", userIDFromContext(ctx))
+	slog.Error("internal error", "context", contextStr, "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 	return huma.Error500InternalServerError("internal server error")
 }
 

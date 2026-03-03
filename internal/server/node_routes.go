@@ -231,6 +231,9 @@ func (s *Server) handleGetNode(ctx context.Context, input *nodeIDInput) (*getNod
 			fmt.Sprintf("node %q not found", input.ID),
 			fmt.Sprintf("getting node %q", input.ID))
 	}
+	if node.Tools == nil {
+		node.Tools = []string{}
+	}
 	return &getNodeOutput{Body: *node}, nil
 }
 
