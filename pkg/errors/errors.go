@@ -116,6 +116,9 @@ const (
 	CodeSecretListFailure    Code = "secret.list.failure"
 	CodeSecretInvalidInput   Code = "secret.input.invalid"
 	CodeSecretResolveFailure Code = "secret.resolve.failure"
+
+	CodeNodeBindInvalidInput  Code = "node.bind.invalid_input"
+	CodeNodeBindLimitExceeded Code = "node.bind.limit_exceeded"
 )
 
 // Attr is a structured key/value context attached to an error.
@@ -268,6 +271,10 @@ func IsBudgetExceeded(err error) bool {
 	return r == "exceeded" || r == "budget_exceeded"
 }
 
+func IsLimitExceeded(err error) bool {
+	return reason(CodeOf(err)) == "limit_exceeded"
+}
+
 func IsTimeout(err error) bool {
 	return reason(CodeOf(err)) == "timeout"
 }
@@ -294,6 +301,9 @@ func HTTPStatus(err error) int {
 		return http.StatusUnauthorized
 	case HasCode(err, CodeServerRateLimited):
 		return http.StatusTooManyRequests
+	case IsLimitExceeded(err):
+		// Static configuration limits (e.g., node bind limit) are conflicts, not rate limits.
+		return http.StatusConflict
 	case IsBudgetExceeded(err):
 		return http.StatusTooManyRequests
 	case IsTimeout(err):

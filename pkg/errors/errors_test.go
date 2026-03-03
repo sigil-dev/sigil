@@ -313,6 +313,7 @@ func TestClassificationAndStatusMapping(t *testing.T) {
 		{name: "capability denied", code: sigilerr.CodePluginCapabilityDenied, status: 403, check: sigilerr.IsUnauthorized},
 		{name: "budget exceeded (provider)", code: sigilerr.CodeProviderBudgetExceeded, status: 429, check: sigilerr.IsBudgetExceeded},
 		{name: "budget exceeded (tool)", code: sigilerr.CodeAgentToolBudgetExceeded, status: 429, check: sigilerr.IsBudgetExceeded},
+		{name: "bind limit exceeded (node)", code: sigilerr.CodeNodeBindLimitExceeded, status: 409, check: sigilerr.IsLimitExceeded},
 		{name: "tool timeout", code: sigilerr.CodeAgentToolTimeout, status: 504, check: sigilerr.IsTimeout},
 		{name: "upstream failure", code: sigilerr.CodeProviderUpstreamFailure, status: 502, check: sigilerr.IsUpstreamFailure},
 		{name: "not implemented", code: sigilerr.CodeServerNotImplemented, status: 501, check: func(_ error) bool { return true }},
@@ -335,6 +336,7 @@ func TestClassificationNegativeCases(t *testing.T) {
 	assert.False(t, sigilerr.IsInvalidInput(err))
 	assert.False(t, sigilerr.IsUnauthorized(err))
 	assert.False(t, sigilerr.IsBudgetExceeded(err))
+	assert.False(t, sigilerr.IsLimitExceeded(err))
 	assert.False(t, sigilerr.IsTimeout(err))
 	assert.False(t, sigilerr.IsUpstreamFailure(err))
 }
@@ -345,6 +347,7 @@ func TestClassificationOnNilError(t *testing.T) {
 	assert.False(t, sigilerr.IsInvalidInput(nil))
 	assert.False(t, sigilerr.IsUnauthorized(nil))
 	assert.False(t, sigilerr.IsBudgetExceeded(nil))
+	assert.False(t, sigilerr.IsLimitExceeded(nil))
 	assert.False(t, sigilerr.IsTimeout(nil))
 	assert.False(t, sigilerr.IsUpstreamFailure(nil))
 }
@@ -356,8 +359,30 @@ func TestClassificationOnPlainError(t *testing.T) {
 	assert.False(t, sigilerr.IsInvalidInput(err))
 	assert.False(t, sigilerr.IsUnauthorized(err))
 	assert.False(t, sigilerr.IsBudgetExceeded(err))
+	assert.False(t, sigilerr.IsLimitExceeded(err))
 	assert.False(t, sigilerr.IsTimeout(err))
 	assert.False(t, sigilerr.IsUpstreamFailure(err))
+}
+
+func TestIsBudgetExceededDoesNotMatchLimitExceeded(t *testing.T) {
+	err := sigilerr.New(sigilerr.CodeNodeBindLimitExceeded, "too many bindings")
+	assert.False(t, sigilerr.IsBudgetExceeded(err))
+	assert.True(t, sigilerr.IsLimitExceeded(err))
+}
+
+func TestIsLimitExceededSuffixMatchingIsIntentional(t *testing.T) {
+	// IsLimitExceeded uses suffix-matching via reason() — any code whose last
+	// dot-separated segment is "limit_exceeded" will match. This test documents
+	// that the behavior is intentional (consistent with all other Is* predicates)
+	// and guards against accidental mis-classification.
+	err := sigilerr.New(sigilerr.CodeNodeBindLimitExceeded, "too many bindings")
+	assert.True(t, sigilerr.IsLimitExceeded(err))
+
+	// A hypothetical second code with the same suffix also matches.
+	// If this becomes undesirable, switch to explicit enumeration like IsScannerCode.
+	hypothetical := sigilerr.New(sigilerr.Code("store.connection.limit_exceeded"), "conn pool full")
+	assert.True(t, sigilerr.IsLimitExceeded(hypothetical),
+		"suffix-matching is intentional: any code ending in limit_exceeded matches IsLimitExceeded")
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +592,8 @@ func TestHTTPStatusFromCode(t *testing.T) {
 		{name: "workspace.membership.denied → 403", code: sigilerr.CodeWorkspaceMembershipDenied, want: http.StatusForbidden},
 		// Conflict codes → 409.
 		{name: "store.session.update.conflict → 409", code: sigilerr.CodeStoreSessionUpdateConflict, want: http.StatusConflict},
+		// Limit exceeded (config/admin limits) → 409.
+		{name: "node.bind.limit_exceeded → 409", code: sigilerr.CodeNodeBindLimitExceeded, want: http.StatusConflict},
 		// Not implemented → 501.
 		{name: "server.not_implemented → 501", code: sigilerr.CodeServerNotImplemented, want: http.StatusNotImplemented},
 		// Unknown/empty → 502 (default fallback).
