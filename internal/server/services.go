@@ -136,6 +136,7 @@ func (s *Services) WithAgentControlService(agent AgentControlService) *Services 
 	s.agent = agent
 	return s
 }
+
 // WorkspaceService provides workspace operations for REST handlers.
 type WorkspaceService interface {
 	List(ctx context.Context) ([]WorkspaceSummary, error)
@@ -178,11 +179,15 @@ type NodeService interface {
 	List(ctx context.Context) ([]NodeSummary, error)
 	Get(ctx context.Context, id string) (*NodeDetail, error)
 	Approve(ctx context.Context, id string) error
+	Revoke(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 }
 
 // GatewayStatusService provides status streaming updates for tray/status clients.
 type GatewayStatusService interface {
+	// Subscribe returns a read-only channel of status updates.
+	// The service owns the channel and MUST close it when the context is
+	// cancelled or the service shuts down. The caller MUST NOT close the channel.
 	Subscribe(ctx context.Context) (<-chan GatewayStatus, error)
 }
 
@@ -190,6 +195,7 @@ type GatewayStatusService interface {
 type AgentControlService interface {
 	Pause(ctx context.Context) (AgentState, error)
 	Resume(ctx context.Context) (AgentState, error)
+	Paused() bool
 }
 // WorkspaceSummary is the REST representation of a workspace in list results.
 type WorkspaceSummary struct {
@@ -256,6 +262,7 @@ type ProviderHealthDetail struct {
 // NodeSummary is the REST representation of a node in list results.
 type NodeSummary struct {
 	ID       string `json:"id" doc:"Node identifier"`
+	Platform string `json:"platform" doc:"Node platform (e.g. darwin, linux, windows)"`
 	Online   bool   `json:"online" doc:"Whether the node is currently connected"`
 	Approved bool   `json:"approved" doc:"Whether the node has been approved for use"`
 }
@@ -263,10 +270,19 @@ type NodeSummary struct {
 // NodeDetail is the full REST representation of a node.
 type NodeDetail struct {
 	ID       string   `json:"id" doc:"Node identifier"`
+	Platform string   `json:"platform" doc:"Node platform (e.g. darwin, linux, windows)"`
 	Online   bool     `json:"online" doc:"Whether the node is currently connected"`
 	Approved bool     `json:"approved" doc:"Whether the node has been approved for use"`
 	Tools    []string `json:"tools" doc:"Registered tool names exposed by the node"`
 }
+
+// NodeActionStatus is the status returned by node action endpoints.
+type NodeActionStatus string
+
+const (
+	NodeActionApproved NodeActionStatus = "approved"
+	NodeActionRevoked  NodeActionStatus = "revoked"
+)
 
 // AgentState is the paused/running state of the agent loop.
 type AgentState string
@@ -276,13 +292,23 @@ const (
 	AgentStatePaused  AgentState = "paused"
 )
 
+// GatewayStatusType represents the overall gateway status.
+type GatewayStatusType string
+
+const (
+	GatewayStatusRunning  GatewayStatusType = "running"
+	GatewayStatusDegraded GatewayStatusType = "degraded"
+	GatewayStatusStopped  GatewayStatusType = "stopped"
+)
+
 // GatewayStatus is the tray-friendly status payload streamed over SSE.
 type GatewayStatus struct {
-	Status         string     `json:"status" doc:"Gateway status summary"`
-	AgentState     AgentState `json:"agent_state" doc:"Current agent state"`
-	ConnectedNodes int        `json:"connected_nodes" doc:"Number of connected nodes"`
-	ActiveChannels int        `json:"active_channels" doc:"Number of active channels"`
+	Status         GatewayStatusType `json:"status" doc:"Gateway status summary"`
+	AgentState     AgentState        `json:"agent_state" doc:"Current agent state"`
+	ConnectedNodes int               `json:"connected_nodes" doc:"Number of connected nodes"`
+	ActiveChannels int               `json:"active_channels" doc:"Number of active channels"`
 }
+
 // NewServicesForTest creates a Services instance for testing.
 // It delegates to NewServices to enforce the same validation invariants as production code.
 // This is exported for use in server_test package where unexported fields are inaccessible.

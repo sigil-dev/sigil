@@ -22,7 +22,7 @@ type listNodesOutput struct {
 }
 
 type nodeIDInput struct {
-	ID string `path:"id"`
+	ID string `path:"id" maxLength:"253" pattern:"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"`
 }
 
 type getNodeOutput struct {
@@ -31,8 +31,8 @@ type getNodeOutput struct {
 
 type nodeActionOutput struct {
 	Body struct {
-		Status string `json:"status"`
-		NodeID string `json:"node_id"`
+		Status NodeActionStatus `json:"status"`
+		NodeID string           `json:"node_id"`
 	}
 }
 
@@ -71,12 +71,22 @@ func (s *Server) registerNodeRoutes() {
 	}, s.handleApproveNode)
 
 	huma.Register(s.api, huma.Operation{
-		OperationID: "delete-node",
-		Method:      http.MethodDelete,
-		Path:        "/api/v1/nodes/{id}",
-		Summary:     "Delete node registration",
+		OperationID: "revoke-node",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/nodes/{id}/revoke",
+		Summary:     "Revoke node access",
 		Tags:        []string{"nodes"},
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+	}, s.handleRevokeNode)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "delete-node",
+		Method:        http.MethodDelete,
+		Path:          "/api/v1/nodes/{id}",
+		Summary:       "Delete node registration",
+		Tags:          []string{"nodes"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable, http.StatusTooManyRequests},
 	}, s.handleDeleteNode)
 }
 
@@ -101,14 +111,52 @@ func (s *Server) registerAgentControlRoutes() {
 }
 
 func (s *Server) registerStatusStreamRoute() {
-	huma.Register(s.api, huma.Operation{
+	op := huma.Operation{
 		OperationID: "gateway-status-stream",
 		Method:      http.MethodGet,
 		Path:        "/api/v1/status/stream",
 		Summary:     "Stream gateway status updates via SSE",
 		Tags:        []string{"system"},
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable, http.StatusTooManyRequests},
-	}, s.handleStatusStream)
+	}
+	buildStatusSSESchema(&op)
+	huma.Register(s.api, op, s.handleStatusStream)
+}
+
+// buildStatusSSESchema adds SSE response schema for the status stream endpoint.
+func buildStatusSSESchema(op *huma.Operation) {
+	if op.Responses == nil {
+		op.Responses = map[string]*huma.Response{}
+	}
+	if op.Responses["200"] == nil {
+		op.Responses["200"] = &huma.Response{}
+	}
+	if op.Responses["200"].Content == nil {
+		op.Responses["200"].Content = map[string]*huma.MediaType{}
+	}
+
+	op.Responses["200"].Content["text/event-stream"] = &huma.MediaType{
+		Schema: &huma.Schema{
+			Title:       "Server Sent Events",
+			Description: "Gateway status updates streamed as SSE with event type 'tray_status'.",
+			Type:        huma.TypeArray,
+			Items: &huma.Schema{
+				Type: huma.TypeObject,
+				Properties: map[string]*huma.Schema{
+					"event": {
+						Type:        huma.TypeString,
+						Description: "The event name (always 'tray_status').",
+						Extensions:  map[string]interface{}{"const": trayStatusSSEEvent},
+					},
+					"data": {
+						Type:        huma.TypeObject,
+						Description: "GatewayStatus snapshot.",
+					},
+				},
+				Required: []string{"event", "data"},
+			},
+		},
+	}
 }
 
 func (s *Server) requireNodeService(ctx context.Context) (NodeService, error) {
@@ -186,12 +234,30 @@ func (s *Server) handleApproveNode(ctx context.Context, input *nodeIDInput) (*no
 	}
 
 	out := &nodeActionOutput{}
-	out.Body.Status = "approved"
+	out.Body.Status = NodeActionApproved
 	out.Body.NodeID = input.ID
 	return out, nil
 }
 
-func (s *Server) handleDeleteNode(ctx context.Context, input *nodeIDInput) (*nodeActionOutput, error) {
+func (s *Server) handleRevokeNode(ctx context.Context, input *nodeIDInput) (*nodeActionOutput, error) {
+	nodes, err := s.requireNodeService(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := nodes.Revoke(ctx, input.ID); err != nil {
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("node %q not found", input.ID),
+			fmt.Sprintf("revoking node %q", input.ID))
+	}
+
+	out := &nodeActionOutput{}
+	out.Body.Status = NodeActionRevoked
+	out.Body.NodeID = input.ID
+	return out, nil
+}
+
+func (s *Server) handleDeleteNode(ctx context.Context, input *nodeIDInput) (*struct{}, error) {
 	nodes, err := s.requireNodeService(ctx)
 	if err != nil {
 		return nil, err
@@ -203,10 +269,7 @@ func (s *Server) handleDeleteNode(ctx context.Context, input *nodeIDInput) (*nod
 			fmt.Sprintf("deleting node %q", input.ID))
 	}
 
-	out := &nodeActionOutput{}
-	out.Body.Status = "deleted"
-	out.Body.NodeID = input.ID
-	return out, nil
+	return nil, nil
 }
 
 func (s *Server) handlePauseAgent(ctx context.Context, _ *struct{}) (*agentControlOutput, error) {
@@ -249,17 +312,18 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 		return nil, err
 	}
 
-	updates, err := statusSvc.Subscribe(ctx)
-	if err != nil {
-		slog.Error("internal error", "context", "subscribing gateway status", "error", err)
-		return nil, huma.Error500InternalServerError("internal server error")
-	}
-
 	return &huma.StreamResponse{
 		Body: func(ctx huma.Context) {
 			ctx.SetHeader("Content-Type", "text/event-stream")
-			ctx.SetHeader("Cache-Control", "no-cache")
+			ctx.SetHeader("Cache-Control", "no-store")
 			ctx.SetHeader("Connection", "keep-alive")
+
+			updates, err := statusSvc.Subscribe(ctx.Context())
+			if err != nil {
+				slog.Error("internal error", "context", "subscribing gateway status", "error", err)
+				return
+			}
+			defer drainChannel(updates)
 
 			bw := ctx.BodyWriter()
 			encoder := json.NewEncoder(bw)
@@ -269,26 +333,31 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 				flusher = f
 			}
 
-			for update := range updates {
-				if _, err := fmt.Fprintf(bw, "event: %s\n", trayStatusSSEEvent); err != nil {
-					slog.Warn("status stream: write event failed", "error", err)
+			for {
+				select {
+				case <-ctx.Context().Done():
 					return
-				}
-				if _, err := fmt.Fprint(bw, "data: "); err != nil {
-					slog.Warn("status stream: write data prefix failed", "error", err)
-					return
-				}
-				if err := encoder.Encode(update); err != nil {
-					slog.Warn("status stream: encode update failed", "error", err)
-					return
-				}
-				if _, err := fmt.Fprint(bw, "\n"); err != nil {
-					slog.Warn("status stream: write event separator failed", "error", err)
-					return
-				}
+				case update, ok := <-updates:
+					if !ok {
+						return
+					}
 
-				if flusher != nil {
-					flusher.Flush()
+					if _, err := fmt.Fprintf(bw, "event: %s\ndata: ", trayStatusSSEEvent); err != nil {
+						slog.Warn("status stream: write failed", "error", err)
+						return
+					}
+					if err := encoder.Encode(update); err != nil {
+						slog.Warn("status stream: encode failed", "error", err)
+						return
+					}
+					if _, err := fmt.Fprint(bw, "\n"); err != nil {
+						slog.Warn("status stream: write separator failed", "error", err)
+						return
+					}
+
+					if flusher != nil {
+						flusher.Flush()
+					}
 				}
 			}
 		},

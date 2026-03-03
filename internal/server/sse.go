@@ -332,14 +332,19 @@ func isValidEventType(eventType SSEEventType) bool {
 	return !strings.ContainsAny(string(eventType), "\r\n")
 }
 
-// drainSSEChannel consumes remaining events from ch in a background goroutine
-// so that the producer (HandleStream) does not block on a full buffer after
-// the consumer has stopped reading. The goroutine exits when ch is closed.
-func drainSSEChannel(ch <-chan SSEEvent) {
+// drainChannel consumes remaining values from ch in a background goroutine
+// so the producer does not block on a full buffer after the consumer stops
+// reading. The goroutine exits when ch is closed.
+func drainChannel[T any](ch <-chan T) {
 	go func() {
 		for range ch {
 		}
 	}()
+}
+
+// drainSSEChannel is a convenience alias for drainChannel[SSEEvent].
+func drainSSEChannel(ch <-chan SSEEvent) {
+	drainChannel(ch)
 }
 
 // writeSSEField writes a formatted SSE field and drains the channel on error.

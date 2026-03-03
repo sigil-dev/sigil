@@ -60,6 +60,8 @@ func (s *stubNodeService) Get(context.Context, string) (*NodeDetail, error) { re
 
 func (s *stubNodeService) Approve(context.Context, string) error { return nil }
 
+func (s *stubNodeService) Revoke(context.Context, string) error { return nil }
+
 func (s *stubNodeService) Delete(context.Context, string) error { return nil }
 
 type stubGatewayStatusService struct{}
@@ -70,14 +72,22 @@ func (s *stubGatewayStatusService) Subscribe(context.Context) (<-chan GatewaySta
 	return ch, nil
 }
 
-type stubAgentControlService struct{}
+type stubAgentControlService struct {
+	paused bool
+}
 
 func (s *stubAgentControlService) Pause(context.Context) (AgentState, error) {
+	s.paused = true
 	return AgentStatePaused, nil
 }
 
 func (s *stubAgentControlService) Resume(context.Context) (AgentState, error) {
+	s.paused = false
 	return AgentStateRunning, nil
+}
+
+func (s *stubAgentControlService) Paused() bool {
+	return s.paused
 }
 func TestNewServices(t *testing.T) {
 	ws := &stubWorkspaceService{}
