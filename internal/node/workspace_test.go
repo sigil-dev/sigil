@@ -218,6 +218,16 @@ func TestWorkspaceBinderIsAllowed(t *testing.T) {
 	}
 }
 
+func TestWorkspaceBinderIsAllowedWithToolsOnly(t *testing.T) {
+	binder := node.NewWorkspaceBinder()
+	require.NoError(t, binder.BindWithTools("family", "iphone-*", []string{"camera"}))
+
+	assert.True(t, binder.IsAllowed("family", "iphone-sean"),
+		"IsAllowed must return true for nodes granted access exclusively via BindWithTools")
+	assert.False(t, binder.IsAllowed("family", "macbook-pro"))
+	assert.False(t, binder.IsAllowed("office", "iphone-sean"))
+}
+
 func TestWorkspaceBinderAllowedTools(t *testing.T) {
 	tests := []struct {
 		name    string

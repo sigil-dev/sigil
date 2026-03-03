@@ -370,6 +370,21 @@ func TestIsBudgetExceededDoesNotMatchLimitExceeded(t *testing.T) {
 	assert.True(t, sigilerr.IsLimitExceeded(err))
 }
 
+func TestIsLimitExceededSuffixMatchingIsIntentional(t *testing.T) {
+	// IsLimitExceeded uses suffix-matching via reason() — any code whose last
+	// dot-separated segment is "limit_exceeded" will match. This test documents
+	// that the behavior is intentional (consistent with all other Is* predicates)
+	// and guards against accidental mis-classification.
+	err := sigilerr.New(sigilerr.CodeNodeBindLimitExceeded, "too many bindings")
+	assert.True(t, sigilerr.IsLimitExceeded(err))
+
+	// A hypothetical second code with the same suffix also matches.
+	// If this becomes undesirable, switch to explicit enumeration like IsScannerCode.
+	hypothetical := sigilerr.New(sigilerr.Code("store.connection.limit_exceeded"), "conn pool full")
+	assert.True(t, sigilerr.IsLimitExceeded(hypothetical),
+		"suffix-matching is intentional: any code ending in limit_exceeded matches IsLimitExceeded")
+}
+
 // ---------------------------------------------------------------------------
 // HTTPStatus edge cases
 // ---------------------------------------------------------------------------

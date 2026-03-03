@@ -329,7 +329,8 @@ func (b *WorkspaceBinder) checkLimits(ws string, count int) error {
 	}
 	if len(b.rules[ws])+count > maxRulesPerWorkspace {
 		return sigilerr.Errorf(sigilerr.CodeNodeBindLimitExceeded,
-			"rule limit exceeded for workspace %q (%d)", ws, maxRulesPerWorkspace)
+			"rule limit exceeded for workspace %q: has %d rules, limit is %d",
+			ws, len(b.rules[ws]), maxRulesPerWorkspace)
 	}
 	return nil
 }
