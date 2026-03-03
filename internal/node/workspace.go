@@ -325,7 +325,7 @@ func slicesEqual(a, b []string) bool {
 func (b *WorkspaceBinder) checkLimits(ws string, count int) error {
 	if _, exists := b.rules[ws]; !exists && len(b.rules) >= maxWorkspaces {
 		return sigilerr.Errorf(sigilerr.CodeNodeBindLimitExceeded,
-			"workspace limit exceeded (%d)", maxWorkspaces)
+			"workspace limit exceeded (%d): cannot add workspace %q", maxWorkspaces, ws)
 	}
 	if len(b.rules[ws])+count > maxRulesPerWorkspace {
 		return sigilerr.Errorf(sigilerr.CodeNodeBindLimitExceeded,
