@@ -378,6 +378,24 @@ func TestWorkspaceBinderUnbindPattern(t *testing.T) {
 	require.NoError(t, binder2.Bind("ws", []string{"node-a"}))
 	require.NoError(t, binder2.UnbindPattern("ws", "does-not-exist"))
 	assert.True(t, binder2.IsAllowed("ws", "node-a"))
+
+	// Cross-type: UnbindPattern removes BindWithTools rules.
+	binder3 := node.NewWorkspaceBinder()
+	require.NoError(t, binder3.BindWithTools("ws", "node-a", []string{"camera"}))
+	require.NoError(t, binder3.UnbindPattern("ws", "node-a"))
+	got, err := binder3.AllowedTools("ws", "node-a")
+	require.NoError(t, err)
+	assert.Nil(t, got, "AllowedTools should return nil after UnbindPattern removes BindWithTools rule")
+
+	// Cross-type: mixed Bind+BindWithTools, UnbindPattern removes both.
+	binder4 := node.NewWorkspaceBinder()
+	require.NoError(t, binder4.Bind("ws", []string{"node-a"}))
+	require.NoError(t, binder4.BindWithTools("ws", "node-a", []string{"camera"}))
+	require.NoError(t, binder4.UnbindPattern("ws", "node-a"))
+	assert.False(t, binder4.IsAllowed("ws", "node-a"))
+	got, err = binder4.AllowedTools("ws", "node-a")
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestWorkspaceBinderValidateWorkspace(t *testing.T) {
