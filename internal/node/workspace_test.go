@@ -627,6 +627,16 @@ func TestWorkspaceBinderBindWithToolsDeduplication(t *testing.T) {
 		assert.ElementsMatch(t, []string{"node:node-a:camera", "node:node-a:location"}, got)
 	})
 
+	t.Run("same tools different order is no-op", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"camera", "location"}))
+		require.NoError(t, binder.BindWithTools("ws", "node-a", []string{"location", "camera"}))
+
+		got, err := binder.AllowedTools("ws", "node-a")
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"node:node-a:camera", "node:node-a:location"}, got)
+	})
+
 	t.Run("dedup prevents limit exhaustion", func(t *testing.T) {
 		binder := node.NewWorkspaceBinder()
 		// Fill workspace near limit with unique patterns.

@@ -96,6 +96,7 @@ func (b *WorkspaceBinder) BindWithTools(workspaceID, nodePattern string, tools [
 	}
 
 	normalizedTools := normalizeStrings(tools)
+	sort.Strings(normalizedTools)
 	if len(normalizedTools) == 0 {
 		return sigilerr.New(sigilerr.CodeNodeBindInvalidInput, "tools must not be empty; use Bind for unrestricted access")
 	}

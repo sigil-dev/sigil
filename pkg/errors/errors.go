@@ -268,7 +268,11 @@ func IsUnauthorized(err error) bool {
 
 func IsBudgetExceeded(err error) bool {
 	r := reason(CodeOf(err))
-	return r == "exceeded" || r == "budget_exceeded" || r == "limit_exceeded"
+	return r == "exceeded" || r == "budget_exceeded"
+}
+
+func IsLimitExceeded(err error) bool {
+	return reason(CodeOf(err)) == "limit_exceeded"
 }
 
 func IsTimeout(err error) bool {
@@ -297,6 +301,9 @@ func HTTPStatus(err error) int {
 		return http.StatusUnauthorized
 	case HasCode(err, CodeServerRateLimited):
 		return http.StatusTooManyRequests
+	case IsLimitExceeded(err):
+		// Static configuration limits (e.g., node bind limit) are conflicts, not rate limits.
+		return http.StatusConflict
 	case IsBudgetExceeded(err):
 		return http.StatusTooManyRequests
 	case IsTimeout(err):
