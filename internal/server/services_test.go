@@ -52,6 +52,9 @@ func (s *stubProviderService) GetHealth(context.Context, string) (*ProviderHealt
 	return &ProviderHealthDetail{Provider: "stub", Message: "ok"}, nil
 }
 
+// stubNodeService is a minimal NodeService stub for internal package tests
+// (e.g. Services constructor wiring). For stateful HTTP handler testing with
+// httptest, see mockNodeService in node_routes_test.go.
 type stubNodeService struct{}
 
 func (s *stubNodeService) List(context.Context) ([]NodeSummary, error) { return nil, nil }
@@ -72,22 +75,17 @@ func (s *stubGatewayStatusService) Subscribe(context.Context) (<-chan GatewaySta
 	return ch, nil
 }
 
-type stubAgentControlService struct {
-	paused bool
-}
+// stubAgentControlService is a minimal AgentControlService stub for internal
+// package tests. For stateful HTTP handler testing, see mockAgentControlService
+// in node_routes_test.go.
+type stubAgentControlService struct{}
 
 func (s *stubAgentControlService) Pause(context.Context) (AgentState, error) {
-	s.paused = true
 	return AgentStatePaused, nil
 }
 
 func (s *stubAgentControlService) Resume(context.Context) (AgentState, error) {
-	s.paused = false
 	return AgentStateRunning, nil
-}
-
-func (s *stubAgentControlService) Paused() bool {
-	return s.paused
 }
 func TestNewServices(t *testing.T) {
 	ws := &stubWorkspaceService{}

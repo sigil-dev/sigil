@@ -195,7 +195,6 @@ type GatewayStatusService interface {
 type AgentControlService interface {
 	Pause(ctx context.Context) (AgentState, error)
 	Resume(ctx context.Context) (AgentState, error)
-	Paused() bool
 }
 // WorkspaceSummary is the REST representation of a workspace in list results.
 type WorkspaceSummary struct {

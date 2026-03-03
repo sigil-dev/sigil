@@ -171,15 +171,7 @@ func (s *Server) registerSSERoute() {
 
 // buildSSEResponseSchema adds the SSE event schema to the operation's 200 response.
 func buildSSEResponseSchema(api huma.API, op *huma.Operation) {
-	if op.Responses == nil {
-		op.Responses = map[string]*huma.Response{}
-	}
-	if op.Responses["200"] == nil {
-		op.Responses["200"] = &huma.Response{}
-	}
-	if op.Responses["200"].Content == nil {
-		op.Responses["200"].Content = map[string]*huma.MediaType{}
-	}
+	content := ensureSSEResponseContent(op)
 
 	dataSchemas := make([]*huma.Schema, 0, len(sseEventTypeMap))
 	for k := range sseEventTypeMap {
@@ -220,7 +212,7 @@ func buildSSEResponseSchema(api huma.API, op *huma.Operation) {
 			},
 		},
 	}
-	op.Responses["200"].Content["text/event-stream"] = &huma.MediaType{
+	content["text/event-stream"] = &huma.MediaType{
 		Schema: schema,
 	}
 }
@@ -292,7 +284,7 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 				}
 				if err := encoder.Encode(json.RawMessage(data)); err != nil {
 					slog.Warn("sse: encode error", "error", err)
-					drainSSEChannel(ch)
+					drainChannel(ch)
 					return
 				}
 
@@ -342,9 +334,37 @@ func drainChannel[T any](ch <-chan T) {
 	}()
 }
 
-// drainSSEChannel is a convenience alias for drainChannel[SSEEvent].
-func drainSSEChannel(ch <-chan SSEEvent) {
-	drainChannel(ch)
+// drainChannelWithContext is like drainChannel but also exits when ctx is
+// cancelled, preventing goroutine leaks if the channel is never closed.
+func drainChannelWithContext[T any](ctx context.Context, ch <-chan T) {
+	go func() {
+		for {
+			select {
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// ensureSSEResponseContent ensures the operation has a 200 response with a
+// content map, creating intermediate objects as needed. Shared by
+// buildStatusSSESchema and buildSSEResponseSchema.
+func ensureSSEResponseContent(op *huma.Operation) map[string]*huma.MediaType {
+	if op.Responses == nil {
+		op.Responses = map[string]*huma.Response{}
+	}
+	if op.Responses["200"] == nil {
+		op.Responses["200"] = &huma.Response{}
+	}
+	if op.Responses["200"].Content == nil {
+		op.Responses["200"].Content = map[string]*huma.MediaType{}
+	}
+	return op.Responses["200"].Content
 }
 
 // writeSSEField writes a formatted SSE field and drains the channel on error.
@@ -353,7 +373,7 @@ func writeSSEField(w io.Writer, ch <-chan SSEEvent, format string, args ...any) 
 	_, err := fmt.Fprintf(w, format, args...)
 	if err != nil {
 		slog.Warn("sse: write error", "error", err)
-		drainSSEChannel(ch)
+		drainChannel(ch)
 		return err
 	}
 	return nil

@@ -42,6 +42,15 @@ type agentControlOutput struct {
 	}
 }
 
+// userIDFromContext extracts the authenticated user's ID from the context,
+// returning an empty string when auth is disabled.
+func userIDFromContext(ctx context.Context) string {
+	if u := UserFromContext(ctx); u != nil {
+		return u.ID()
+	}
+	return ""
+}
+
 func (s *Server) registerNodeRoutes() {
 	huma.Register(s.api, huma.Operation{
 		OperationID: "list-nodes",
@@ -117,7 +126,7 @@ func (s *Server) registerStatusStreamRoute() {
 		Path:        "/api/v1/status/stream",
 		Summary:     "Stream gateway status updates via SSE",
 		Tags:        []string{"system"},
-		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests},
 	}
 	buildStatusSSESchema(&op)
 	huma.Register(s.api, op, s.handleStatusStream)
@@ -125,17 +134,9 @@ func (s *Server) registerStatusStreamRoute() {
 
 // buildStatusSSESchema adds SSE response schema for the status stream endpoint.
 func buildStatusSSESchema(op *huma.Operation) {
-	if op.Responses == nil {
-		op.Responses = map[string]*huma.Response{}
-	}
-	if op.Responses["200"] == nil {
-		op.Responses["200"] = &huma.Response{}
-	}
-	if op.Responses["200"].Content == nil {
-		op.Responses["200"].Content = map[string]*huma.MediaType{}
-	}
+	content := ensureSSEResponseContent(op)
 
-	op.Responses["200"].Content["text/event-stream"] = &huma.MediaType{
+	content["text/event-stream"] = &huma.MediaType{
 		Schema: &huma.Schema{
 			Title:       "Server Sent Events",
 			Description: "Gateway status updates streamed as SSE with event type 'tray_status'.",
@@ -159,31 +160,43 @@ func buildStatusSSESchema(op *huma.Operation) {
 	}
 }
 
+// requireAdminService validates admin permissions and returns an error if the
+// service container is nil. Callers follow with a specific service nil-check.
+func (s *Server) requireAdminService(ctx context.Context, perm, op string) error {
+	if err := s.requireAdmin(ctx, perm, op); err != nil {
+		return err
+	}
+	if s.services == nil {
+		return huma.Error503ServiceUnavailable("services not available")
+	}
+	return nil
+}
+
 func (s *Server) requireNodeService(ctx context.Context) (NodeService, error) {
-	if err := s.requireAdmin(ctx, "admin:nodes", "manage nodes"); err != nil {
+	if err := s.requireAdminService(ctx, "admin:nodes", "manage nodes"); err != nil {
 		return nil, err
 	}
-	if s.services == nil || s.services.Nodes() == nil {
+	if s.services.Nodes() == nil {
 		return nil, huma.Error503ServiceUnavailable("node service not available")
 	}
 	return s.services.Nodes(), nil
 }
 
 func (s *Server) requireAgentControlService(ctx context.Context) (AgentControlService, error) {
-	if err := s.requireAdmin(ctx, "admin:agent", "control agent state"); err != nil {
+	if err := s.requireAdminService(ctx, "admin:agent", "control agent state"); err != nil {
 		return nil, err
 	}
-	if s.services == nil || s.services.AgentControl() == nil {
+	if s.services.AgentControl() == nil {
 		return nil, huma.Error503ServiceUnavailable("agent control service not available")
 	}
 	return s.services.AgentControl(), nil
 }
 
 func (s *Server) requireGatewayStatusService(ctx context.Context) (GatewayStatusService, error) {
-	if err := s.requireAdmin(ctx, "admin:status", "stream gateway status"); err != nil {
+	if err := s.requireAdminService(ctx, "admin:status", "stream gateway status"); err != nil {
 		return nil, err
 	}
-	if s.services == nil || s.services.GatewayStatus() == nil {
+	if s.services.GatewayStatus() == nil {
 		return nil, huma.Error503ServiceUnavailable("gateway status service not available")
 	}
 	return s.services.GatewayStatus(), nil
@@ -197,7 +210,7 @@ func (s *Server) handleListNodes(ctx context.Context, _ *struct{}) (*listNodesOu
 
 	list, err := nodes.List(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "listing nodes", "error", err)
+		slog.Error("internal error", "context", "listing nodes", "error", err, "user_id", userIDFromContext(ctx))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
@@ -221,22 +234,32 @@ func (s *Server) handleGetNode(ctx context.Context, input *nodeIDInput) (*getNod
 	return &getNodeOutput{Body: *node}, nil
 }
 
+// handleNodeAction is a shared helper for approve/revoke operations that
+// differ only in the service method called and the status returned.
+func (s *Server) handleNodeAction(
+	ctx context.Context,
+	input *nodeIDInput,
+	action func(context.Context, string) error,
+	status NodeActionStatus,
+	opDesc string,
+) (*nodeActionOutput, error) {
+	if err := action(ctx, input.ID); err != nil {
+		return nil, notFoundOr500(err,
+			fmt.Sprintf("node %q not found", input.ID),
+			fmt.Sprintf("%s node %q", opDesc, input.ID))
+	}
+	out := &nodeActionOutput{}
+	out.Body.Status = status
+	out.Body.NodeID = input.ID
+	return out, nil
+}
+
 func (s *Server) handleApproveNode(ctx context.Context, input *nodeIDInput) (*nodeActionOutput, error) {
 	nodes, err := s.requireNodeService(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := nodes.Approve(ctx, input.ID); err != nil {
-		return nil, notFoundOr500(err,
-			fmt.Sprintf("node %q not found", input.ID),
-			fmt.Sprintf("approving node %q", input.ID))
-	}
-
-	out := &nodeActionOutput{}
-	out.Body.Status = NodeActionApproved
-	out.Body.NodeID = input.ID
-	return out, nil
+	return s.handleNodeAction(ctx, input, nodes.Approve, NodeActionApproved, "approving")
 }
 
 func (s *Server) handleRevokeNode(ctx context.Context, input *nodeIDInput) (*nodeActionOutput, error) {
@@ -244,17 +267,7 @@ func (s *Server) handleRevokeNode(ctx context.Context, input *nodeIDInput) (*nod
 	if err != nil {
 		return nil, err
 	}
-
-	if err := nodes.Revoke(ctx, input.ID); err != nil {
-		return nil, notFoundOr500(err,
-			fmt.Sprintf("node %q not found", input.ID),
-			fmt.Sprintf("revoking node %q", input.ID))
-	}
-
-	out := &nodeActionOutput{}
-	out.Body.Status = NodeActionRevoked
-	out.Body.NodeID = input.ID
-	return out, nil
+	return s.handleNodeAction(ctx, input, nodes.Revoke, NodeActionRevoked, "revoking")
 }
 
 func (s *Server) handleDeleteNode(ctx context.Context, input *nodeIDInput) (*struct{}, error) {
@@ -280,7 +293,7 @@ func (s *Server) handlePauseAgent(ctx context.Context, _ *struct{}) (*agentContr
 
 	state, err := control.Pause(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "pausing agent", "error", err)
+		slog.Error("internal error", "context", "pausing agent", "error", err, "user_id", userIDFromContext(ctx))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
@@ -297,7 +310,7 @@ func (s *Server) handleResumeAgent(ctx context.Context, _ *struct{}) (*agentCont
 
 	state, err := control.Resume(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "resuming agent", "error", err)
+		slog.Error("internal error", "context", "resuming agent", "error", err, "user_id", userIDFromContext(ctx))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
@@ -312,18 +325,20 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 		return nil, err
 	}
 
+	// Subscribe pre-stream so errors return proper HTTP status codes
+	// instead of silently failing inside an already-committed 200.
+	updates, err := statusSvc.Subscribe(ctx)
+	if err != nil {
+		slog.Error("internal error", "context", "subscribing gateway status", "error", err, "user_id", userIDFromContext(ctx))
+		return nil, huma.Error500InternalServerError("internal server error")
+	}
+
 	return &huma.StreamResponse{
 		Body: func(ctx huma.Context) {
+			defer drainChannelWithContext(ctx.Context(), updates)
 			ctx.SetHeader("Content-Type", "text/event-stream")
 			ctx.SetHeader("Cache-Control", "no-store")
 			ctx.SetHeader("Connection", "keep-alive")
-
-			updates, err := statusSvc.Subscribe(ctx.Context())
-			if err != nil {
-				slog.Error("internal error", "context", "subscribing gateway status", "error", err)
-				return
-			}
-			defer drainChannel(updates)
 
 			bw := ctx.BodyWriter()
 			encoder := json.NewEncoder(bw)

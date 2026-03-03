@@ -401,7 +401,7 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 				// Cancel context and drain remaining events to unblock the
 				// stream handler goroutine before returning.
 				cancel()
-				drainSSEChannel(ch)
+				drainChannel(ch)
 				return nil, errorCodeToHTTPError(code, msg)
 			default:
 				truncated := truncateForLogging(event.Data, 100)

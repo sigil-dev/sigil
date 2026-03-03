@@ -4,7 +4,9 @@
 package server
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -53,4 +55,50 @@ func TestValidateEventType(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestDrainChannel_ClosedBuffered(t *testing.T) {
+	ch := make(chan int, 3)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	close(ch)
+
+	drainChannel(ch)
+
+	// Give the goroutine time to complete.
+	time.Sleep(10 * time.Millisecond)
+}
+
+func TestDrainChannel_ProducerAfterConsumerStops(t *testing.T) {
+	ch := make(chan int, 1)
+
+	drainChannel(ch)
+
+	// Producer can still send without deadlocking — the key invariant
+	// drainChannel exists to protect.
+	done := make(chan struct{})
+	go func() {
+		ch <- 42
+		close(ch)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success — no deadlock.
+	case <-time.After(time.Second):
+		t.Fatal("deadlock: producer blocked after consumer stopped")
+	}
+}
+
+func TestDrainChannelWithContext_ContextCancellation(t *testing.T) {
+	ch := make(chan int) // never closed
+	ctx, cancel := context.WithCancel(context.Background())
+
+	drainChannelWithContext(ctx, ch)
+	cancel()
+
+	// Goroutine should exit via ctx.Done() without channel close.
+	time.Sleep(10 * time.Millisecond)
 }
