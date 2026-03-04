@@ -358,13 +358,23 @@ func TestNodeRoutes_PauseResumeTransitions(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, strings.ToLower(w.Body.String()), "paused")
+
+	var pauseResp struct {
+		Status string `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &pauseResp))
+	assert.Equal(t, "paused", pauseResp.Status)
 
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/agent/resume", nil)
 	w = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, strings.ToLower(w.Body.String()), "running")
+
+	var resumeResp struct {
+		Status string `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resumeResp))
+	assert.Equal(t, "running", resumeResp.Status)
 }
 
 func TestNodeRoutes_RevokeNode(t *testing.T) {
@@ -752,6 +762,8 @@ func TestNodeRoutes_PauseResume_InternalError(t *testing.T) {
 }
 
 func TestNodeRoutes_StatusStream_WriteError(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	statusSvc := &mockStatusSubscriptionService{
 		updates: []server.GatewayStatus{
 			{Status: server.GatewayStatusRunning, AgentState: server.AgentStateRunning, ConnectedNodes: 1},

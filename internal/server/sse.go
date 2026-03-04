@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // SSEEventType defines the allowed event types for server-sent events.
@@ -133,7 +135,7 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 			// Returns 403 for both not-found and forbidden to prevent workspace ID enumeration.
 			return huma.Error403Forbidden("access denied")
 		}
-		slog.Error("internal error", "context", fmt.Sprintf("checking workspace %q", workspaceID), "error", err)
+		slog.Error("internal error", "context", fmt.Sprintf("checking workspace %q", workspaceID), "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return huma.Error500InternalServerError("internal server error")
 	}
 	// Check if user is a member of the workspace.

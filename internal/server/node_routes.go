@@ -335,7 +335,7 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 
 	updates, err := statusSvc.Subscribe(ctx)
 	if err != nil {
-		slog.Error("status stream: subscribe failed", "error", err)
+		slog.Error("status stream: subscribe failed", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
