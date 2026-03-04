@@ -520,6 +520,19 @@ func TestNodeRoutes_PauseAgent_Idempotent(t *testing.T) {
 	}
 }
 
+func TestNodeRoutes_ResumeAgent_Idempotent(t *testing.T) {
+	agentSvc := &mockAgentControlService{}
+	srv := newTestServerWithNodeAPIs(t, nil, nil, agentSvc)
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/resume", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, strings.ToLower(w.Body.String()), "running")
+	}
+}
+
 func TestNodeRoutes_AuthEnabled_Returns401(t *testing.T) {
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
@@ -883,4 +896,56 @@ func (w *writeLimitResponseWriter) Write(p []byte) (n int, err error) {
 	n, err = w.ResponseWriter.Write(p)
 	w.written += n
 	return n, err
+}
+
+func TestNodeRoutes_StatusStream_MultiEvent(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	statusSvc := &mockStatusSubscriptionService{
+		updates: []server.GatewayStatus{
+			{Status: server.GatewayStatusRunning, AgentState: server.AgentStateRunning, ConnectedNodes: 2, ActiveChannels: 1},
+			{Status: server.GatewayStatusDegraded, AgentState: server.AgentStatePaused, ConnectedNodes: 0, ActiveChannels: 0},
+		},
+	}
+	srv := newTestServerWithNodeAPIs(t, nil, statusSvc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status/stream", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	// Both events should appear in order.
+	runningIdx := strings.Index(body, `"status":"running"`)
+	degradedIdx := strings.Index(body, `"status":"degraded"`)
+	assert.Greater(t, runningIdx, -1, "running status event missing")
+	assert.Greater(t, degradedIdx, -1, "degraded status event missing")
+	assert.Less(t, runningIdx, degradedIdx, "events should appear in order: running before degraded")
+
+	// Verify field values from the first event.
+	assert.Contains(t, body, `"connected_nodes":2`)
+	assert.Contains(t, body, `"active_channels":1`)
+}
+
+func TestNodeRoutes_InvalidNodeID_BoundaryAt253(t *testing.T) {
+	srv := newTestServerWithNodeAPIs(t, &mockNodeService{nodes: map[string]server.NodeDetail{}}, nil, nil)
+
+	// Exactly 253 characters — at the maxLength boundary, should be valid.
+	t.Run("exactly 253 chars (valid)", func(t *testing.T) {
+		id := strings.Repeat("a", 253)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+id, nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		assert.Equal(t, http.StatusNotFound, w.Code, "253-char ID should pass validation (404 from mock)")
+	})
+
+	// 254 characters — one above maxLength, should be rejected.
+	t.Run("254 chars (invalid)", func(t *testing.T) {
+		id := strings.Repeat("a", 254)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/"+id, nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		assert.Equal(t, http.StatusUnprocessableEntity, w.Code, "254-char ID should be rejected")
+	})
 }
