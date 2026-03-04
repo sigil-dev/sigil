@@ -95,9 +95,8 @@ func (m *mockNodeService) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-// mockErrorNodeService returns an error from every method, for testing
-// the 500 Internal Server Error path via notFoundOr500.
-// mockNilListNodeService returns nil from List to exercise the nil→[] normalization.
+// mockNilListNodeService returns nil from List to exercise the nil→[] normalization,
+// and returns (nil, nil) from Get to exercise the nil-without-error defensive guard.
 type mockNilListNodeService struct{}
 
 func (m *mockNilListNodeService) List(context.Context) ([]server.NodeSummary, error) { return nil, nil }
@@ -108,6 +107,8 @@ func (m *mockNilListNodeService) Approve(context.Context, string) error { return
 func (m *mockNilListNodeService) Revoke(context.Context, string) error  { return nil }
 func (m *mockNilListNodeService) Delete(context.Context, string) error  { return nil }
 
+// mockErrorNodeService returns an error from every method, for testing
+// the 500 Internal Server Error path via notFoundOr500.
 type mockErrorNodeService struct {
 	err error
 }
@@ -478,6 +479,16 @@ func TestNodeRoutes_NilService_Returns503(t *testing.T) {
 	}
 }
 
+func TestNodeRoutes_GetNode_NilWithoutError(t *testing.T) {
+	srv := newTestServerWithNodeAPIs(t, &mockNilListNodeService{}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/any-node", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
 func TestNodeRoutes_ListNodes_NilFromService(t *testing.T) {
 	srv := newTestServerWithNodeAPIs(t, &mockNilListNodeService{}, nil, nil)
 
@@ -692,6 +703,44 @@ func TestNodeRoutes_AuthEnabled_ValidAdminToken_Succeeds(t *testing.T) {
 				"expected 200 for valid admin token on %s %s, got %d", ep.method, ep.path, w.Code)
 		})
 	}
+}
+
+func TestNodeRoutes_AuthEnabled_StatusStream_ValidAdminToken(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:status"}),
+		},
+	}
+	// Pre-closed channel: Subscribe returns immediately, stream body drains and exits.
+	statusSvc := &mockStatusSubscriptionService{updates: nil}
+	services := server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+	).WithGatewayStatusService(statusSvc)
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		Services:       services,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status/stream", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
 }
 
 func TestNodeRoutes_StatusStream_ContextCancellation(t *testing.T) {

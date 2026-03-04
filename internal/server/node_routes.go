@@ -60,7 +60,7 @@ func (s *Server) registerNodeRoutes() {
 		Path:        "/api/v1/nodes",
 		Summary:     "List registered nodes",
 		Tags:        []string{"nodes"},
-		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests},
 	}, s.handleListNodes)
 
 	huma.Register(s.api, huma.Operation{
@@ -78,7 +78,7 @@ func (s *Server) registerNodeRoutes() {
 		Path:        "/api/v1/nodes/{id}/approve",
 		Summary:     "Approve node access",
 		Tags:        []string{"nodes"},
-		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests},
 	}, s.handleApproveNode)
 
 	huma.Register(s.api, huma.Operation{
@@ -87,7 +87,7 @@ func (s *Server) registerNodeRoutes() {
 		Path:        "/api/v1/nodes/{id}/revoke",
 		Summary:     "Revoke node access",
 		Tags:        []string{"nodes"},
-		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests},
 	}, s.handleRevokeNode)
 
 	huma.Register(s.api, huma.Operation{
@@ -97,7 +97,7 @@ func (s *Server) registerNodeRoutes() {
 		Summary:       "Delete node registration",
 		Tags:          []string{"nodes"},
 		DefaultStatus: http.StatusNoContent,
-		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests},
 	}, s.handleDeleteNode)
 }
 
@@ -108,7 +108,7 @@ func (s *Server) registerAgentControlRoutes() {
 		Path:        "/api/v1/agent/pause",
 		Summary:     "Pause the agent loop",
 		Tags:        []string{"system"},
-		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests},
 	}, s.handlePauseAgent)
 
 	huma.Register(s.api, huma.Operation{
@@ -117,7 +117,7 @@ func (s *Server) registerAgentControlRoutes() {
 		Path:        "/api/v1/agent/resume",
 		Summary:     "Resume the agent loop",
 		Tags:        []string{"system"},
-		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable, http.StatusTooManyRequests},
+		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests},
 	}, s.handleResumeAgent)
 }
 
@@ -169,6 +169,7 @@ func (s *Server) requireAdminService(ctx context.Context, perm, op string) error
 		return err
 	}
 	if s.services == nil {
+		slog.Error("admin service unavailable: services container is nil", "op", op)
 		return huma.Error503ServiceUnavailable("services not available")
 	}
 	return nil
@@ -179,6 +180,7 @@ func (s *Server) requireNodeService(ctx context.Context) (NodeService, error) {
 		return nil, err
 	}
 	if s.services.Nodes() == nil {
+		slog.Error("node service unavailable: service is nil", "op", "manage nodes")
 		return nil, huma.Error503ServiceUnavailable("node service not available")
 	}
 	return s.services.Nodes(), nil
@@ -189,6 +191,7 @@ func (s *Server) requireAgentControlService(ctx context.Context) (AgentControlSe
 		return nil, err
 	}
 	if s.services.AgentControl() == nil {
+		slog.Error("agent control service unavailable: service is nil", "op", "control agent state")
 		return nil, huma.Error503ServiceUnavailable("agent control service not available")
 	}
 	return s.services.AgentControl(), nil
@@ -199,6 +202,7 @@ func (s *Server) requireGatewayStatusService(ctx context.Context) (GatewayStatus
 		return nil, err
 	}
 	if s.services.GatewayStatus() == nil {
+		slog.Error("gateway status service unavailable: service is nil", "op", "stream gateway status")
 		return nil, huma.Error503ServiceUnavailable("gateway status service not available")
 	}
 	return s.services.GatewayStatus(), nil
@@ -238,7 +242,7 @@ func (s *Server) handleGetNode(ctx context.Context, input *nodeIDInput) (*getNod
 	}
 	if node == nil {
 		internalErr := sigilerr.New(sigilerr.CodeServerInternalFailure, "NodeService.Get returned nil without error")
-		return nil, notFoundOr500(ctx, internalErr, "", fmt.Sprintf("getting node %q", input.ID))
+		return nil, notFoundOr500(ctx, internalErr, fmt.Sprintf("node %q not found", input.ID), fmt.Sprintf("getting node %q", input.ID))
 	}
 	if node.Tools == nil {
 		node.Tools = []string{}
@@ -339,6 +343,10 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 
 	userID := userIDFromContext(ctx)
 
+	// Subscribe before entering the stream body so failures return HTTP 500
+	// before the response is committed. We use the outer HTTP handler context
+	// here; the stream body's huma context is derived from (and cancels with)
+	// the same HTTP request, so both contexts share the connection lifetime.
 	updates, err := statusSvc.Subscribe(ctx)
 	if err != nil {
 		slog.Error("status stream: subscribe failed", "error", err, "user_id", userID, "code", sigilerr.CodeOf(err))
