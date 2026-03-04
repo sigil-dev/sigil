@@ -240,6 +240,24 @@ func TestNodeRoutes_GetNode(t *testing.T) {
 	assert.ElementsMatch(t, []string{"camera", "screen"}, resp.Tools)
 }
 
+func TestNodeRoutes_GetNode_NilToolsNormalized(t *testing.T) {
+	srv := newTestServerWithNodeAPIs(t, &mockNodeService{
+		nodes: map[string]server.NodeDetail{
+			"macbook-air": {ID: "macbook-air", Platform: "darwin", Online: false, Approved: false, Tools: nil},
+		},
+	}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/macbook-air", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp server.NodeDetail
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotNil(t, resp.Tools)
+	assert.Empty(t, resp.Tools)
+}
+
 func TestNodeRoutes_ApproveNode(t *testing.T) {
 	nodeSvc := &mockNodeService{
 		nodes: map[string]server.NodeDetail{

@@ -11,6 +11,8 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 const trayStatusSSEEvent = "tray_status"
@@ -210,7 +212,7 @@ func (s *Server) handleListNodes(ctx context.Context, _ *struct{}) (*listNodesOu
 
 	list, err := nodes.List(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "listing nodes", "error", err, "user_id", userIDFromContext(ctx))
+		slog.Error("internal error", "context", "listing nodes", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
@@ -296,7 +298,7 @@ func (s *Server) handlePauseAgent(ctx context.Context, _ *struct{}) (*agentContr
 
 	state, err := control.Pause(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "pausing agent", "error", err, "user_id", userIDFromContext(ctx))
+		slog.Error("internal error", "context", "pausing agent", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
@@ -313,7 +315,7 @@ func (s *Server) handleResumeAgent(ctx context.Context, _ *struct{}) (*agentCont
 
 	state, err := control.Resume(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "resuming agent", "error", err, "user_id", userIDFromContext(ctx))
+		slog.Error("internal error", "context", "resuming agent", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
