@@ -653,10 +653,10 @@ func TestNodeRoutes_StatusStream_SubscribeError(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
-	// Subscribe now happens inside the stream body (after 200 is committed),
-	// so failures produce an empty stream rather than an HTTP error status.
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Empty(t, w.Body.String())
+	// Subscribe now happens before the StreamResponse is created, so failures
+	// return a proper HTTP 500 error before the response is committed.
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "internal server error")
 }
 
 func TestNodeRoutes_InvalidNodeID(t *testing.T) {

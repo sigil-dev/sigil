@@ -330,13 +330,14 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 		return nil, err
 	}
 
+	updates, err := statusSvc.Subscribe(ctx)
+	if err != nil {
+		slog.Error("status stream: subscribe failed", "error", err)
+		return nil, huma.Error500InternalServerError("internal server error")
+	}
+
 	return &huma.StreamResponse{
 		Body: func(ctx huma.Context) {
-			updates, err := statusSvc.Subscribe(ctx.Context())
-			if err != nil {
-				slog.Error("status stream: subscribe failed", "error", err)
-				return
-			}
 			defer drainChannelWithContext(ctx.Context(), updates)
 			ctx.SetHeader("Content-Type", "text/event-stream")
 			ctx.SetHeader("Cache-Control", "no-store")
