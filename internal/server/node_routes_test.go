@@ -12,6 +12,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"go.uber.org/goleak"
 
 	"github.com/sigil-dev/sigil/internal/server"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
@@ -584,6 +587,10 @@ func TestNodeRoutes_StatusStream_ContextCancellation(t *testing.T) {
 
 	cancel()
 	<-done
+
+	// Allow drainChannelWithContext goroutine to react to context cancellation.
+	time.Sleep(10 * time.Millisecond)
+	goleak.VerifyNone(t)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "tray_status")

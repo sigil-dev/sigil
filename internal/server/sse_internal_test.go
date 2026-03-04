@@ -59,8 +59,6 @@ func TestValidateEventType(t *testing.T) {
 }
 
 func TestDrainChannel_ClosedBuffered(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
 	ch := make(chan int, 3)
 	ch <- 1
 	ch <- 2
@@ -68,6 +66,10 @@ func TestDrainChannel_ClosedBuffered(t *testing.T) {
 	close(ch)
 
 	drainChannel(ch)
+
+	// Give the background goroutine time to drain and exit.
+	time.Sleep(10 * time.Millisecond)
+	goleak.VerifyNone(t)
 }
 
 func TestDrainChannel_ProducerAfterConsumerStops(t *testing.T) {
