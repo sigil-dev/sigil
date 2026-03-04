@@ -270,7 +270,13 @@ func TestNodeRoutes_ApproveNode(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "approved")
+	var actionResp struct {
+		Status string `json:"status"`
+		NodeID string `json:"node_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &actionResp))
+	assert.Equal(t, "approved", actionResp.Status)
+	assert.Equal(t, "macbook-pro", actionResp.NodeID)
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes/macbook-pro", nil)
 	w = httptest.NewRecorder()
@@ -374,7 +380,13 @@ func TestNodeRoutes_RevokeNode(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "revoked")
+	var revokeResp struct {
+		Status string `json:"status"`
+		NodeID string `json:"node_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &revokeResp))
+	assert.Equal(t, "revoked", revokeResp.Status)
+	assert.Equal(t, "macbook-pro", revokeResp.NodeID)
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes/macbook-pro", nil)
 	w = httptest.NewRecorder()
