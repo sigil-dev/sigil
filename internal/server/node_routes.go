@@ -337,9 +337,11 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 		return nil, err
 	}
 
+	userID := userIDFromContext(ctx)
+
 	updates, err := statusSvc.Subscribe(ctx)
 	if err != nil {
-		slog.Error("status stream: subscribe failed", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
+		slog.Error("status stream: subscribe failed", "error", err, "user_id", userID, "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
@@ -347,7 +349,7 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 		Body: func(ctx huma.Context) {
 			defer drainChannelWithContext(ctx.Context(), updates)
 			ctx.SetHeader("Content-Type", "text/event-stream")
-			ctx.SetHeader("Cache-Control", "no-store")
+			ctx.SetHeader("Cache-Control", "no-cache")
 			ctx.SetHeader("Connection", "keep-alive")
 
 			bw := ctx.BodyWriter()
@@ -370,15 +372,15 @@ func (s *Server) handleStatusStream(ctx context.Context, _ *struct{}) (*huma.Str
 					}
 
 					if _, err := fmt.Fprintf(bw, "event: %s\ndata: ", trayStatusSSEEvent); err != nil {
-						slog.Warn("status stream: write failed", "error", err)
+						slog.Warn("status stream: write failed", "error", err, "user_id", userID)
 						return
 					}
 					if err := encoder.Encode(update); err != nil {
-						slog.Warn("status stream: encode failed", "error", err)
+						slog.Warn("status stream: encode failed", "error", err, "user_id", userID)
 						return
 					}
 					if _, err := fmt.Fprint(bw, "\n"); err != nil {
-						slog.Warn("status stream: write separator failed", "error", err)
+						slog.Warn("status stream: write separator failed", "error", err, "user_id", userID)
 						return
 					}
 

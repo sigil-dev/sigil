@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,7 @@ func (m *mockNodeService) List(_ context.Context) ([]server.NodeSummary, error) 
 	for _, n := range m.nodes {
 		out = append(out, server.NodeSummary{
 			ID:       n.ID,
+			Platform: n.Platform,
 			Online:   n.Online,
 			Approved: n.Approved,
 		})
@@ -219,6 +221,9 @@ func TestNodeRoutes_ListNodes(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Len(t, resp.Nodes, 2)
+	assert.True(t, slices.ContainsFunc(resp.Nodes, func(n server.NodeSummary) bool {
+		return n.ID == "macbook-pro" && n.Platform == "darwin"
+	}))
 }
 
 func TestNodeRoutes_GetNode(t *testing.T) {
@@ -326,7 +331,7 @@ func TestNodeRoutes_StatusSubscription(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
-	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+	assert.Equal(t, "no-cache", w.Header().Get("Cache-Control"))
 	assert.Equal(t, "keep-alive", w.Header().Get("Connection"))
 
 	// Validate SSE framing: each event must be "event: <type>\ndata: <json>\n\n".
