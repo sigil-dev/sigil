@@ -216,6 +216,9 @@ func (s *Server) handleListNodes(ctx context.Context, _ *struct{}) (*listNodesOu
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
+	if list == nil {
+		list = []NodeSummary{}
+	}
 	out := &listNodesOutput{}
 	out.Body.Nodes = list
 	return out, nil

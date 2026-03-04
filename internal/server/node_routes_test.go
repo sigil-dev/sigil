@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"go.uber.org/goleak"
 
@@ -608,8 +607,9 @@ func TestNodeRoutes_StatusStream_ContextCancellation(t *testing.T) {
 	cancel()
 	<-done
 
-	// Allow drainChannelWithContext goroutine to react to context cancellation.
-	time.Sleep(10 * time.Millisecond)
+	// goleak.VerifyNone has built-in retry (~100 iterations over 100ms),
+	// which reliably waits for the drainChannelWithContext goroutine to
+	// react to context cancellation — no fixed sleep needed.
 	goleak.VerifyNone(t)
 
 	assert.Equal(t, http.StatusOK, w.Code)
