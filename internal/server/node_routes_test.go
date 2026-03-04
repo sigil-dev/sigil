@@ -303,6 +303,8 @@ func TestNodeRoutes_StatusSubscription(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+	assert.Equal(t, "keep-alive", w.Header().Get("Connection"))
 
 	// Validate SSE framing: each event must be "event: <type>\ndata: <json>\n\n".
 	body := w.Body.String()

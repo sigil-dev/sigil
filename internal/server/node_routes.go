@@ -238,11 +238,9 @@ func (s *Server) handleGetNode(ctx context.Context, input *nodeIDInput) (*getNod
 }
 
 // nodeAction is a standalone helper for approve/revoke operations that differ
-// only in the service method called and the status returned. Requiring a
-// NodeService parameter makes the dependency explicit at compile time.
+// only in the service method called and the status returned.
 func nodeAction(
 	ctx context.Context,
-	nodes NodeService,
 	input *nodeIDInput,
 	action func(context.Context, string) error,
 	status NodeActionStatus,
@@ -264,7 +262,7 @@ func (s *Server) handleApproveNode(ctx context.Context, input *nodeIDInput) (*no
 	if err != nil {
 		return nil, err
 	}
-	return nodeAction(ctx, nodes, input, nodes.Approve, NodeActionApproved, "approving")
+	return nodeAction(ctx, input, nodes.Approve, NodeActionApproved, "approving")
 }
 
 func (s *Server) handleRevokeNode(ctx context.Context, input *nodeIDInput) (*nodeActionOutput, error) {
@@ -272,7 +270,7 @@ func (s *Server) handleRevokeNode(ctx context.Context, input *nodeIDInput) (*nod
 	if err != nil {
 		return nil, err
 	}
-	return nodeAction(ctx, nodes, input, nodes.Revoke, NodeActionRevoked, "revoking")
+	return nodeAction(ctx, input, nodes.Revoke, NodeActionRevoked, "revoking")
 }
 
 func (s *Server) handleDeleteNode(ctx context.Context, input *nodeIDInput) (*struct{}, error) {
