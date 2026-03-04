@@ -237,7 +237,7 @@ func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWo
 		ws, err = s.services.Workspaces().List(ctx)
 	}
 	if err != nil {
-		slog.Error("internal error", "context", "listing workspaces", "error", err)
+		slog.Error("internal error", "context", "listing workspaces", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
@@ -267,7 +267,7 @@ func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInpu
 
 	sessions, err := s.services.Sessions().List(ctx, input.ID)
 	if err != nil {
-		slog.Error("internal error", "context", "listing sessions", "error", err)
+		slog.Error("internal error", "context", "listing sessions", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listSessionsOutput{}
@@ -315,7 +315,7 @@ func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPlugi
 
 	plugins, err := s.services.Plugins().List(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "listing plugins", "error", err)
+		slog.Error("internal error", "context", "listing plugins", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listPluginsOutput{}
@@ -521,7 +521,7 @@ func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOu
 
 	users, err := s.services.Users().List(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "listing users", "error", err)
+		slog.Error("internal error", "context", "listing users", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listUsersOutput{}

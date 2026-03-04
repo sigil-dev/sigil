@@ -236,6 +236,10 @@ func (s *Server) handleGetNode(ctx context.Context, input *nodeIDInput) (*getNod
 			fmt.Sprintf("node %q not found", input.ID),
 			fmt.Sprintf("getting node %q", input.ID))
 	}
+	if node == nil {
+		internalErr := sigilerr.New(sigilerr.CodeServerInternalFailure, "NodeService.Get returned nil without error")
+		return nil, notFoundOr500(ctx, internalErr, "", fmt.Sprintf("getting node %q", input.ID))
+	}
 	if node.Tools == nil {
 		node.Tools = []string{}
 	}

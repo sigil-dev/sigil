@@ -276,22 +276,22 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 				data := ensureValidJSON(event.Data)
 
 				// Write event type.
-				if err := writeSSEField(bw, ch, "event: %s\n", event.Event); err != nil {
+				if err := writeSSEField(ctx.Context(), bw, ch, "event: %s\n", event.Event); err != nil {
 					return
 				}
 
 				// Write data line: "data: " + JSON + "\n" (json.Encode adds \n).
-				if err := writeSSEField(bw, ch, "data: "); err != nil {
+				if err := writeSSEField(ctx.Context(), bw, ch, "data: "); err != nil {
 					return
 				}
 				if err := encoder.Encode(json.RawMessage(data)); err != nil {
 					slog.Warn("sse: encode error", "error", err)
-					drainChannel(ch)
+					drainChannelWithContext(ctx.Context(), ch)
 					return
 				}
 
 				// Empty line terminates the event.
-				if err := writeSSEField(bw, ch, "\n"); err != nil {
+				if err := writeSSEField(ctx.Context(), bw, ch, "\n"); err != nil {
 					return
 				}
 
@@ -371,11 +371,11 @@ func ensureSSEResponseContent(op *huma.Operation) map[string]*huma.MediaType {
 
 // writeSSEField writes a formatted SSE field and drains the channel on error.
 // Returns the error so the caller can decide whether to continue.
-func writeSSEField(w io.Writer, ch <-chan SSEEvent, format string, args ...any) error {
+func writeSSEField(ctx context.Context, w io.Writer, ch <-chan SSEEvent, format string, args ...any) error {
 	_, err := fmt.Fprintf(w, format, args...)
 	if err != nil {
 		slog.Warn("sse: write error", "error", err)
-		drainChannel(ch)
+		drainChannelWithContext(ctx, ch)
 		return err
 	}
 	return nil
