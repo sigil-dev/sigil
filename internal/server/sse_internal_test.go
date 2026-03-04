@@ -103,3 +103,25 @@ func TestDrainChannelWithContext_ContextCancellation(t *testing.T) {
 	drainChannelWithContext(ctx, ch)
 	cancel()
 }
+
+func TestDrainChannelWithContext_ProducerAfterCancel(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	ch := make(chan int, 1) // buffered so producer doesn't block permanently
+	ctx, cancel := context.WithCancel(context.Background())
+
+	drainChannelWithContext(ctx, ch)
+	cancel()
+
+	// After context cancellation, the drain goroutine exits. A producer
+	// attempting to send should not block permanently if the channel is
+	// buffered. This verifies the expectation that callers are responsible
+	// for using buffered channels or closing the channel when the drain
+	// goroutine may exit via context cancellation.
+	select {
+	case ch <- 42:
+		// Buffered channel accepted the value — expected.
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("producer blocked: buffered channel should accept at least one value after drain exits")
+	}
+}

@@ -97,6 +97,17 @@ func (m *mockNodeService) Delete(_ context.Context, id string) error {
 
 // mockErrorNodeService returns an error from every method, for testing
 // the 500 Internal Server Error path via notFoundOr500.
+// mockNilListNodeService returns nil from List to exercise the nil→[] normalization.
+type mockNilListNodeService struct{}
+
+func (m *mockNilListNodeService) List(context.Context) ([]server.NodeSummary, error) { return nil, nil }
+func (m *mockNilListNodeService) Get(context.Context, string) (*server.NodeDetail, error) {
+	return nil, nil
+}
+func (m *mockNilListNodeService) Approve(context.Context, string) error { return nil }
+func (m *mockNilListNodeService) Revoke(context.Context, string) error  { return nil }
+func (m *mockNilListNodeService) Delete(context.Context, string) error  { return nil }
+
 type mockErrorNodeService struct {
 	err error
 }
@@ -467,6 +478,18 @@ func TestNodeRoutes_NilService_Returns503(t *testing.T) {
 	}
 }
 
+func TestNodeRoutes_ListNodes_NilFromService(t *testing.T) {
+	srv := newTestServerWithNodeAPIs(t, &mockNilListNodeService{}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	// The handler normalizes nil to [] to avoid "null" in JSON.
+	assert.Contains(t, w.Body.String(), `"nodes":[]`)
+}
+
 func TestNodeRoutes_ListNodes_Empty(t *testing.T) {
 	srv := newTestServerWithNodeAPIs(t, &mockNodeService{
 		nodes: map[string]server.NodeDetail{},
@@ -600,6 +623,60 @@ func TestNodeRoutes_AuthEnabled_Returns403(t *testing.T) {
 			srv.Handler().ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusForbidden, w.Code)
+		})
+	}
+}
+
+func TestNodeRoutes_AuthEnabled_ValidAdminToken_Succeeds(t *testing.T) {
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:nodes", "admin:agent", "admin:status"}),
+		},
+	}
+	services := server.NewServicesForTest(
+		&mockWorkspaceService{},
+		&mockPluginService{},
+		&mockSessionService{},
+		&mockUserService{},
+	).
+		WithNodeService(&mockNodeService{
+			nodes: map[string]server.NodeDetail{
+				"test-node": {ID: "test-node", Platform: "linux", Online: true, Approved: true, Tools: []string{}},
+			},
+		}).
+		WithAgentControlService(&mockAgentControlService{})
+
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		Services:       services,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
+
+	// Test a subset of endpoints that return immediate responses (not SSE).
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/nodes"},
+		{http.MethodGet, "/api/v1/nodes/test-node"},
+		{http.MethodPost, "/api/v1/agent/pause"},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			req := httptest.NewRequest(ep.method, ep.path, nil)
+			req.Header.Set("Authorization", "Bearer admin-token")
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code,
+				"expected 200 for valid admin token on %s %s, got %d", ep.method, ep.path, w.Code)
 		})
 	}
 }
