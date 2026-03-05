@@ -52,6 +52,41 @@ func (s *stubProviderService) GetHealth(context.Context, string) (*ProviderHealt
 	return &ProviderHealthDetail{Provider: "stub", Message: "ok"}, nil
 }
 
+// stubNodeService is a minimal NodeService stub for internal package tests
+// (e.g. Services constructor wiring). For stateful HTTP handler testing with
+// httptest, see mockNodeService in node_routes_test.go.
+type stubNodeService struct{}
+
+func (s *stubNodeService) List(context.Context) ([]NodeSummary, error) { return nil, nil }
+
+func (s *stubNodeService) Get(context.Context, string) (*NodeDetail, error) { return nil, nil }
+
+func (s *stubNodeService) Approve(context.Context, string) error { return nil }
+
+func (s *stubNodeService) Revoke(context.Context, string) error { return nil }
+
+func (s *stubNodeService) Delete(context.Context, string) error { return nil }
+
+type stubGatewayStatusService struct{}
+
+func (s *stubGatewayStatusService) Subscribe(context.Context) (<-chan GatewayStatus, error) {
+	ch := make(chan GatewayStatus)
+	close(ch)
+	return ch, nil
+}
+
+// stubAgentControlService is a minimal AgentControlService stub for internal
+// package tests. For stateful HTTP handler testing, see mockAgentControlService
+// in node_routes_test.go.
+type stubAgentControlService struct{}
+
+func (s *stubAgentControlService) Pause(context.Context) (AgentState, error) {
+	return AgentStatePaused, nil
+}
+
+func (s *stubAgentControlService) Resume(context.Context) (AgentState, error) {
+	return AgentStateRunning, nil
+}
 func TestNewServices(t *testing.T) {
 	ws := &stubWorkspaceService{}
 	ps := &stubPluginService{}
@@ -175,4 +210,23 @@ func TestNewServices_RejectsMultipleProviders(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerConfigInvalid),
 		"expected error code %s, got: %v", sigilerr.CodeServerConfigInvalid, err)
 	assert.Contains(t, err.Error(), "at most one provider service may be supplied")
+}
+
+func TestServices_WithOptionalNodeAndStatusServices(t *testing.T) {
+	ws := &stubWorkspaceService{}
+	ps := &stubPluginService{}
+	ss := &stubSessionService{}
+	us := &stubUserService{}
+	ns := &stubNodeService{}
+	gss := &stubGatewayStatusService{}
+	acs := &stubAgentControlService{}
+
+	svc, err := NewServices(ws, ps, ss, us)
+	require.NoError(t, err)
+
+	got := svc.WithNodeService(ns).WithGatewayStatusService(gss).WithAgentControlService(acs)
+	assert.Same(t, svc, got)
+	assert.Equal(t, ns, svc.Nodes())
+	assert.Equal(t, gss, svc.GatewayStatus())
+	assert.Equal(t, acs, svc.AgentControl())
 }

@@ -663,3 +663,53 @@ func TestWorkspaceBinderBindWithToolsDeduplication(t *testing.T) {
 		require.NoError(t, binder.BindWithTools("ws", "node-last", []string{"camera"}))
 	})
 }
+
+func TestWorkspaceBinderAllowedToolsDedupAndSortAcrossRules(t *testing.T) {
+	binder := node.NewWorkspaceBinder()
+
+	require.NoError(t, binder.BindWithTools("family", "iphone-*", []string{"location", "camera"}))
+	require.NoError(t, binder.BindWithTools("family", "iphone-sean", []string{"camera", "photos"}))
+
+	tools, err := binder.AllowedTools("family", "iphone-sean")
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"node:iphone-sean:camera",
+		"node:iphone-sean:location",
+		"node:iphone-sean:photos",
+	}, tools)
+}
+
+func TestWorkspaceBinderNormalizesAndRejectsInvalidEntries(t *testing.T) {
+	t.Run("whitespace trimming and dedup in Bind", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		require.NoError(t, binder.Bind(" family ", []string{" iphone-* ", "", "iphone-*"}))
+		assert.True(t, binder.IsAllowed("family", "iphone-sean"))
+		assert.False(t, binder.IsAllowed("family", "macbook-pro"))
+	})
+
+	t.Run("malformed glob pattern rejected", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		assert.Error(t, binder.Bind("family", []string{"["}))
+	})
+
+	t.Run("whitespace trimming and tool dedup in BindWithTools", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		require.NoError(t, binder.BindWithTools(" family ", " iphone-* ", []string{" location ", "", "camera", "camera"}))
+		tools, err := binder.AllowedTools("family", "iphone-sean")
+		require.NoError(t, err)
+		assert.Equal(t, []string{
+			"node:iphone-sean:camera",
+			"node:iphone-sean:location",
+		}, tools)
+	})
+
+	t.Run("empty nodePattern rejected", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		assert.Error(t, binder.BindWithTools("family", "", []string{"camera"}))
+	})
+
+	t.Run("empty workspaceID rejected", func(t *testing.T) {
+		binder := node.NewWorkspaceBinder()
+		assert.Error(t, binder.BindWithTools("", "iphone-*", []string{"camera"}))
+	})
+}

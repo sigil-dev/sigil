@@ -123,6 +123,10 @@ func (s *Server) registerRoutes() {
 		Tags:        []string{"system"},
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleStatus)
+
+	s.registerNodeRoutes()
+	s.registerAgentControlRoutes()
+	s.registerStatusStreamRoute()
 }
 
 // --- Request/Response types for huma ---
@@ -214,11 +218,11 @@ type getProviderHealthOutput struct {
 // notFoundOr500 maps a service error to a 404 (if the error carries the
 // not-found code) or a generic 500. The full error is logged server-side
 // so that 5xx responses never leak internal details.
-func notFoundOr500(err error, notFoundMsg, context string) error {
+func notFoundOr500(ctx context.Context, err error, notFoundMsg, contextStr string) error {
 	if IsNotFound(err) {
 		return huma.Error404NotFound(notFoundMsg)
 	}
-	slog.Error("internal error", "context", context, "error", err)
+	slog.Error("internal error", "context", contextStr, "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 	return huma.Error500InternalServerError("internal server error")
 }
 
@@ -233,7 +237,7 @@ func (s *Server) handleListWorkspaces(ctx context.Context, _ *struct{}) (*listWo
 		ws, err = s.services.Workspaces().List(ctx)
 	}
 	if err != nil {
-		slog.Error("internal error", "context", "listing workspaces", "error", err)
+		slog.Error("internal error", "context", "listing workspaces", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 
@@ -249,7 +253,7 @@ func (s *Server) handleGetWorkspace(ctx context.Context, input *getWorkspaceInpu
 
 	ws, err := s.services.Workspaces().Get(ctx, input.ID)
 	if err != nil {
-		return nil, notFoundOr500(err,
+		return nil, notFoundOr500(ctx, err,
 			fmt.Sprintf("workspace %q not found", input.ID),
 			fmt.Sprintf("getting workspace %q", input.ID))
 	}
@@ -263,7 +267,7 @@ func (s *Server) handleListSessions(ctx context.Context, input *listSessionsInpu
 
 	sessions, err := s.services.Sessions().List(ctx, input.ID)
 	if err != nil {
-		slog.Error("internal error", "context", "listing sessions", "error", err)
+		slog.Error("internal error", "context", "listing sessions", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listSessionsOutput{}
@@ -278,7 +282,7 @@ func (s *Server) handleGetSession(ctx context.Context, input *getSessionInput) (
 
 	session, err := s.services.Sessions().Get(ctx, input.ID, input.SessionID)
 	if err != nil {
-		return nil, notFoundOr500(err,
+		return nil, notFoundOr500(ctx, err,
 			fmt.Sprintf("session %q not found", input.SessionID),
 			fmt.Sprintf("getting session %q", input.SessionID))
 	}
@@ -311,7 +315,7 @@ func (s *Server) handleListPlugins(ctx context.Context, _ *struct{}) (*listPlugi
 
 	plugins, err := s.services.Plugins().List(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "listing plugins", "error", err)
+		slog.Error("internal error", "context", "listing plugins", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listPluginsOutput{}
@@ -326,7 +330,7 @@ func (s *Server) handleGetPlugin(ctx context.Context, input *pluginNameInput) (*
 
 	p, err := s.services.Plugins().Get(ctx, input.Name)
 	if err != nil {
-		return nil, notFoundOr500(err,
+		return nil, notFoundOr500(ctx, err,
 			fmt.Sprintf("plugin %q not found", input.Name),
 			fmt.Sprintf("getting plugin %q", input.Name))
 	}
@@ -339,7 +343,7 @@ func (s *Server) handleReloadPlugin(ctx context.Context, input *pluginNameInput)
 	}
 
 	if err := s.services.Plugins().Reload(ctx, input.Name); err != nil {
-		return nil, notFoundOr500(err,
+		return nil, notFoundOr500(ctx, err,
 			fmt.Sprintf("plugin %q not found", input.Name),
 			fmt.Sprintf("reloading plugin %q", input.Name))
 	}
@@ -397,7 +401,7 @@ func (s *Server) handleSendMessage(ctx context.Context, input *sendMessageInput)
 				// Cancel context and drain remaining events to unblock the
 				// stream handler goroutine before returning.
 				cancel()
-				drainSSEChannel(ch)
+				drainChannel(ch)
 				return nil, errorCodeToHTTPError(code, msg)
 			default:
 				truncated := truncateForLogging(event.Data, 100)
@@ -517,7 +521,7 @@ func (s *Server) handleListUsers(ctx context.Context, _ *struct{}) (*listUsersOu
 
 	users, err := s.services.Users().List(ctx)
 	if err != nil {
-		slog.Error("internal error", "context", "listing users", "error", err)
+		slog.Error("internal error", "context", "listing users", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return nil, huma.Error500InternalServerError("internal server error")
 	}
 	out := &listUsersOutput{}
@@ -532,19 +536,19 @@ func (s *Server) handleGetProviderHealth(ctx context.Context, input *providerNam
 
 	if s.services.Providers() == nil {
 		internalErr := sigilerr.New(sigilerr.CodeServerInternalFailure, "provider service not configured")
-		return nil, notFoundOr500(internalErr, "", "get provider health")
+		return nil, notFoundOr500(ctx, internalErr, "", "get provider health")
 	}
 
 	detail, err := s.services.Providers().GetHealth(ctx, input.Name)
 	if err != nil {
-		return nil, notFoundOr500(err,
+		return nil, notFoundOr500(ctx, err,
 			fmt.Sprintf("provider %q not found", input.Name),
 			fmt.Sprintf("getting provider health %q", input.Name))
 	}
 	if detail == nil {
 		internalErr := sigilerr.New(sigilerr.CodeServerInternalFailure, "GetHealth contract violation: nil detail with nil error")
 		// notFoundMsg is unused here — CodeServerInternalFailure always routes to the 500 path.
-		return nil, notFoundOr500(internalErr, "", fmt.Sprintf("getting provider health %q", input.Name))
+		return nil, notFoundOr500(ctx, internalErr, "", fmt.Sprintf("getting provider health %q", input.Name))
 	}
 	return &getProviderHealthOutput{Body: *detail}, nil
 }

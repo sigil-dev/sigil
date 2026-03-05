@@ -63,8 +63,9 @@ site/.venv/
 # Plugin data
 data/
 
-# beads local metadata (machine-specific)
+# beads local metadata and backups (machine-specific)
 .beads/metadata.json
+.beads/backup/
 
 # bv (beads viewer) local config and caches
 .bv/

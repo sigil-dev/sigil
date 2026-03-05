@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 )
 
 // SSEEventType defines the allowed event types for server-sent events.
@@ -133,7 +135,7 @@ func (s *Server) checkWorkspaceMembership(ctx context.Context, workspaceID strin
 			// Returns 403 for both not-found and forbidden to prevent workspace ID enumeration.
 			return huma.Error403Forbidden("access denied")
 		}
-		slog.Error("internal error", "context", fmt.Sprintf("checking workspace %q", workspaceID), "error", err)
+		slog.Error("internal error", "context", fmt.Sprintf("checking workspace %q", workspaceID), "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 		return huma.Error500InternalServerError("internal server error")
 	}
 	// Check if user is a member of the workspace.
@@ -171,15 +173,7 @@ func (s *Server) registerSSERoute() {
 
 // buildSSEResponseSchema adds the SSE event schema to the operation's 200 response.
 func buildSSEResponseSchema(api huma.API, op *huma.Operation) {
-	if op.Responses == nil {
-		op.Responses = map[string]*huma.Response{}
-	}
-	if op.Responses["200"] == nil {
-		op.Responses["200"] = &huma.Response{}
-	}
-	if op.Responses["200"].Content == nil {
-		op.Responses["200"].Content = map[string]*huma.MediaType{}
-	}
+	content := ensureSSEResponseContent(op)
 
 	dataSchemas := make([]*huma.Schema, 0, len(sseEventTypeMap))
 	for k := range sseEventTypeMap {
@@ -220,7 +214,7 @@ func buildSSEResponseSchema(api huma.API, op *huma.Operation) {
 			},
 		},
 	}
-	op.Responses["200"].Content["text/event-stream"] = &huma.MediaType{
+	content["text/event-stream"] = &huma.MediaType{
 		Schema: schema,
 	}
 }
@@ -282,22 +276,22 @@ func (s *Server) handleChatStream(ctx context.Context, input *chatStreamInput) (
 				data := ensureValidJSON(event.Data)
 
 				// Write event type.
-				if err := writeSSEField(bw, ch, "event: %s\n", event.Event); err != nil {
+				if err := writeSSEField(ctx.Context(), bw, ch, "event: %s\n", event.Event); err != nil {
 					return
 				}
 
 				// Write data line: "data: " + JSON + "\n" (json.Encode adds \n).
-				if err := writeSSEField(bw, ch, "data: "); err != nil {
+				if err := writeSSEField(ctx.Context(), bw, ch, "data: "); err != nil {
 					return
 				}
 				if err := encoder.Encode(json.RawMessage(data)); err != nil {
 					slog.Warn("sse: encode error", "error", err)
-					drainSSEChannel(ch)
+					drainChannelWithContext(ctx.Context(), ch)
 					return
 				}
 
 				// Empty line terminates the event.
-				if err := writeSSEField(bw, ch, "\n"); err != nil {
+				if err := writeSSEField(ctx.Context(), bw, ch, "\n"); err != nil {
 					return
 				}
 
@@ -332,23 +326,56 @@ func isValidEventType(eventType SSEEventType) bool {
 	return !strings.ContainsAny(string(eventType), "\r\n")
 }
 
-// drainSSEChannel consumes remaining events from ch in a background goroutine
-// so that the producer (HandleStream) does not block on a full buffer after
-// the consumer has stopped reading. The goroutine exits when ch is closed.
-func drainSSEChannel(ch <-chan SSEEvent) {
+// drainChannel consumes remaining values from ch in a background goroutine
+// so the producer does not block on a full buffer after the consumer stops
+// reading. The goroutine exits when ch is closed.
+func drainChannel[T any](ch <-chan T) {
 	go func() {
 		for range ch {
 		}
 	}()
 }
 
+// drainChannelWithContext is like drainChannel but also exits when ctx is
+// cancelled, preventing goroutine leaks if the channel is never closed.
+func drainChannelWithContext[T any](ctx context.Context, ch <-chan T) {
+	go func() {
+		for {
+			select {
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// ensureSSEResponseContent ensures the operation has a 200 response with a
+// content map, creating intermediate objects as needed. Shared by
+// buildStatusSSESchema and buildSSEResponseSchema.
+func ensureSSEResponseContent(op *huma.Operation) map[string]*huma.MediaType {
+	if op.Responses == nil {
+		op.Responses = map[string]*huma.Response{}
+	}
+	if op.Responses["200"] == nil {
+		op.Responses["200"] = &huma.Response{}
+	}
+	if op.Responses["200"].Content == nil {
+		op.Responses["200"].Content = map[string]*huma.MediaType{}
+	}
+	return op.Responses["200"].Content
+}
+
 // writeSSEField writes a formatted SSE field and drains the channel on error.
 // Returns the error so the caller can decide whether to continue.
-func writeSSEField(w io.Writer, ch <-chan SSEEvent, format string, args ...any) error {
+func writeSSEField(ctx context.Context, w io.Writer, ch <-chan SSEEvent, format string, args ...any) error {
 	_, err := fmt.Fprintf(w, format, args...)
 	if err != nil {
 		slog.Warn("sse: write error", "error", err)
-		drainSSEChannel(ch)
+		drainChannelWithContext(ctx, ch)
 		return err
 	}
 	return nil

@@ -30,6 +30,9 @@ ephemeral.sqlite3-shm
 dolt-server.pid
 dolt-server.log
 dolt-server.lock
+dolt-server.port
+dolt-server.activity
+dolt-monitor.pid
 
 # Legacy files (from pre-Dolt versions)
 *.db
@@ -47,3 +50,6 @@ daemon.pid
 # They would override fork protection in .git/info/exclude.
 # Config files (metadata.json, config.yaml) are tracked by git by default
 # since no pattern above ignores them.
+
+# Backup files (may contain secrets)
+backup/
