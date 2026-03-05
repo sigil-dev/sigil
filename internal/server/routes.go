@@ -618,7 +618,7 @@ func (s *Server) handleCreatePairingCode(ctx context.Context, input *createPairi
 		case http.StatusForbidden:
 			return nil, huma.Error403Forbidden(err.Error())
 		default:
-			slog.Error("internal error", "context", "creating pairing code", "error", err)
+			slog.Error("internal error", "context", "creating pairing code", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 			return nil, huma.Error500InternalServerError("internal server error")
 		}
 	}
@@ -652,12 +652,13 @@ func (s *Server) handleRedeemPairingCode(ctx context.Context, input *redeemPairi
 		case http.StatusForbidden:
 			return nil, huma.Error403Forbidden(err.Error())
 		default:
-			slog.Error("internal error", "context", "redeeming pairing code", "error", err)
+			slog.Error("internal error", "context", "redeeming pairing code", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
 			return nil, huma.Error500InternalServerError("internal server error")
 		}
 	}
 	return &redeemPairingCodeOutput{Body: *redemption}, nil
 }
+
 func (s *Server) handleStatus(ctx context.Context, _ *struct{}) (*statusOutput, error) {
 	if err := s.requireAdmin(ctx, "admin:status", "get gateway status"); err != nil {
 		return nil, err

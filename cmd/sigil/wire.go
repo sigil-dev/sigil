@@ -671,8 +671,6 @@ func (a *pairingServiceAdapter) RedeemCode(ctx context.Context, req server.Redee
 		a.mu.Unlock()
 		return nil, sigilerr.New(sigilerr.CodeChannelPairingDenied, "pairing code does not match channel/workspace")
 	}
-	// Consume immediately to enforce single-use behavior even under concurrency.
-	delete(a.codes, code)
 	a.mu.Unlock()
 
 	existing, err := a.pairings.GetByChannel(ctx, channelType, channelID)
@@ -680,6 +678,7 @@ func (a *pairingServiceAdapter) RedeemCode(ctx context.Context, req server.Redee
 		if existing.Status == store.PairingStatusActive &&
 			existing.UserID == userID &&
 			existing.WorkspaceID == workspaceID {
+			// Idempotent: pairing already exists for this user; leave code in map to expire naturally.
 			return &server.PairingRedemption{
 				PairingID: existing.ID,
 				Status:    string(existing.Status),
@@ -703,6 +702,11 @@ func (a *pairingServiceAdapter) RedeemCode(ctx context.Context, req server.Redee
 	}); err != nil {
 		return nil, sigilerr.Wrap(err, sigilerr.CodeChannelBackendFailure, "failed to create active pairing")
 	}
+
+	// Consume the code only after successful pairing creation to prevent permanent loss on transient errors.
+	a.mu.Lock()
+	delete(a.codes, code)
+	a.mu.Unlock()
 
 	created, err := a.pairings.GetByChannel(ctx, channelType, channelID)
 	if err != nil {

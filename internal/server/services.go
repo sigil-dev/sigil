@@ -110,6 +110,7 @@ func (s *Services) Providers() ProviderService {
 func (s *Services) Pairings() PairingService {
 	return s.pairings
 }
+
 // Nodes returns the node service, if configured.
 func (s *Services) Nodes() NodeService {
 	return s.nodes
@@ -191,6 +192,7 @@ type PairingService interface {
 	CreateCode(ctx context.Context, req CreatePairingCodeRequest) (*PairingCode, error)
 	RedeemCode(ctx context.Context, req RedeemPairingCodeRequest) (*PairingRedemption, error)
 }
+
 // NodeService provides node CRUD operations for REST handlers.
 type NodeService interface {
 	List(ctx context.Context) ([]NodeSummary, error)
@@ -307,6 +309,7 @@ type PairingRedemption struct {
 	PairingID string `json:"pairing_id" doc:"Created or existing pairing ID"`
 	Status    string `json:"status" doc:"Pairing status"`
 }
+
 // NodeSummary is the REST representation of a node in list results.
 type NodeSummary struct {
 	ID       string `json:"id" doc:"Node identifier"`
