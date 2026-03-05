@@ -366,6 +366,86 @@ func TestPairingServiceAdapter_Redeem_ReusedCode(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
 }
 
+func TestPairingServiceAdapter_Redeem_ChannelMismatch(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		createReq   server.CreatePairingCodeRequest
+		redeemReq   func(code string) server.RedeemPairingCodeRequest
+	}{
+		{
+			name: "mismatched channel_id",
+			createReq: server.CreatePairingCodeRequest{
+				WorkspaceID: "ws-1",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				TTLSeconds:  300,
+			},
+			redeemReq: func(code string) server.RedeemPairingCodeRequest {
+				return server.RedeemPairingCodeRequest{
+					Code:        code,
+					UserID:      "user-1",
+					WorkspaceID: "ws-1",
+					ChannelType: "telegram",
+					ChannelID:   "chat-2",
+				}
+			},
+		},
+		{
+			name: "mismatched workspace_id",
+			createReq: server.CreatePairingCodeRequest{
+				WorkspaceID: "ws-1",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				TTLSeconds:  300,
+			},
+			redeemReq: func(code string) server.RedeemPairingCodeRequest {
+				return server.RedeemPairingCodeRequest{
+					Code:        code,
+					UserID:      "user-1",
+					WorkspaceID: "ws-2",
+					ChannelType: "telegram",
+					ChannelID:   "chat-1",
+				}
+			},
+		},
+		{
+			name: "mismatched channel_type",
+			createReq: server.CreatePairingCodeRequest{
+				WorkspaceID: "ws-1",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				TTLSeconds:  300,
+			},
+			redeemReq: func(code string) server.RedeemPairingCodeRequest {
+				return server.RedeemPairingCodeRequest{
+					Code:        code,
+					UserID:      "user-1",
+					WorkspaceID: "ws-1",
+					ChannelType: "discord",
+					ChannelID:   "chat-1",
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := &memoryPairingStore{}
+			svc := newPairingServiceAdapter(ps)
+
+			codeResp, err := svc.CreateCode(ctx, tt.createReq)
+			require.NoError(t, err)
+			require.NotEmpty(t, codeResp.Code)
+
+			_, err = svc.RedeemCode(ctx, tt.redeemReq(codeResp.Code))
+			require.Error(t, err)
+			assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
+		})
+	}
+}
+
 func TestPairingServiceAdapter_CreateCode_TTLValidation(t *testing.T) {
 	ctx := context.Background()
 

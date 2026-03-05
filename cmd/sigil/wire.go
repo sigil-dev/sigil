@@ -689,6 +689,12 @@ func (a *pairingServiceAdapter) RedeemCode(ctx context.Context, req server.Redee
 				Status:    string(existing.Status),
 			}, nil
 		}
+		slog.Warn("channel pairing denied: already paired to different user/workspace",
+			"channel_type", channelType,
+			"channel_id", channelID,
+			"requesting_user_id", userID,
+			"existing_user_id", existing.UserID,
+		)
 		return nil, sigilerr.New(sigilerr.CodeChannelPairingDenied, "channel already paired")
 	}
 	if !sigilerr.HasCode(err, sigilerr.CodeStoreEntityNotFound) {
