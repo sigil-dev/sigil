@@ -817,7 +817,7 @@ func TestRoutes_RedeemPairingCode(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.NotNil(t, pairSvc.redeemReq)
 	assert.Equal(t, "ABC12345", pairSvc.redeemReq.Code)
-	assert.Equal(t, "user-1", pairSvc.redeemReq.UserID)
+	assert.Equal(t, "dev-mode-user", pairSvc.redeemReq.UserID) // sentinel: auth is disabled
 	assert.Contains(t, w.Body.String(), "pair-123")
 }
 
