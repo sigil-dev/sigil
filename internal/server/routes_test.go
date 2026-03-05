@@ -908,6 +908,52 @@ func TestRoutes_RedeemPairingCode_AuthEnabled_UserMismatch(t *testing.T) {
 	assert.Nil(t, pairSvc.redeemReq)
 }
 
+func TestRoutes_CreatePairingCode_NilService(t *testing.T) {
+	// When no pairing service is configured, POST /api/v1/pairing-codes must return 501.
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0",
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		), // WithPairingService intentionally omitted
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	body := `{"workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1","ttl_seconds":300}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairing-codes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotImplemented, w.Code)
+}
+
+func TestRoutes_RedeemPairingCode_NilService(t *testing.T) {
+	// When no pairing service is configured, POST /api/v1/pairings/redeem must return 501.
+	srv, err := server.New(server.Config{
+		ListenAddr: "127.0.0.1:0",
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		), // WithPairingService intentionally omitted
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+
+	body := `{"code":"ABC12345","user_id":"user-1","workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairings/redeem", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotImplemented, w.Code)
+}
+
 func TestRoutes_Status(t *testing.T) {
 	srv := newTestServerWithData(t)
 
