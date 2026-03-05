@@ -727,7 +727,7 @@ func TestRoutes_CreatePairingCode_AuthNoToken(t *testing.T) {
 	// When auth is enabled and no token is provided, createPairingCode should return 401.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
-			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:users"}),
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:pairing"}),
 		},
 	}
 	pairSvc := &mockPairingService{}
@@ -759,7 +759,7 @@ func TestRoutes_CreatePairingCode_AuthNoToken(t *testing.T) {
 }
 
 func TestRoutes_CreatePairingCode_AuthNonAdmin(t *testing.T) {
-	// User without admin:users permission should get 403.
+	// User without admin:pairing permission should get 403.
 	validator := &mockTokenValidator{
 		users: map[string]*server.AuthenticatedUser{
 			"user-token": mustNewAuthenticatedUser("user-1", "Regular User", []string{"workspace:read"}),

@@ -599,7 +599,7 @@ func (s *Server) handleGetProviderHealth(ctx context.Context, input *providerNam
 }
 
 func (s *Server) handleCreatePairingCode(ctx context.Context, input *createPairingCodeInput) (*createPairingCodeOutput, error) {
-	if err := s.requireAdmin(ctx, "admin:users", "create pairing code"); err != nil {
+	if err := s.requireAdmin(ctx, "admin:pairing", "create pairing code"); err != nil {
 		return nil, err
 	}
 	if s.services.Pairings() == nil {

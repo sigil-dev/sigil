@@ -669,7 +669,7 @@ func (a *pairingServiceAdapter) RedeemCode(ctx context.Context, req server.Redee
 	}
 	if rec.workspaceID != workspaceID || rec.channelType != channelType || rec.channelID != channelID {
 		a.mu.Unlock()
-		return nil, sigilerr.New(sigilerr.CodeChannelPairingDenied, "pairing code does not match channel/workspace")
+		return nil, sigilerr.New(sigilerr.CodeChannelPairingDenied, "invalid or expired pairing code")
 	}
 	a.mu.Unlock()
 
