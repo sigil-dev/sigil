@@ -562,10 +562,11 @@ func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*s
 }
 
 const (
-	defaultPairingCodeTTL = 10 * time.Minute
-	maxPairingCodeTTL     = 24 * time.Hour
-	pairingCodeLength     = 8
-	pairingCodeAlphabet   = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	defaultPairingCodeTTL  = 10 * time.Minute
+	maxPairingCodeTTL      = 24 * time.Hour
+	maxPendingPairingCodes = 1000
+	pairingCodeLength      = 8
+	pairingCodeAlphabet    = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 )
 
 type pairingCodeRecord struct {
@@ -618,6 +619,10 @@ func (a *pairingServiceAdapter) CreateCode(_ context.Context, req server.CreateP
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.pruneExpiredLocked(now)
+
+	if len(a.codes) >= maxPendingPairingCodes {
+		return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "too many pending pairing codes")
+	}
 
 	for range 16 {
 		code, err := generatePairingCode(pairingCodeLength)

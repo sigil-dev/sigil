@@ -366,6 +366,99 @@ func TestPairingServiceAdapter_Redeem_ReusedCode(t *testing.T) {
 	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
 }
 
+func TestPairingServiceAdapter_CreateCode_TTLValidation(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		ttlSeconds  int
+		wantErr     bool
+		wantErrCode sigilerr.Code
+		// verifyExpiry is called on success to assert the returned ExpiresAt.
+		verifyExpiry func(t *testing.T, expiresAt time.Time, now time.Time)
+	}{
+		{
+			name:        "negative TTL rejected",
+			ttlSeconds:  -1,
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeServerRequestInvalid,
+		},
+		{
+			name:       "zero TTL uses default",
+			ttlSeconds: 0,
+			wantErr:    false,
+			verifyExpiry: func(t *testing.T, expiresAt time.Time, now time.Time) {
+				t.Helper()
+				expected := now.Add(defaultPairingCodeTTL)
+				// Allow a small window for test execution time.
+				assert.WithinDuration(t, expected, expiresAt, time.Second)
+			},
+		},
+		{
+			name:        "excessive TTL rejected",
+			ttlSeconds:  86401, // maxPairingCodeTTL is 86400s (24h)
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeServerRequestInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := &memoryPairingStore{}
+			svc := newPairingServiceAdapter(ps)
+			now := time.Now()
+
+			resp, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+				WorkspaceID: "ws-1",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				TTLSeconds:  tt.ttlSeconds,
+			})
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.wantErrCode))
+				assert.Nil(t, resp)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, resp)
+				if tt.verifyExpiry != nil {
+					tt.verifyExpiry(t, resp.ExpiresAt, now)
+				}
+			}
+		})
+	}
+}
+
+func TestPairingServiceAdapter_CreateCode_MapCapPreventsMemoryExhaustion(t *testing.T) {
+	ctx := context.Background()
+	ps := &memoryPairingStore{}
+	svc := newPairingServiceAdapter(ps)
+
+	// Pre-fill the codes map with maxPendingPairingCodes entries.
+	// Use a fixed future expiry so they are not pruned on the next CreateCode call.
+	future := time.Now().Add(time.Hour)
+	svc.mu.Lock()
+	for i := range maxPendingPairingCodes {
+		svc.codes[fmt.Sprintf("FAKE%04d", i)] = pairingCodeRecord{
+			workspaceID: "ws-1",
+			channelType: "telegram",
+			channelID:   "chat-1",
+			expiresAt:   future,
+		}
+	}
+	svc.mu.Unlock()
+
+	_, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+		TTLSeconds:  300,
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerRequestInvalid))
+}
+
 func TestWireGateway_WithWorkspaces(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testGatewayConfig()

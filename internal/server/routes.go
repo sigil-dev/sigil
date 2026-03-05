@@ -626,21 +626,25 @@ func (s *Server) handleCreatePairingCode(ctx context.Context, input *createPairi
 }
 
 func (s *Server) handleRedeemPairingCode(ctx context.Context, input *redeemPairingCodeInput) (*redeemPairingCodeOutput, error) {
+	userID := input.Body.UserID
 	if !s.authDisabled() {
 		user := UserFromContext(ctx)
 		if user == nil {
 			return nil, huma.Error401Unauthorized("authentication required")
 		}
-		if user.ID() != input.Body.UserID {
+		if user.ID() != userID {
 			return nil, huma.Error403Forbidden("user_id must match authenticated user")
 		}
+	} else {
+		userID = "dev-mode-user"
+		slog.Info("pairing redemption without authentication (auth disabled)", "original_user_id", input.Body.UserID)
 	}
 	if s.services.Pairings() == nil {
 		return nil, huma.Error501NotImplemented("pairing service not configured")
 	}
 	redemption, err := s.services.Pairings().RedeemCode(ctx, RedeemPairingCodeRequest{
 		Code:        input.Body.Code,
-		UserID:      input.Body.UserID,
+		UserID:      userID,
 		WorkspaceID: input.Body.WorkspaceID,
 		ChannelType: input.Body.ChannelType,
 		ChannelID:   input.Body.ChannelID,
