@@ -206,7 +206,10 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
 	}
-	services.WithPairingService(newPairingServiceAdapter(gs.Pairings()))
+	services.WithPairingService(newPairingServiceAdapter(gs.Pairings(), func(id string) bool {
+		_, ok := cfg.Workspaces[id]
+		return ok
+	}))
 
 	srv, err := server.New(server.Config{
 		ListenAddr:       cfg.Networking.Listen,
@@ -579,18 +582,20 @@ type pairingCodeRecord struct {
 // pairingServiceAdapter bridges one-time pairing-code operations onto PairingStore.
 // Codes are ephemeral in-memory records with TTL + single-use semantics.
 type pairingServiceAdapter struct {
-	pairings store.PairingStore
-	now      func() time.Time
+	pairings        store.PairingStore
+	workspaceExists func(id string) bool
+	now             func() time.Time
 
 	mu    sync.Mutex
 	codes map[string]pairingCodeRecord
 }
 
-func newPairingServiceAdapter(pairings store.PairingStore) *pairingServiceAdapter {
+func newPairingServiceAdapter(pairings store.PairingStore, workspaceExists func(string) bool) *pairingServiceAdapter {
 	return &pairingServiceAdapter{
-		pairings: pairings,
-		now:      time.Now,
-		codes:    make(map[string]pairingCodeRecord),
+		pairings:        pairings,
+		workspaceExists: workspaceExists,
+		now:             time.Now,
+		codes:           make(map[string]pairingCodeRecord),
 	}
 }
 
@@ -600,6 +605,9 @@ func (a *pairingServiceAdapter) CreateCode(_ context.Context, req server.CreateP
 	channelID := strings.TrimSpace(req.ChannelID)
 	if workspaceID == "" || channelType == "" || channelID == "" {
 		return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "workspace_id, channel_type, and channel_id are required")
+	}
+	if a.workspaceExists != nil && !a.workspaceExists(workspaceID) {
+		return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "workspace does not exist")
 	}
 
 	ttl := defaultPairingCodeTTL

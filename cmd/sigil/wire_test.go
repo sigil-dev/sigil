@@ -257,7 +257,7 @@ func (m *memoryPairingStore) Delete(_ context.Context, id string) error {
 func TestPairingServiceAdapter_GenerateAndRedeem_EnablesAuthorizeInbound(t *testing.T) {
 	ctx := context.Background()
 	ps := &memoryPairingStore{}
-	svc := newPairingServiceAdapter(ps)
+	svc := newPairingServiceAdapter(ps, nil)
 
 	codeResp, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
 		WorkspaceID: "ws-1",
@@ -293,7 +293,7 @@ func TestPairingServiceAdapter_GenerateAndRedeem_EnablesAuthorizeInbound(t *test
 
 func TestPairingServiceAdapter_Redeem_InvalidCode(t *testing.T) {
 	ctx := context.Background()
-	svc := newPairingServiceAdapter(&memoryPairingStore{})
+	svc := newPairingServiceAdapter(&memoryPairingStore{}, nil)
 
 	_, err := svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
 		Code:        "INVALID1",
@@ -309,7 +309,7 @@ func TestPairingServiceAdapter_Redeem_InvalidCode(t *testing.T) {
 func TestPairingServiceAdapter_Redeem_ExpiredCode(t *testing.T) {
 	ctx := context.Background()
 	ps := &memoryPairingStore{}
-	svc := newPairingServiceAdapter(ps)
+	svc := newPairingServiceAdapter(ps, nil)
 	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
 
@@ -336,7 +336,7 @@ func TestPairingServiceAdapter_Redeem_ExpiredCode(t *testing.T) {
 func TestPairingServiceAdapter_Redeem_ReusedCode(t *testing.T) {
 	ctx := context.Background()
 	ps := &memoryPairingStore{}
-	svc := newPairingServiceAdapter(ps)
+	svc := newPairingServiceAdapter(ps, nil)
 
 	codeResp, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
 		WorkspaceID: "ws-1",
@@ -433,7 +433,7 @@ func TestPairingServiceAdapter_Redeem_ChannelMismatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ps := &memoryPairingStore{}
-			svc := newPairingServiceAdapter(ps)
+			svc := newPairingServiceAdapter(ps, nil)
 
 			codeResp, err := svc.CreateCode(ctx, tt.createReq)
 			require.NoError(t, err)
@@ -444,6 +444,98 @@ func TestPairingServiceAdapter_Redeem_ChannelMismatch(t *testing.T) {
 			assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
 		})
 	}
+}
+
+func TestPairingServiceAdapter_Redeem_ExistingPairing(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("same user returns existing pairing idempotently", func(t *testing.T) {
+		ps := &memoryPairingStore{}
+		svc := newPairingServiceAdapter(ps, nil)
+
+		// Step 1: create and redeem a code to establish a pairing.
+		code1, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+			TTLSeconds:  300,
+		})
+		require.NoError(t, err)
+
+		first, err := svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+			Code:        code1.Code,
+			UserID:      "user-1",
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, first.PairingID)
+
+		// Step 2: create a second code for the same channel (first code consumed).
+		code2, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+			TTLSeconds:  300,
+		})
+		require.NoError(t, err)
+
+		// Step 3: redeem the second code as the same user — should return existing pairing ID.
+		second, err := svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+			Code:        code2.Code,
+			UserID:      "user-1",
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, first.PairingID, second.PairingID)
+		assert.Equal(t, first.Status, second.Status)
+	})
+
+	t.Run("different user denied", func(t *testing.T) {
+		ps := &memoryPairingStore{}
+		svc := newPairingServiceAdapter(ps, nil)
+
+		// Step 1: create and redeem a code as user-A.
+		code1, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+			TTLSeconds:  300,
+		})
+		require.NoError(t, err)
+
+		_, err = svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+			Code:        code1.Code,
+			UserID:      "user-A",
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+		})
+		require.NoError(t, err)
+
+		// Step 2: create a second code for the same channel.
+		code2, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+			TTLSeconds:  300,
+		})
+		require.NoError(t, err)
+
+		// Step 3: attempt to redeem as user-B — should get CodeChannelPairingDenied.
+		_, err = svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+			Code:        code2.Code,
+			UserID:      "user-B",
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+		})
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
+	})
 }
 
 func TestPairingServiceAdapter_CreateCode_TTLValidation(t *testing.T) {
@@ -485,7 +577,7 @@ func TestPairingServiceAdapter_CreateCode_TTLValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ps := &memoryPairingStore{}
-			svc := newPairingServiceAdapter(ps)
+			svc := newPairingServiceAdapter(ps, nil)
 			now := time.Now()
 
 			resp, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
@@ -513,7 +605,7 @@ func TestPairingServiceAdapter_CreateCode_TTLValidation(t *testing.T) {
 func TestPairingServiceAdapter_CreateCode_MapCapPreventsMemoryExhaustion(t *testing.T) {
 	ctx := context.Background()
 	ps := &memoryPairingStore{}
-	svc := newPairingServiceAdapter(ps)
+	svc := newPairingServiceAdapter(ps, nil)
 
 	// Pre-fill the codes map with maxPendingPairingCodes entries.
 	// Use a fixed future expiry so they are not pruned on the next CreateCode call.
