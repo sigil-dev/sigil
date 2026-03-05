@@ -723,6 +723,77 @@ func TestRoutes_CreatePairingCode(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "ABC12345")
 }
 
+func TestRoutes_CreatePairingCode_AuthNoToken(t *testing.T) {
+	// When auth is enabled and no token is provided, createPairingCode should return 401.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"admin-token": mustNewAuthenticatedUser("admin-1", "Admin", []string{"admin:users"}),
+		},
+	}
+	pairSvc := &mockPairingService{}
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		).WithPairingService(pairSvc),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
+
+	body := `{"workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1","ttl_seconds":300}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairing-codes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No Authorization header — auth middleware should reject.
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestRoutes_CreatePairingCode_AuthNonAdmin(t *testing.T) {
+	// User without admin:users permission should get 403.
+	validator := &mockTokenValidator{
+		users: map[string]*server.AuthenticatedUser{
+			"user-token": mustNewAuthenticatedUser("user-1", "Regular User", []string{"workspace:read"}),
+		},
+	}
+	pairSvc := &mockPairingService{}
+	srv, err := server.New(server.Config{
+		ListenAddr:     "127.0.0.1:0",
+		TokenValidator: validator,
+		Services: server.NewServicesForTest(
+			&mockWorkspaceService{},
+			&mockPluginService{},
+			&mockSessionService{},
+			&mockUserService{},
+		).WithPairingService(pairSvc),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Logf("srv.Close() in cleanup: %v", err)
+		}
+	})
+
+	body := `{"workspace_id":"ws-1","channel_type":"telegram","channel_id":"chat-1","ttl_seconds":300}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pairing-codes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "insufficient permissions")
+}
+
 func TestRoutes_RedeemPairingCode(t *testing.T) {
 	pairSvc := &mockPairingService{}
 	srv, err := server.New(server.Config{

@@ -708,17 +708,9 @@ func (a *pairingServiceAdapter) RedeemCode(ctx context.Context, req server.Redee
 	delete(a.codes, code)
 	a.mu.Unlock()
 
-	created, err := a.pairings.GetByChannel(ctx, channelType, channelID)
-	if err != nil {
-		return nil, sigilerr.Wrap(err, sigilerr.CodeChannelBackendFailure, "failed to verify active pairing")
-	}
-	if created.Status != store.PairingStatusActive || created.UserID != userID || created.WorkspaceID != workspaceID {
-		return nil, sigilerr.New(sigilerr.CodeChannelPairingDenied, "channel already paired")
-	}
-
 	return &server.PairingRedemption{
-		PairingID: created.ID,
-		Status:    string(created.Status),
+		PairingID: pairingID,
+		Status:    string(store.PairingStatusActive),
 	}, nil
 }
 
