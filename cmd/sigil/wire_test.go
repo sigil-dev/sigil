@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +22,11 @@ import (
 
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/config"
+	plugininternal "github.com/sigil-dev/sigil/internal/plugin"
 	"github.com/sigil-dev/sigil/internal/provider"
 	"github.com/sigil-dev/sigil/internal/security/scanner"
+	"github.com/sigil-dev/sigil/internal/server"
+	"github.com/sigil-dev/sigil/internal/store"
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/pkg/health"
 	"github.com/sigil-dev/sigil/pkg/types"
@@ -186,6 +191,444 @@ func TestPluginServiceAdapter_FieldCompleteness(t *testing.T) {
 	assert.True(t, strings.Contains(body, "[]") || strings.HasPrefix(body, "[]"),
 		"expected empty JSON array for plugins, got: %s", body)
 	assert.NotContains(t, body, "null")
+}
+
+type memoryPairingStore struct {
+	mu       sync.Mutex
+	pairings []*store.Pairing
+}
+
+type mockChannelPlugin struct{}
+
+func (m *mockChannelPlugin) Name() string { return "mock" }
+
+func (m *mockChannelPlugin) Send(context.Context, plugininternal.OutboundMessage) error { return nil }
+
+func (m *memoryPairingStore) Create(_ context.Context, p *store.Pairing) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.pairings {
+		if existing.ChannelType == p.ChannelType && existing.ChannelID == p.ChannelID {
+			return nil // mimic sqlite INSERT OR IGNORE on unique (channel_type, channel_id)
+		}
+	}
+	cp := *p
+	m.pairings = append(m.pairings, &cp)
+	return nil
+}
+
+func (m *memoryPairingStore) GetByChannel(_ context.Context, channelType, channelID string) (*store.Pairing, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.pairings {
+		if p.ChannelType == channelType && p.ChannelID == channelID {
+			cp := *p
+			return &cp, nil
+		}
+	}
+	return nil, sigilerr.New(sigilerr.CodeStoreEntityNotFound, "pairing not found")
+}
+
+func (m *memoryPairingStore) GetByUser(_ context.Context, userID string) ([]*store.Pairing, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*store.Pairing
+	for _, p := range m.pairings {
+		if p.UserID == userID {
+			cp := *p
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryPairingStore) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.pairings {
+		if m.pairings[i].ID == id {
+			m.pairings = slices.Delete(m.pairings, i, i+1)
+			return nil
+		}
+	}
+	return sigilerr.New(sigilerr.CodeStoreEntityNotFound, "pairing not found")
+}
+
+func TestPairingServiceAdapter_GenerateAndRedeem_EnablesAuthorizeInbound(t *testing.T) {
+	ctx := context.Background()
+	ps := &memoryPairingStore{}
+	svc := newPairingServiceAdapter(ps, nil)
+
+	codeResp, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+		TTLSeconds:  300,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, codeResp.Code)
+
+	router := plugininternal.NewChannelRouter(ps)
+	router.RegisterWithConfig("telegram", plugininternal.ChannelRegistration{
+		Plugin: &mockChannelPlugin{},
+		Mode:   plugininternal.PairingWithCode,
+	})
+
+	err = router.AuthorizeInbound(ctx, "telegram", "chat-1", "user-1", "ws-1")
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingRequired))
+
+	_, err = svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+		Code:        codeResp.Code,
+		UserID:      "user-1",
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+	})
+	require.NoError(t, err)
+
+	err = router.AuthorizeInbound(ctx, "telegram", "chat-1", "user-1", "ws-1")
+	assert.NoError(t, err)
+}
+
+func TestPairingServiceAdapter_Redeem_InvalidCode(t *testing.T) {
+	ctx := context.Background()
+	svc := newPairingServiceAdapter(&memoryPairingStore{}, nil)
+
+	_, err := svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+		Code:        "INVALID1",
+		UserID:      "user-1",
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
+}
+
+func TestPairingServiceAdapter_Redeem_ExpiredCode(t *testing.T) {
+	ctx := context.Background()
+	ps := &memoryPairingStore{}
+	svc := newPairingServiceAdapter(ps, nil)
+	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	codeResp, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+		TTLSeconds:  60,
+	})
+	require.NoError(t, err)
+
+	svc.now = func() time.Time { return now.Add(2 * time.Minute) }
+	_, err = svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+		Code:        codeResp.Code,
+		UserID:      "user-1",
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
+}
+
+func TestPairingServiceAdapter_Redeem_ReusedCode(t *testing.T) {
+	ctx := context.Background()
+	ps := &memoryPairingStore{}
+	svc := newPairingServiceAdapter(ps, nil)
+
+	codeResp, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+		TTLSeconds:  300,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+		Code:        codeResp.Code,
+		UserID:      "user-1",
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+		Code:        codeResp.Code,
+		UserID:      "user-1",
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
+}
+
+func TestPairingServiceAdapter_Redeem_ChannelMismatch(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		createReq   server.CreatePairingCodeRequest
+		redeemReq   func(code string) server.RedeemPairingCodeRequest
+	}{
+		{
+			name: "mismatched channel_id",
+			createReq: server.CreatePairingCodeRequest{
+				WorkspaceID: "ws-1",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				TTLSeconds:  300,
+			},
+			redeemReq: func(code string) server.RedeemPairingCodeRequest {
+				return server.RedeemPairingCodeRequest{
+					Code:        code,
+					UserID:      "user-1",
+					WorkspaceID: "ws-1",
+					ChannelType: "telegram",
+					ChannelID:   "chat-2",
+				}
+			},
+		},
+		{
+			name: "mismatched workspace_id",
+			createReq: server.CreatePairingCodeRequest{
+				WorkspaceID: "ws-1",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				TTLSeconds:  300,
+			},
+			redeemReq: func(code string) server.RedeemPairingCodeRequest {
+				return server.RedeemPairingCodeRequest{
+					Code:        code,
+					UserID:      "user-1",
+					WorkspaceID: "ws-2",
+					ChannelType: "telegram",
+					ChannelID:   "chat-1",
+				}
+			},
+		},
+		{
+			name: "mismatched channel_type",
+			createReq: server.CreatePairingCodeRequest{
+				WorkspaceID: "ws-1",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				TTLSeconds:  300,
+			},
+			redeemReq: func(code string) server.RedeemPairingCodeRequest {
+				return server.RedeemPairingCodeRequest{
+					Code:        code,
+					UserID:      "user-1",
+					WorkspaceID: "ws-1",
+					ChannelType: "discord",
+					ChannelID:   "chat-1",
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := &memoryPairingStore{}
+			svc := newPairingServiceAdapter(ps, nil)
+
+			codeResp, err := svc.CreateCode(ctx, tt.createReq)
+			require.NoError(t, err)
+			require.NotEmpty(t, codeResp.Code)
+
+			_, err = svc.RedeemCode(ctx, tt.redeemReq(codeResp.Code))
+			require.Error(t, err)
+			assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
+		})
+	}
+}
+
+func TestPairingServiceAdapter_Redeem_ExistingPairing(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("same user returns existing pairing idempotently", func(t *testing.T) {
+		ps := &memoryPairingStore{}
+		svc := newPairingServiceAdapter(ps, nil)
+
+		// Step 1: create and redeem a code to establish a pairing.
+		code1, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+			TTLSeconds:  300,
+		})
+		require.NoError(t, err)
+
+		first, err := svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+			Code:        code1.Code,
+			UserID:      "user-1",
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, first.PairingID)
+
+		// Step 2: create a second code for the same channel (first code consumed).
+		code2, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+			TTLSeconds:  300,
+		})
+		require.NoError(t, err)
+
+		// Step 3: redeem the second code as the same user — should return existing pairing ID.
+		second, err := svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+			Code:        code2.Code,
+			UserID:      "user-1",
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, first.PairingID, second.PairingID)
+		assert.Equal(t, first.Status, second.Status)
+	})
+
+	t.Run("different user denied", func(t *testing.T) {
+		ps := &memoryPairingStore{}
+		svc := newPairingServiceAdapter(ps, nil)
+
+		// Step 1: create and redeem a code as user-A.
+		code1, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+			TTLSeconds:  300,
+		})
+		require.NoError(t, err)
+
+		_, err = svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+			Code:        code1.Code,
+			UserID:      "user-A",
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+		})
+		require.NoError(t, err)
+
+		// Step 2: create a second code for the same channel.
+		code2, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+			TTLSeconds:  300,
+		})
+		require.NoError(t, err)
+
+		// Step 3: attempt to redeem as user-B — should get CodeChannelPairingDenied.
+		_, err = svc.RedeemCode(ctx, server.RedeemPairingCodeRequest{
+			Code:        code2.Code,
+			UserID:      "user-B",
+			WorkspaceID: "ws-1",
+			ChannelType: "telegram",
+			ChannelID:   "chat-1",
+		})
+		require.Error(t, err)
+		assert.True(t, sigilerr.HasCode(err, sigilerr.CodeChannelPairingDenied))
+	})
+}
+
+func TestPairingServiceAdapter_CreateCode_TTLValidation(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		ttlSeconds  int
+		wantErr     bool
+		wantErrCode sigilerr.Code
+		// verifyExpiry is called on success to assert the returned ExpiresAt.
+		verifyExpiry func(t *testing.T, expiresAt time.Time, now time.Time)
+	}{
+		{
+			name:        "negative TTL rejected",
+			ttlSeconds:  -1,
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeServerRequestInvalid,
+		},
+		{
+			name:       "zero TTL uses default",
+			ttlSeconds: 0,
+			wantErr:    false,
+			verifyExpiry: func(t *testing.T, expiresAt time.Time, now time.Time) {
+				t.Helper()
+				expected := now.Add(defaultPairingCodeTTL)
+				// Allow a small window for test execution time.
+				assert.WithinDuration(t, expected, expiresAt, time.Second)
+			},
+		},
+		{
+			name:        "excessive TTL rejected",
+			ttlSeconds:  86401, // maxPairingCodeTTL is 86400s (24h)
+			wantErr:     true,
+			wantErrCode: sigilerr.CodeServerRequestInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := &memoryPairingStore{}
+			svc := newPairingServiceAdapter(ps, nil)
+			now := time.Now()
+
+			resp, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+				WorkspaceID: "ws-1",
+				ChannelType: "telegram",
+				ChannelID:   "chat-1",
+				TTLSeconds:  tt.ttlSeconds,
+			})
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, sigilerr.HasCode(err, tt.wantErrCode))
+				assert.Nil(t, resp)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, resp)
+				if tt.verifyExpiry != nil {
+					tt.verifyExpiry(t, resp.ExpiresAt, now)
+				}
+			}
+		})
+	}
+}
+
+func TestPairingServiceAdapter_CreateCode_MapCapPreventsMemoryExhaustion(t *testing.T) {
+	ctx := context.Background()
+	ps := &memoryPairingStore{}
+	svc := newPairingServiceAdapter(ps, nil)
+
+	// Pre-fill the codes map with maxPendingPairingCodes entries.
+	// Use a fixed future expiry so they are not pruned on the next CreateCode call.
+	future := time.Now().Add(time.Hour)
+	svc.mu.Lock()
+	for i := range maxPendingPairingCodes {
+		svc.codes[fmt.Sprintf("FAKE%04d", i)] = pairingCodeRecord{
+			workspaceID: "ws-1",
+			channelType: "telegram",
+			channelID:   "chat-1",
+			expiresAt:   future,
+		}
+	}
+	svc.mu.Unlock()
+
+	_, err := svc.CreateCode(ctx, server.CreatePairingCodeRequest{
+		WorkspaceID: "ws-1",
+		ChannelType: "telegram",
+		ChannelID:   "chat-1",
+		TTLSeconds:  300,
+	})
+	require.Error(t, err)
+	assert.True(t, sigilerr.HasCode(err, sigilerr.CodeServerRequestInvalid))
 }
 
 func TestWireGateway_WithWorkspaces(t *testing.T) {

@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	sigilerr "github.com/sigil-dev/sigil/pkg/errors"
 	"github.com/sigil-dev/sigil/pkg/health"
@@ -42,6 +43,7 @@ type Services struct {
 	sessions   SessionService
 	users      UserService
 	providers  ProviderService // optional; nil = provider health endpoints unavailable
+	pairings   PairingService
 	nodes      NodeService
 	status     GatewayStatusService
 	agent      AgentControlService
@@ -104,6 +106,11 @@ func (s *Services) Providers() ProviderService {
 	return s.providers
 }
 
+// Pairings returns the pairing-code service, if configured.
+func (s *Services) Pairings() PairingService {
+	return s.pairings
+}
+
 // Nodes returns the node service, if configured.
 func (s *Services) Nodes() NodeService {
 	return s.nodes
@@ -134,6 +141,12 @@ func (s *Services) WithGatewayStatusService(status GatewayStatusService) *Servic
 // WithAgentControlService sets the optional agent control service and returns s.
 func (s *Services) WithAgentControlService(agent AgentControlService) *Services {
 	s.agent = agent
+	return s
+}
+
+// WithPairingService sets the optional pairing-code service and returns s.
+func (s *Services) WithPairingService(pairings PairingService) *Services {
+	s.pairings = pairings
 	return s
 }
 
@@ -172,6 +185,12 @@ type UserService interface {
 // LastFailureAt, and CooldownUntil will be zero/nil in the returned detail.
 type ProviderService interface {
 	GetHealth(ctx context.Context, name string) (*ProviderHealthDetail, error)
+}
+
+// PairingService provides pairing-code generation and redemption operations.
+type PairingService interface {
+	CreateCode(ctx context.Context, req CreatePairingCodeRequest) (*PairingCode, error)
+	RedeemCode(ctx context.Context, req RedeemPairingCodeRequest) (*PairingRedemption, error)
 }
 
 // NodeService provides node CRUD operations for REST handlers.
@@ -257,6 +276,38 @@ type ProviderHealthDetail struct {
 	Message          string `json:"message" doc:"Human-readable status message"`
 	MetricsAvailable bool   `json:"metrics_available" doc:"Whether the provider reported health metrics"`
 	health.Metrics
+}
+
+// CreatePairingCodeRequest requests creation of a one-time pairing code.
+type CreatePairingCodeRequest struct {
+	WorkspaceID string
+	ChannelType string
+	ChannelID   string
+	TTLSeconds  int
+}
+
+// PairingCode is the generated one-time pairing code payload.
+type PairingCode struct {
+	Code        string    `json:"code" doc:"One-time pairing code"`
+	WorkspaceID string    `json:"workspace_id" doc:"Workspace identifier"`
+	ChannelType string    `json:"channel_type" doc:"Channel type"`
+	ChannelID   string    `json:"channel_id" doc:"Channel identifier"`
+	ExpiresAt   time.Time `json:"expires_at" doc:"Code expiry timestamp"`
+}
+
+// RedeemPairingCodeRequest requests redemption of a one-time pairing code.
+type RedeemPairingCodeRequest struct {
+	Code        string
+	UserID      string
+	WorkspaceID string
+	ChannelType string
+	ChannelID   string
+}
+
+// PairingRedemption is the result of successful code redemption.
+type PairingRedemption struct {
+	PairingID string `json:"pairing_id" doc:"Created or existing pairing ID"`
+	Status    string `json:"status" doc:"Pairing status"`
 }
 
 // NodeSummary is the REST representation of a node in list results.

@@ -5,13 +5,18 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/sigil-dev/sigil/internal/agent"
 	"github.com/sigil-dev/sigil/internal/config"
 	"github.com/sigil-dev/sigil/internal/plugin"
@@ -201,6 +206,10 @@ func WireGateway(ctx context.Context, cfg *config.Config, dataDir string) (_ *Ga
 	if err != nil {
 		return nil, sigilerr.Errorf(sigilerr.CodeCLISetupFailure, "creating services: %w", err)
 	}
+	services.WithPairingService(newPairingServiceAdapter(gs.Pairings(), func(id string) bool {
+		_, ok := cfg.Workspaces[id]
+		return ok
+	}))
 
 	srv, err := server.New(server.Config{
 		ListenAddr:       cfg.Networking.Listen,
@@ -555,6 +564,197 @@ func (a *providerServiceAdapter) GetHealth(ctx context.Context, name string) (*s
 	return detail, nil
 }
 
+const (
+	defaultPairingCodeTTL  = 10 * time.Minute
+	maxPairingCodeTTL      = 24 * time.Hour
+	maxPendingPairingCodes = 1000
+	pairingCodeLength      = 8
+	pairingCodeAlphabet    = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+)
+
+type pairingCodeRecord struct {
+	workspaceID string
+	channelType string
+	channelID   string
+	expiresAt   time.Time
+}
+
+// pairingServiceAdapter bridges one-time pairing-code operations onto PairingStore.
+// Codes are ephemeral in-memory records with TTL + single-use semantics.
+type pairingServiceAdapter struct {
+	pairings        store.PairingStore
+	workspaceExists func(id string) bool
+	now             func() time.Time
+
+	mu    sync.Mutex
+	codes map[string]pairingCodeRecord
+}
+
+func newPairingServiceAdapter(pairings store.PairingStore, workspaceExists func(string) bool) *pairingServiceAdapter {
+	return &pairingServiceAdapter{
+		pairings:        pairings,
+		workspaceExists: workspaceExists,
+		now:             time.Now,
+		codes:           make(map[string]pairingCodeRecord),
+	}
+}
+
+func (a *pairingServiceAdapter) CreateCode(_ context.Context, req server.CreatePairingCodeRequest) (*server.PairingCode, error) {
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	channelType := strings.TrimSpace(req.ChannelType)
+	channelID := strings.TrimSpace(req.ChannelID)
+	if workspaceID == "" || channelType == "" || channelID == "" {
+		return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "workspace_id, channel_type, and channel_id are required")
+	}
+	if a.workspaceExists != nil && !a.workspaceExists(workspaceID) {
+		return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "workspace does not exist")
+	}
+
+	ttl := defaultPairingCodeTTL
+	if req.TTLSeconds < 0 {
+		return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "ttl_seconds must be >= 0")
+	}
+	if req.TTLSeconds > 0 {
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+		if ttl > maxPairingCodeTTL {
+			return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "ttl_seconds exceeds maximum")
+		}
+	}
+
+	now := a.now().UTC()
+	expiresAt := now.Add(ttl)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pruneExpiredLocked(now)
+
+	if len(a.codes) >= maxPendingPairingCodes {
+		return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "too many pending pairing codes")
+	}
+
+	for range 16 {
+		code, err := generatePairingCode(pairingCodeLength)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := a.codes[code]; exists {
+			continue
+		}
+		a.codes[code] = pairingCodeRecord{
+			workspaceID: workspaceID,
+			channelType: channelType,
+			channelID:   channelID,
+			expiresAt:   expiresAt,
+		}
+		return &server.PairingCode{
+			Code:        code,
+			WorkspaceID: workspaceID,
+			ChannelType: channelType,
+			ChannelID:   channelID,
+			ExpiresAt:   expiresAt,
+		}, nil
+	}
+	return nil, sigilerr.New(sigilerr.CodeServerInternalFailure, "unable to generate unique pairing code")
+}
+
+func (a *pairingServiceAdapter) RedeemCode(ctx context.Context, req server.RedeemPairingCodeRequest) (*server.PairingRedemption, error) {
+	if a.pairings == nil {
+		return nil, sigilerr.New(sigilerr.CodeChannelBackendFailure, "pairing store not configured")
+	}
+
+	code := strings.ToUpper(strings.TrimSpace(req.Code))
+	userID := strings.TrimSpace(req.UserID)
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	channelType := strings.TrimSpace(req.ChannelType)
+	channelID := strings.TrimSpace(req.ChannelID)
+	if code == "" || userID == "" || workspaceID == "" || channelType == "" || channelID == "" {
+		return nil, sigilerr.New(sigilerr.CodeServerRequestInvalid, "code, user_id, workspace_id, channel_type, and channel_id are required")
+	}
+
+	now := a.now().UTC()
+
+	a.mu.Lock()
+	a.pruneExpiredLocked(now)
+	rec, ok := a.codes[code]
+	if !ok {
+		a.mu.Unlock()
+		return nil, sigilerr.New(sigilerr.CodeChannelPairingDenied, "invalid or expired pairing code")
+	}
+	if rec.workspaceID != workspaceID || rec.channelType != channelType || rec.channelID != channelID {
+		a.mu.Unlock()
+		return nil, sigilerr.New(sigilerr.CodeChannelPairingDenied, "invalid or expired pairing code")
+	}
+	a.mu.Unlock()
+
+	existing, err := a.pairings.GetByChannel(ctx, channelType, channelID)
+	if err == nil {
+		if existing.Status == store.PairingStatusActive &&
+			existing.UserID == userID &&
+			existing.WorkspaceID == workspaceID {
+			// Idempotent: pairing already exists for this user; leave code in map to expire naturally.
+			return &server.PairingRedemption{
+				PairingID: existing.ID,
+				Status:    string(existing.Status),
+			}, nil
+		}
+		slog.Warn("channel pairing denied: already paired to different user/workspace",
+			"channel_type", channelType,
+			"channel_id", channelID,
+			"requesting_user_id", userID,
+			"existing_user_id", existing.UserID,
+		)
+		return nil, sigilerr.New(sigilerr.CodeChannelPairingDenied, "channel already paired")
+	}
+	if !sigilerr.HasCode(err, sigilerr.CodeStoreEntityNotFound) {
+		return nil, sigilerr.Wrap(err, sigilerr.CodeChannelBackendFailure, "failed to check existing pairing")
+	}
+
+	pairingID := uuid.NewString()
+	if err := a.pairings.Create(ctx, &store.Pairing{
+		ID:          pairingID,
+		UserID:      userID,
+		ChannelType: channelType,
+		ChannelID:   channelID,
+		WorkspaceID: workspaceID,
+		Status:      store.PairingStatusActive,
+		CreatedAt:   now,
+	}); err != nil {
+		return nil, sigilerr.Wrap(err, sigilerr.CodeChannelBackendFailure, "failed to create active pairing")
+	}
+
+	// Consume the code only after successful pairing creation to prevent permanent loss on transient errors.
+	a.mu.Lock()
+	delete(a.codes, code)
+	a.mu.Unlock()
+
+	return &server.PairingRedemption{
+		PairingID: pairingID,
+		Status:    string(store.PairingStatusActive),
+	}, nil
+}
+
+func (a *pairingServiceAdapter) pruneExpiredLocked(now time.Time) {
+	for code, rec := range a.codes {
+		if now.After(rec.expiresAt) {
+			delete(a.codes, code)
+		}
+	}
+}
+
+func generatePairingCode(length int) (string, error) {
+	if length <= 0 {
+		return "", sigilerr.New(sigilerr.CodeServerRequestInvalid, "pairing code length must be positive")
+	}
+	buf := make([]byte, length)
+	if _, err := rand.Read(buf); err != nil {
+		return "", sigilerr.Wrap(err, sigilerr.CodeServerInternalFailure, "generating pairing code entropy")
+	}
+	out := make([]byte, length)
+	for i := range buf {
+		out[i] = pairingCodeAlphabet[int(buf[i])%len(pairingCodeAlphabet)]
+	}
+	return string(out), nil
+}
 // configTokenValidator validates bearer tokens against pre-computed SHA256
 // hashes of static config entries. Hashing at init time avoids per-request
 // rehashing and keeps raw tokens out of long-lived memory.

@@ -52,6 +52,16 @@ func (s *stubProviderService) GetHealth(context.Context, string) (*ProviderHealt
 	return &ProviderHealthDetail{Provider: "stub", Message: "ok"}, nil
 }
 
+type stubPairingService struct{}
+
+func (s *stubPairingService) CreateCode(context.Context, CreatePairingCodeRequest) (*PairingCode, error) {
+	return nil, nil
+}
+
+func (s *stubPairingService) RedeemCode(context.Context, RedeemPairingCodeRequest) (*PairingRedemption, error) {
+	return nil, nil
+}
+
 // stubNodeService is a minimal NodeService stub for internal package tests
 // (e.g. Services constructor wiring). For stateful HTTP handler testing with
 // httptest, see mockNodeService in node_routes_test.go.
@@ -220,13 +230,15 @@ func TestServices_WithOptionalNodeAndStatusServices(t *testing.T) {
 	ns := &stubNodeService{}
 	gss := &stubGatewayStatusService{}
 	acs := &stubAgentControlService{}
+	prs := &stubPairingService{}
 
 	svc, err := NewServices(ws, ps, ss, us)
 	require.NoError(t, err)
 
-	got := svc.WithNodeService(ns).WithGatewayStatusService(gss).WithAgentControlService(acs)
+	got := svc.WithNodeService(ns).WithGatewayStatusService(gss).WithAgentControlService(acs).WithPairingService(prs)
 	assert.Same(t, svc, got)
 	assert.Equal(t, ns, svc.Nodes())
 	assert.Equal(t, gss, svc.GatewayStatus())
 	assert.Equal(t, acs, svc.AgentControl())
+	assert.Equal(t, prs, svc.Pairings())
 }

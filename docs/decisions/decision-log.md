@@ -1503,4 +1503,28 @@ Two additional `MessageStore` methods were added alongside `DeleteByIDs`. `GetOl
 
 **Rationale:** Naming accuracy over plan conformance. The plan's naming assumed integration tests; the implementation chose unit-level lifecycle tests for faster execution and deterministic behavior.
 
+---
+
+## D089: Ephemeral In-Memory Pairing Code Storage
+
+**Status:** Decided (2026-03-05)
+
+**Question:** Should one-time pairing codes be stored in the in-memory map or persisted to SQLite alongside the Pairing rows?
+
+**Context:** The pair-with-code flow (docs/design/04-channel-system.md) generates single-use codes that link a channel to a workspace. The implementation stores these codes in a `sync.Mutex`-protected `map[string]pairingCodeRecord` on the `pairingServiceAdapter` struct. Codes have a configurable TTL (default 5 minutes, max 24 hours) and are pruned at write time.
+
+**Options considered:**
+
+1. In-memory map with TTL-based expiry — Simple, zero-schema-migration cost, codes naturally lost on restart.
+2. SQLite table with expiry column — Survives restarts, supports horizontal scaling, requires schema migration.
+3. Redis/external cache — Supports horizontal scaling, adds external dependency.
+
+**Decision:** Option 1. Pairing codes are ephemeral by design — they exist only to bootstrap a channel binding. Loss on gateway restart is acceptable: the admin simply issues a new code. The single-instance deployment model (Sigil gateway is not horizontally scaled) eliminates the cross-process sharing concern. SQLite persistence would add schema complexity for a value that is intentionally short-lived.
+
+**Rationale:** Pairing codes are consumed within minutes and are admin-issued on demand. The cost of re-issuance after restart is negligible compared to the complexity of persistent storage with expiry management. If horizontal scaling becomes a requirement, this decision should be revisited (Option 2 or 3).
+
+**Ref:** PR #32, `cmd/sigil/wire.go` (`pairingServiceAdapter.codes`)
+
+---
+
 **Ref:** PR #29, `internal/agent/compaction_lifecycle_test.go`

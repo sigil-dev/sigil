@@ -114,6 +114,24 @@ func (s *Server) registerRoutes() {
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests},
 	}, s.handleListUsers)
 
+	huma.Register(s.api, huma.Operation{
+		OperationID: "create-pairing-code",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/pairing-codes",
+		Summary:     "Create one-time pairing code",
+		Tags:        []string{"users"},
+		Errors:      []int{http.StatusBadRequest, http.StatusForbidden, http.StatusTooManyRequests, http.StatusNotImplemented},
+	}, s.handleCreatePairingCode)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "redeem-pairing-code",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/pairings/redeem",
+		Summary:     "Redeem one-time pairing code",
+		Tags:        []string{"users"},
+		Errors:      []int{http.StatusBadRequest, http.StatusForbidden, http.StatusTooManyRequests, http.StatusNotImplemented},
+	}, s.handleRedeemPairingCode)
+
 	// Status endpoint
 	huma.Register(s.api, huma.Operation{
 		OperationID: "gateway-status",
@@ -198,6 +216,33 @@ type listUsersOutput struct {
 	Body struct {
 		Users []UserSummary `json:"users"`
 	}
+}
+
+type createPairingCodeInput struct {
+	Body struct {
+		WorkspaceID string `json:"workspace_id" minLength:"1" doc:"Workspace identifier"`
+		ChannelType string `json:"channel_type" minLength:"1" doc:"Channel type"`
+		ChannelID   string `json:"channel_id" minLength:"1" doc:"Channel identifier"`
+		TTLSeconds  int    `json:"ttl_seconds,omitempty" minimum:"0" doc:"Optional code TTL in seconds (0 uses default)"`
+	}
+}
+
+type createPairingCodeOutput struct {
+	Body PairingCode
+}
+
+type redeemPairingCodeInput struct {
+	Body struct {
+		Code        string `json:"code" minLength:"1" doc:"One-time pairing code"`
+		UserID      string `json:"user_id" minLength:"1" doc:"User ID being paired"`
+		WorkspaceID string `json:"workspace_id" minLength:"1" doc:"Workspace identifier"`
+		ChannelType string `json:"channel_type" minLength:"1" doc:"Channel type"`
+		ChannelID   string `json:"channel_id" minLength:"1" doc:"Channel identifier"`
+	}
+}
+
+type redeemPairingCodeOutput struct {
+	Body PairingRedemption
 }
 
 type statusOutput struct {
@@ -551,6 +596,71 @@ func (s *Server) handleGetProviderHealth(ctx context.Context, input *providerNam
 		return nil, notFoundOr500(ctx, internalErr, "", fmt.Sprintf("getting provider health %q", input.Name))
 	}
 	return &getProviderHealthOutput{Body: *detail}, nil
+}
+
+func (s *Server) handleCreatePairingCode(ctx context.Context, input *createPairingCodeInput) (*createPairingCodeOutput, error) {
+	if err := s.requireAdmin(ctx, "admin:pairing", "create pairing code"); err != nil {
+		return nil, err
+	}
+	if s.services.Pairings() == nil {
+		return nil, huma.Error501NotImplemented("pairing service not configured")
+	}
+	code, err := s.services.Pairings().CreateCode(ctx, CreatePairingCodeRequest{
+		WorkspaceID: input.Body.WorkspaceID,
+		ChannelType: input.Body.ChannelType,
+		ChannelID:   input.Body.ChannelID,
+		TTLSeconds:  input.Body.TTLSeconds,
+	})
+	if err != nil {
+		switch sigilerr.HTTPStatus(err) {
+		case http.StatusBadRequest:
+			return nil, huma.Error400BadRequest(err.Error())
+		case http.StatusForbidden:
+			return nil, huma.Error403Forbidden(err.Error())
+		default:
+			slog.Error("internal error", "context", "creating pairing code", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
+			return nil, huma.Error500InternalServerError("internal server error")
+		}
+	}
+	return &createPairingCodeOutput{Body: *code}, nil
+}
+
+func (s *Server) handleRedeemPairingCode(ctx context.Context, input *redeemPairingCodeInput) (*redeemPairingCodeOutput, error) {
+	userID := input.Body.UserID
+	if !s.authDisabled() {
+		user := UserFromContext(ctx)
+		if user == nil {
+			return nil, huma.Error401Unauthorized("authentication required")
+		}
+		if user.ID() != userID {
+			return nil, huma.Error403Forbidden("user_id must match authenticated user")
+		}
+	} else {
+		userID = "dev-mode-user"
+		slog.Info("pairing redemption without authentication (auth disabled)", "original_user_id", input.Body.UserID)
+	}
+	if s.services.Pairings() == nil {
+		return nil, huma.Error501NotImplemented("pairing service not configured")
+	}
+	redemption, err := s.services.Pairings().RedeemCode(ctx, RedeemPairingCodeRequest{
+		Code:        input.Body.Code,
+		UserID:      userID,
+		WorkspaceID: input.Body.WorkspaceID,
+		ChannelType: input.Body.ChannelType,
+		ChannelID:   input.Body.ChannelID,
+	})
+	if err != nil {
+		switch sigilerr.HTTPStatus(err) {
+		case http.StatusBadRequest:
+			return nil, huma.Error400BadRequest(err.Error())
+		case http.StatusForbidden:
+			return nil, huma.Error403Forbidden(err.Error())
+		default:
+			slog.Error("internal error", "context", "redeeming pairing code", "error", err, "user_id", userIDFromContext(ctx), "code", sigilerr.CodeOf(err))
+			return nil, huma.Error500InternalServerError("internal server error")
+		}
+	}
+	return &redeemPairingCodeOutput{Body: *redemption}, nil
 }
 
 func (s *Server) handleStatus(ctx context.Context, _ *struct{}) (*statusOutput, error) {
